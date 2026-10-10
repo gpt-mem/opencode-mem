@@ -133,7 +133,8 @@ describe("MemoryContext.project", () => {
       ]),
       user("u2"),
     ]
-    const projected = compact(messages)
+    // batchSize 1 keeps the sliding boundary so both old turns compact regardless of parity.
+    const projected = compact(messages, { batchSize: 1 })
     expect(toolText(projected[1]!)).toContain("kind=url")
     expect(toolText(projected[1]!)).toContain("url=https://example.com")
     expect(toolText(projected[2]!)).toContain("kind=artifact")
@@ -439,7 +440,7 @@ describe("MemoryContext.projectV1", () => {
       v1assistant("a2", [v1tool({ id: "call_j", tool: "read", output: big(), input: { path: "docs/report.json" } })]),
       v1user("u2"),
     ]
-    const projected = compactV1(messages)
+    const projected = compactV1(messages, { batchSize: 1 })
     expect(v1toolText(projected[1]!)).toContain("kind=url")
     expect(v1toolText(projected[1]!)).toContain("url=https://example.com")
     expect(v1toolText(projected[2]!)).toContain("kind=artifact")
@@ -471,5 +472,79 @@ describe("MemoryContext.projectV1", () => {
     expect(marker).toContain("[REDACTED:api_key]")
     expect(marker).toContain("pii=api_key")
     expect(marker).toContain("retrieve=get_tool_call_details")
+  })
+})
+
+// Issue #20: mid-turn compaction edits the projected history at an early
+// position on every provider step, which invalidates the provider prefix
+// cache and re-sends the full tail uncached. The boundary therefore moves
+// in batches: between jumps the projection must be byte-identical.
+const growth = (steps: number) => {
+  const messages: SessionMessage.Message[] = [user("u0")]
+  for (let i = 1; i <= steps; i++)
+    messages.push(
+      assistant(`a${i}`, [
+        completedTool({ id: `call_${i}`, name: "bash", content: [{ type: "text", text: big() }], input: { command: `step ${i}` } }),
+      ]),
+    )
+  return messages
+}
+
+const markerIDs = (messages: readonly SessionMessage.Message[]) =>
+  new Set(
+    messages
+      .filter((message): message is SessionMessage.Assistant => message.type === "assistant")
+      .flatMap((message) => message.content)
+      .flatMap((item) => (item.type === "tool" && item.state.status === "completed" ? item.state.content : []))
+      .flatMap((part) => (part.type === "text" && part.text.startsWith("[mem:compacted") ? [/call_id=(\S+)/.exec(part.text)?.[1]] : []))
+      .filter((value): value is string => value !== undefined),
+  )
+
+describe("MemoryContext cache-stable boundary", () => {
+  test("projected prefix is byte-identical between batch jumps", () => {
+    const stable = compact(growth(5))
+    expect(JSON.stringify(compact(growth(6)).slice(0, stable.length))).toBe(JSON.stringify(stable))
+    expect(toolText(stable[1]!)).toContain("[mem:compacted tool result]")
+  })
+
+  test("batchSize 1 reproduces the sliding boundary that changes the prefix every step", () => {
+    const sliding = compact(growth(5), { batchSize: 1 })
+    expect(JSON.stringify(compact(growth(6), { batchSize: 1 }).slice(0, sliding.length))).not.toBe(
+      JSON.stringify(sliding),
+    )
+  })
+
+  test("boundary is monotone: compacted results stay compacted as the turn grows", () => {
+    let previous = new Set<string>()
+    for (let steps = 3; steps <= 10; steps++) {
+      const markers = markerIDs(compact(growth(steps)))
+      for (const callID of previous) expect(markers.has(callID)).toBe(true)
+      previous = markers
+    }
+    expect(previous.size).toBeGreaterThan(0)
+  })
+
+  test("OPENCODE_MEMORY_BATCH_SIZE overrides the default batch", () => {
+    process.env["OPENCODE_MEMORY_BATCH_SIZE"] = "1"
+    try {
+      expect(JSON.stringify(compact(growth(6)))).toBe(JSON.stringify(compact(growth(6), { batchSize: 1 })))
+    } finally {
+      delete process.env["OPENCODE_MEMORY_BATCH_SIZE"]
+    }
+  })
+
+  test("V1 projected prefix is byte-identical between batch jumps", () => {
+    const v1growth = (steps: number) => {
+      const messages: SessionV1.WithParts[] = [v1user("u0")]
+      for (let i = 1; i <= steps; i++)
+        messages.push(
+          v1assistant(`a${i}`, [v1tool({ id: `call_${i}`, tool: "bash", output: big(), input: { command: `step ${i}` } })]),
+        )
+      return messages
+    }
+    const stable = compactV1(v1growth(5))
+    expect(JSON.stringify(compactV1(v1growth(6)).slice(0, stable.length))).toBe(JSON.stringify(stable))
+    expect(v1toolText(stable[1]!)).toContain("[mem:compacted tool result]")
+    expect(v1toolText(stable[1]!)).toContain("retrieve=get_tool_call_details")
   })
 })
