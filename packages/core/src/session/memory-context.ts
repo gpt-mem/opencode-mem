@@ -15,12 +15,20 @@ export type Options = {
   readonly keepRecentAssistantTurns?: number
   readonly batchSize?: number
   readonly midTurn?: boolean
+  // Issue #23: compact at first delivery — no protected window, every eligible
+  // result becomes a retrieval marker the moment it exists. Requires enabled
+  // memory context; boundary options (keepRecent*/batchSize/midTurn) do not
+  // apply in this mode.
+  readonly firstDelivery?: boolean
+  readonly firstDeliveryMinChars?: number
+  readonly firstDeliveryTools?: string
 }
 
 const DEFAULT_MIN_OUTPUT_CHARS = 2000
 const DEFAULT_KEEP_RECENT_USER_TURNS = 2
 const DEFAULT_KEEP_RECENT_ASSISTANT_TURNS = 2
 const DEFAULT_BATCH_SIZE = 2
+const DEFAULT_FIRST_DELIVERY_TOOLS = ["bash", "webfetch", "websearch", "read"]
 const PREVIEW_HEAD = 400
 const PREVIEW_TAIL = 200
 const SUMMARY_LIMIT = 200
@@ -127,7 +135,11 @@ export const project = (
 ): readonly SessionMessage.Message[] => {
   const enabled = options.enabled ?? Flag.OPENCODE_MEMORY_CONTEXT
   if (!enabled) return messages
-  const minChars = options.minOutputChars ?? DEFAULT_MIN_OUTPUT_CHARS
+  const firstDelivery = options.firstDelivery ?? Flag.OPENCODE_MEMORY_FIRST_DELIVERY
+  const minChars = firstDelivery
+    ? resolveFirstDeliveryMinChars(options)
+    : (options.minOutputChars ?? DEFAULT_MIN_OUTPUT_CHARS)
+  const allow = firstDelivery ? resolveFirstDeliveryTools(options) : undefined
 
   const userIndices: number[] = []
   const assistantIndices: number[] = []
@@ -135,10 +147,13 @@ export const project = (
     if (message.type === "user") userIndices.push(index)
     if (message.type === "assistant") assistantIndices.push(index)
   })
-  if (userIndices.length === 0) return messages
-  const rawProtected = protectedStartIndex(userIndices, assistantIndices, options)
-  if (rawProtected === undefined) return messages
-  const protectedFrom = stableBoundary(rawProtected, resolveBatch(options))
+  if (!firstDelivery && userIndices.length === 0) return messages
+  // First-delivery mode (issue #23) has no protected window: eligibility is a
+  // pure per-message function, so the projected prefix is append-only and the
+  // provider prefix cache sees zero invalidations.
+  const protectedFrom = firstDelivery
+    ? Number.POSITIVE_INFINITY
+    : boundaryFor(userIndices, assistantIndices, options)
   if (protectedFrom <= 0) return messages
 
   let compacted = 0
@@ -147,6 +162,7 @@ export const project = (
     if (message.type === "shell") {
       // Without a callID the original cannot be retrieved later, so keep the output intact.
       if (message.output.length < minChars || message.callID === "") return message
+      if (allow !== undefined && !allow.has("bash")) return message
       compacted++
       const pii = PII.tag(message.output)
       return {
@@ -172,6 +188,7 @@ export const project = (
       if (item.state.status !== "completed") return item
       if (item.provider?.executed === true) return item
       if (MEMORY_TOOL_PATTERN.test(item.name)) return item
+      if (allow !== undefined && !allow.has(item.name)) return item
       const text = serializeContent(item.state.content)
       if (text.length < minChars) return item
       const kind = detectKind(item.name, item.state.input, text)
@@ -208,7 +225,7 @@ export const project = (
 
   if (compacted > 0 && Flag.OPENCODE_MEMORY_CONTEXT_DEBUG)
     console.log(
-      `[mem-context] session=${options.sessionID ?? "?"} compacted=${compacted} protected_from=${protectedFrom} raw=${rawProtected}`,
+      `[mem-context] session=${options.sessionID ?? "?"} compacted=${compacted} first_delivery=${firstDelivery} protected_from=${protectedFrom}`,
     )
   return projected
 }
@@ -222,7 +239,11 @@ export const projectV1 = (
 ): readonly SessionV1.WithParts[] => {
   const enabled = options.enabled ?? Flag.OPENCODE_MEMORY_CONTEXT
   if (!enabled) return messages
-  const minChars = options.minOutputChars ?? DEFAULT_MIN_OUTPUT_CHARS
+  const firstDelivery = options.firstDelivery ?? Flag.OPENCODE_MEMORY_FIRST_DELIVERY
+  const minChars = firstDelivery
+    ? resolveFirstDeliveryMinChars(options)
+    : (options.minOutputChars ?? DEFAULT_MIN_OUTPUT_CHARS)
+  const allow = firstDelivery ? resolveFirstDeliveryTools(options) : undefined
 
   const userIndices: number[] = []
   const assistantIndices: number[] = []
@@ -230,10 +251,10 @@ export const projectV1 = (
     if (message.info.role === "user") userIndices.push(index)
     if (message.info.role === "assistant") assistantIndices.push(index)
   })
-  if (userIndices.length === 0) return messages
-  const rawProtected = protectedStartIndex(userIndices, assistantIndices, options)
-  if (rawProtected === undefined) return messages
-  const protectedFrom = stableBoundary(rawProtected, resolveBatch(options))
+  if (!firstDelivery && userIndices.length === 0) return messages
+  const protectedFrom = firstDelivery
+    ? Number.POSITIVE_INFINITY
+    : boundaryFor(userIndices, assistantIndices, options)
   if (protectedFrom <= 0) return messages
 
   let compacted = 0
@@ -247,6 +268,7 @@ export const projectV1 = (
       if (part.state.time.compacted !== undefined) return part
       if (part.metadata?.providerExecuted === true) return part
       if (MEMORY_TOOL_PATTERN.test(part.tool)) return part
+      if (allow !== undefined && !allow.has(part.tool)) return part
       const text = part.state.output
       if (text.length < minChars) return part
       const kind = detectKind(part.tool, part.state.input, text)
@@ -277,12 +299,13 @@ export const projectV1 = (
 
   if (compacted > 0 && Flag.OPENCODE_MEMORY_CONTEXT_DEBUG)
     console.log(
-      `[mem-context] session=${options.sessionID ?? "?"} compacted=${compacted} protected_from=${protectedFrom} raw=${rawProtected}`,
+      `[mem-context] session=${options.sessionID ?? "?"} compacted=${compacted} first_delivery=${firstDelivery} protected_from=${protectedFrom}`,
     )
   return projected
 }
 
-// First index that must stay verbatim. Two windows qualify:
+// Boundary-mode resolution: first index that must stay verbatim, or 0 when
+// nothing can be safely compressed. Two windows qualify:
 // - the conversation window: from the Nth-from-last user turn on (needs more
 //   than N user turns, otherwise there is no such window at all);
 // - the working set: the last N assistant messages, so a single long agent
@@ -309,6 +332,36 @@ const protectedStartIndex = (
   if (conversationWindow === undefined) return workingSet
   if (workingSet === undefined) return conversationWindow
   return Math.min(conversationWindow, workingSet)
+}
+
+const boundaryFor = (
+  userIndices: readonly number[],
+  assistantIndices: readonly number[],
+  options: Options,
+): number => {
+  const rawProtected = protectedStartIndex(userIndices, assistantIndices, options)
+  if (rawProtected === undefined) return 0
+  return stableBoundary(rawProtected, resolveBatch(options))
+}
+
+// First-delivery threshold (issue #23): separate knob from the historical
+// boundary threshold so A/B measurement can tune aggressiveness without
+// changing boundary-mode behavior.
+const resolveFirstDeliveryMinChars = (options: Options) => {
+  const value = Number(options.firstDeliveryMinChars ?? Flag.OPENCODE_MEMORY_FIRST_DELIVERY_MIN_CHARS)
+  return Number.isFinite(value) && value >= 0 ? Math.floor(value) : DEFAULT_MIN_OUTPUT_CHARS
+}
+
+// First-delivery allowlist (issue #23): only tools whose bulk output is cheap
+// to re-retrieve on demand. Env override is comma-separated tool names.
+const resolveFirstDeliveryTools = (options: Options): ReadonlySet<string> => {
+  const raw = options.firstDeliveryTools ?? Flag.OPENCODE_MEMORY_FIRST_DELIVERY_TOOLS
+  if (raw === undefined || raw.trim() === "") return new Set(DEFAULT_FIRST_DELIVERY_TOOLS)
+  const parsed = raw
+    .split(",")
+    .map((tool) => tool.trim())
+    .filter((tool) => tool !== "")
+  return new Set(parsed)
 }
 
 // Mid-turn compaction is a prefix edit: the first changed byte invalidates the

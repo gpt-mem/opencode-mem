@@ -87,6 +87,15 @@ export const Flag = {
   get OPENCODE_MEMORY_MIDTURN() {
     return truthy("OPENCODE_MEMORY_MIDTURN")
   },
+  get OPENCODE_MEMORY_FIRST_DELIVERY() {
+    return truthy("OPENCODE_MEMORY_FIRST_DELIVERY")
+  },
+  get OPENCODE_MEMORY_FIRST_DELIVERY_MIN_CHARS() {
+    return process.env["OPENCODE_MEMORY_FIRST_DELIVERY_MIN_CHARS"]
+  },
+  get OPENCODE_MEMORY_FIRST_DELIVERY_TOOLS() {
+    return process.env["OPENCODE_MEMORY_FIRST_DELIVERY_TOOLS"]
+  },
   get OPENCODE_MEMORY_INTENT() {
     return truthy("OPENCODE_MEMORY_INTENT")
   },
