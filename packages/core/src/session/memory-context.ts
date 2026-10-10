@@ -14,6 +14,7 @@ export type Options = {
   readonly keepRecentUserTurns?: number
   readonly keepRecentAssistantTurns?: number
   readonly batchSize?: number
+  readonly midTurn?: boolean
 }
 
 const DEFAULT_MIN_OUTPUT_CHARS = 2000
@@ -286,7 +287,10 @@ export const projectV1 = (
 //   than N user turns, otherwise there is no such window at all);
 // - the working set: the last N assistant messages, so a single long agent
 //   turn (one user prompt, many tool results) can still be compressed — older
-//   tool outputs are exactly what the compact markers exist for.
+//   tool outputs are exactly what the compact markers exist for. This window
+//   slides one message per provider step, so it is only used when mid-turn
+//   compression is enabled (issue #20); by default the boundary stays at
+//   user-turn boundaries and the projected prefix is cache-stable within a turn.
 // The earlier (more protective) start wins; when neither window exists there
 // is nothing that can be safely compressed.
 const protectedStartIndex = (
@@ -299,7 +303,7 @@ const protectedStartIndex = (
   const conversationWindow =
     userIndices.length > keepUserTurns ? userIndices[userIndices.length - keepUserTurns] : undefined
   const workingSet =
-    assistantIndices.length > keepAssistantTurns
+    resolveMidTurn(options) && assistantIndices.length > keepAssistantTurns
       ? assistantIndices[assistantIndices.length - keepAssistantTurns]
       : undefined
   if (conversationWindow === undefined) return workingSet
@@ -309,13 +313,18 @@ const protectedStartIndex = (
 
 // Mid-turn compaction is a prefix edit: the first changed byte invalidates the
 // provider's cached prefix from that point on, so every boundary move re-sends
-// the still-full tail uncached. On a cache-priced provider that made MEM more
-// expensive than no compression at all (issue #20: -45% tokens, +70% cost).
-// Moving the boundary in batches keeps the projected prefix byte-identical
-// between jumps and pays the invalidation once per batch instead of once per
-// step, trading a bounded lag (up to batch-1 late messages stay verbatim) for
-// far fewer cache misses. Monotone for append-only history: a compacted
-// message never goes back to full text, so the marker set only grows.
+// the still-full tail uncached. Measured on mimo-v2.6-flash (issue #20): the
+// sliding working-set boundary cost +70% real dollars despite -45% tokens,
+// because cached tokens are ~45x cheaper than uncached ones and mid-turn edits
+// convert cached tail into uncached re-sends every step. Two knobs:
+// - midTurn (default off): enable the sliding working-set window at all —
+//   off means the boundary only moves at user-turn boundaries (cache-stable
+//   prefix within a turn, one invalidation per new user message);
+// - batchSize: when mid-turn is on, move the boundary in batches so the
+//   projected prefix is byte-identical between jumps and the invalidation is
+//   paid once per batch instead of once per step (bounded lag of batch-1
+//   late messages). Monotone for append-only history: a compacted message
+//   never goes back to full text, so the marker set only grows.
 const stableBoundary = (raw: number, batch: number) => (batch <= 1 ? raw : Math.floor(raw / batch) * batch)
 
 // Batch size is overridable via OPENCODE_MEMORY_BATCH_SIZE for A/B measurement
@@ -324,3 +333,9 @@ const resolveBatch = (options: Options) => {
   const value = options.batchSize ?? Number(Flag.OPENCODE_MEMORY_BATCH_SIZE)
   return Number.isFinite(value) && value >= 1 ? Math.floor(value) : DEFAULT_BATCH_SIZE
 }
+
+// Mid-turn compression is opt-in: on cache-priced providers it trades cheap
+// cached tokens for expensive uncached re-sends (issue #20). Enable it via
+// OPENCODE_MEMORY_MIDTURN for providers without prompt caching or when
+// shrinking the provider-visible prompt matters more than dollars.
+const resolveMidTurn = (options: Options) => options.midTurn ?? Flag.OPENCODE_MEMORY_MIDTURN

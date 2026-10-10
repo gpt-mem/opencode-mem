@@ -84,4 +84,7 @@ export const Flag = {
   get OPENCODE_MEMORY_BATCH_SIZE() {
     return process.env["OPENCODE_MEMORY_BATCH_SIZE"]
   },
+  get OPENCODE_MEMORY_MIDTURN() {
+    return truthy("OPENCODE_MEMORY_MIDTURN")
+  },
 }
