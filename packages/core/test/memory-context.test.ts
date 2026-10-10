@@ -514,6 +514,196 @@ describe("MemoryContext.projectV1", () => {
   })
 })
 
+// Issue #23: compact at first delivery — the projected prefix is append-only
+// (marker is a pure function of the stored original), so the provider prefix
+// cache sees zero invalidations and uncached bulk never leaves SQLite.
+describe("MemoryContext first-delivery", () => {
+  const delivery = (messages: readonly SessionMessage.Message[], overrides?: Partial<MemoryContext.Options>) =>
+    MemoryContext.project(messages, {
+      enabled: true,
+      firstDelivery: true,
+      firstDeliveryMinChars: 100,
+      keepRecentUserTurns: 1,
+      ...overrides,
+    })
+
+  test("compacts the freshest result that boundary mode protects", () => {
+    const messages = [
+      user("u1"),
+      assistant("a1", [completedTool({ id: "call_1", name: "bash", content: [{ type: "text", text: big() }], input: { command: "npm test" } })]),
+    ]
+    expect(toolText(compact(messages)[1]!)).toBe(big())
+    const marker = toolText(delivery(messages)[1]!)
+    expect(marker).toContain("[mem:compacted tool result]")
+    expect(marker).toContain("call_id=call_1")
+    expect(marker).toContain("retrieve=get_tool_call_details")
+  })
+
+  test("projects byte-identical prefix as the turn grows (append-only)", () => {
+    const grown = delivery(growth(5))
+    expect(JSON.stringify(delivery(growth(6)).slice(0, grown.length))).toBe(JSON.stringify(grown))
+    expect(toolText(grown[1]!)).toContain("[mem:compacted tool result]")
+  })
+
+  test("projects the same input identically on repeated calls", () => {
+    const messages = growth(4)
+    expect(JSON.stringify(delivery(messages))).toBe(JSON.stringify(delivery(messages)))
+  })
+
+  test("only allowlisted tools are compacted", () => {
+    const messages = [
+      user("u1"),
+      assistant("a1", [completedTool({ id: "call_e", name: "edit", content: [{ type: "text", text: big() }] })]),
+      assistant("a2", [completedTool({ id: "call_b", name: "bash", content: [{ type: "text", text: big() }], input: { command: "ls" } })]),
+    ]
+    const projected = delivery(messages)
+    expect(toolText(projected[1]!)).toBe(big())
+    expect(toolText(projected[2]!)).toContain("[mem:compacted tool result]")
+  })
+
+  test("compacts large shell output at first delivery", () => {
+    const shell = SessionMessage.Shell.make({
+      id: id("sh1"),
+      type: "shell",
+      callID: "call_sh",
+      command: "npm run build",
+      output: big(),
+      time: { created },
+    })
+    const message = delivery([user("u1"), shell])[1]
+    if (message === undefined || message.type !== "shell") throw new Error("expected shell")
+    expect(message.output).toContain("[mem:compacted shell output]")
+    expect(message.output).toContain("retrieve=get_tool_call_details")
+  })
+
+  test("shell without callID stays verbatim (no retrieval path)", () => {
+    const shell = SessionMessage.Shell.make({
+      id: id("sh2"),
+      type: "shell",
+      callID: "",
+      command: "npm run build",
+      output: big(),
+      time: { created },
+    })
+    const message = delivery([user("u1"), shell])[1]
+    if (message === undefined || message.type !== "shell") throw new Error("expected shell")
+    expect(message.output).toBe(big())
+  })
+
+  test("does not compact failed results in first-delivery mode", () => {
+    const failed = SessionMessage.AssistantTool.make({
+      type: "tool",
+      id: "call_err",
+      name: "bash",
+      state: SessionMessage.ToolStateError.make({
+        status: "error",
+        input: {},
+        content: [{ type: "text", text: big() }],
+        structured: {},
+        error: { type: "unknown", message: "boom" },
+      }),
+      time: { created },
+    })
+    const item = (delivery([user("u1"), assistant("a1", [failed])])[1] as SessionMessage.Assistant).content[0]
+    if (item === undefined || item.type !== "tool" || item.state.status !== "error") throw new Error("expected error tool")
+    expect(item.state.content[0]).toEqual({ type: "text", text: big() })
+  })
+
+  test("firstDeliveryMinChars option overrides the threshold", () => {
+    const messages = [user("u1"), assistant("a1", [completedTool({ id: "call_s", name: "bash", content: [{ type: "text", text: "short" }] })])]
+    expect(toolText(delivery(messages, { firstDeliveryMinChars: 2000 })[1]!)).toBe("short")
+  })
+
+  test("OPENCODE_MEMORY_FIRST_DELIVERY_MIN_CHARS env overrides the threshold", () => {
+    process.env["OPENCODE_MEMORY_FIRST_DELIVERY_MIN_CHARS"] = "2000"
+    try {
+      const messages = [user("u1"), assistant("a1", [completedTool({ id: "call_s", name: "bash", content: [{ type: "text", text: "short" }] })])]
+      expect(toolText(delivery(messages)[1]!)).toBe("short")
+    } finally {
+      delete process.env["OPENCODE_MEMORY_FIRST_DELIVERY_MIN_CHARS"]
+    }
+  })
+
+  test("OPENCODE_MEMORY_FIRST_DELIVERY_TOOLS env overrides the allowlist", () => {
+    process.env["OPENCODE_MEMORY_FIRST_DELIVERY_TOOLS"] = "webfetch"
+    try {
+      const messages = [
+        user("u1"),
+        assistant("a1", [completedTool({ id: "call_b", name: "bash", content: [{ type: "text", text: big() }], input: { command: "ls" } })]),
+        assistant("a2", [completedTool({ id: "call_w", name: "webfetch", content: [{ type: "text", text: big() }], input: { url: "https://example.com" } })]),
+      ]
+      const projected = delivery(messages)
+      expect(toolText(projected[1]!)).toBe(big())
+      expect(toolText(projected[2]!)).toContain("kind=url")
+    } finally {
+      delete process.env["OPENCODE_MEMORY_FIRST_DELIVERY_TOOLS"]
+    }
+  })
+
+  test("OPENCODE_MEMORY_FIRST_DELIVERY env flag enables the mode", () => {
+    process.env["OPENCODE_MEMORY_FIRST_DELIVERY"] = "1"
+    process.env["OPENCODE_MEMORY_FIRST_DELIVERY_MIN_CHARS"] = "100"
+    try {
+      const messages = [user("u1"), assistant("a1", [completedTool({ id: "call_1", name: "bash", content: [{ type: "text", text: big() }], input: { command: "npm test" } })])]
+      const projected = MemoryContext.project(messages, { enabled: true })
+      expect(toolText(projected[1]!)).toContain("[mem:compacted tool result]")
+    } finally {
+      delete process.env["OPENCODE_MEMORY_FIRST_DELIVERY"]
+      delete process.env["OPENCODE_MEMORY_FIRST_DELIVERY_MIN_CHARS"]
+    }
+  })
+
+  test("flag off keeps boundary behavior byte-identical", () => {
+    const messages = [user("u1"), assistant("a1", [completedTool({ id: "call_1", name: "bash", content: [{ type: "text", text: big() }], input: { command: "npm test" } })])]
+    expect(JSON.stringify(delivery(messages, { firstDelivery: false, minOutputChars: 100 }))).toBe(JSON.stringify(compact(messages)))
+  })
+
+  test("V1 compacts the freshest result that boundary mode protects", () => {
+    const messages = [v1user("u1"), v1assistant("a1", [v1tool({ id: "call_1", tool: "bash", output: big(), input: { command: "npm test" } })])]
+    expect(v1toolText(compactV1(messages)[1]!)).toBe(big())
+    const marker = v1toolText(
+      MemoryContext.projectV1(messages, { enabled: true, firstDelivery: true, firstDeliveryMinChars: 100 })[1]!,
+    )
+    expect(marker).toContain("[mem:compacted tool result]")
+    expect(marker).toContain("retrieve=get_tool_call_details")
+  })
+
+  test("V1 projects byte-identical prefix as the turn grows", () => {
+    const v1growth = (steps: number) => {
+      const messages: SessionV1.WithParts[] = [v1user("u0")]
+      for (let i = 1; i <= steps; i++)
+        messages.push(
+          v1assistant(`a${i}`, [v1tool({ id: `call_${i}`, tool: "bash", output: big(), input: { command: `step ${i}` } })]),
+        )
+      return messages
+    }
+    const options = { enabled: true, firstDelivery: true, firstDeliveryMinChars: 100 }
+    const grown = MemoryContext.projectV1(v1growth(5), options)
+    expect(JSON.stringify(MemoryContext.projectV1(v1growth(6), options).slice(0, grown.length))).toBe(
+      JSON.stringify(grown),
+    )
+    expect(v1toolText(grown[1]!)).toContain("[mem:compacted tool result]")
+  })
+
+  test("V1 respects the tool allowlist", () => {
+    const messages = [
+      v1user("u1"),
+      v1assistant("a1", [v1tool({ id: "call_e", tool: "edit", output: big() })]),
+      v1assistant("a2", [v1tool({ id: "call_b", tool: "bash", output: big(), input: { command: "ls" } })]),
+    ]
+    const projected = MemoryContext.projectV1(messages, { enabled: true, firstDelivery: true, firstDeliveryMinChars: 100 })
+    expect(v1toolText(projected[1]!)).toBe(big())
+    expect(v1toolText(projected[2]!)).toContain("[mem:compacted tool result]")
+  })
+
+  test("V1 does not compact failed results in first-delivery mode", () => {
+    const messages = [v1user("u1"), v1assistant("a1", [v1tool({ id: "call_err", tool: "bash", output: big(), status: "error" })])]
+    const part = MemoryContext.projectV1(messages, { enabled: true, firstDelivery: true, firstDeliveryMinChars: 100 })[1]!.parts[0]!
+    if (part.type !== "tool" || part.state.status !== "error") throw new Error("expected error tool")
+    expect(part.state.error).toBe("boom")
+  })
+})
+
 // Issue #20: mid-turn compaction edits the projected history at an early
 // position on every provider step, which invalidates the provider prefix
 // cache and re-sends the full tail uncached. The boundary therefore moves
