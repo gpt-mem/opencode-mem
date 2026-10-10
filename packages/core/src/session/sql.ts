@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer, index, primaryKey, real, uniqueIndex } from "drizzle-orm/sqlite-core"
+import { sqliteTable, text, integer, index, primaryKey, real, uniqueIndex, blob } from "drizzle-orm/sqlite-core"
 import * as DatabasePath from "../database/path"
 import { ProjectTable } from "../project/sql"
 import type { SessionMessage } from "./message"
@@ -163,6 +163,47 @@ export const SessionInputTable = sqliteTable(
     uniqueIndex("session_input_session_admitted_seq_idx").on(table.session_id, table.admitted_seq),
     uniqueIndex("session_input_session_promoted_seq_idx").on(table.session_id, table.promoted_seq),
   ],
+)
+
+export const IntentTable = sqliteTable(
+  "intent",
+  {
+    id: text().primaryKey(),
+    session_id: text()
+      .$type<SessionSchema.ID>()
+      .notNull()
+      .references(() => SessionTable.id, { onDelete: "cascade" }),
+    parent_id: text().$type<string>(),
+    summary: text().notNull(),
+    summary_embedding: blob({ mode: "buffer" }).$type<Buffer>(),
+    status: text().$type<"active" | "closed" | "archived">().notNull().default("active"),
+    started_at: integer().notNull(),
+    last_active_at: integer().notNull(),
+    closed_at: integer(),
+    close_reason: text(),
+    turn_count: integer().notNull().default(0),
+    token_count: integer().notNull().default(0),
+    meta: text({ mode: "json" }).$type<Record<string, unknown>>(),
+  },
+  (table) => [index("intent_session_status_idx").on(table.session_id, table.status)],
+)
+
+export const IntentSignalTable = sqliteTable(
+  "intent_signal",
+  {
+    id: integer().primaryKey({ autoIncrement: true }),
+    session_id: text()
+      .$type<SessionSchema.ID>()
+      .notNull()
+      .references(() => SessionTable.id, { onDelete: "cascade" }),
+    turn_index: integer().notNull(),
+    cosine: real(),
+    llm_label: text(),
+    llm_conf: real(),
+    acted: integer().notNull().default(0),
+    ts: integer().notNull(),
+  },
+  (table) => [index("intent_signal_session_turn_idx").on(table.session_id, table.turn_index)],
 )
 
 export const SessionContextEpochTable = sqliteTable("session_context_epoch", {

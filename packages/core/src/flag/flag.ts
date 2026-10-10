@@ -87,4 +87,13 @@ export const Flag = {
   get OPENCODE_MEMORY_MIDTURN() {
     return truthy("OPENCODE_MEMORY_MIDTURN")
   },
+  get OPENCODE_MEMORY_INTENT() {
+    return truthy("OPENCODE_MEMORY_INTENT")
+  },
+  get OPENCODE_MEMORY_INTENT_DEBUG() {
+    return truthy("OPENCODE_MEMORY_INTENT_DEBUG")
+  },
+  get OPENCODE_MEMORY_INTENT_REFRESH_EVERY() {
+    return process.env["OPENCODE_MEMORY_INTENT_REFRESH_EVERY"]
+  },
 }

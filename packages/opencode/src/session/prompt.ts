@@ -30,6 +30,7 @@ import { pathToFileURL, fileURLToPath } from "url"
 import { Config } from "@/config/config"
 import { ConfigMarkdown } from "@/config/markdown"
 import { SessionSummary } from "./summary"
+import { IntentTracker } from "./intent-tracker"
 import { NamedError } from "@opencode-ai/core/util/error"
 import { SessionProcessor } from "./processor"
 import { Tool } from "@/tool/tool"
@@ -140,6 +141,7 @@ const layer = Layer.effect(
     const llm = yield* LLM.Service
     const events = yield* EventV2Bridge.Service
     const flags = yield* RuntimeFlags.Service
+    const intentTracker = yield* IntentTracker.Service
     const database = yield* Database.Service
     const { db } = database
     const ops = Effect.fn("SessionPrompt.ops")(function* () {
@@ -1057,6 +1059,10 @@ const layer = Layer.effect(
       yield* revert.cleanup(session)
       const message = yield* createUserMessage(input)
       yield* sessions.touch(input.sessionID)
+      // Log-only intent signal (issue #25): never fails or delays the prompt.
+      yield* intentTracker.track({ sessionID: input.sessionID, parts: message.parts }).pipe(
+        Effect.catch(() => Effect.void),
+      )
 
       const permissions: PermissionV1.Rule[] = []
       for (const [t, enabled] of Object.entries(input.tools ?? {})) {
@@ -1621,6 +1627,7 @@ export const node = LayerNode.make({
     SessionRunState.node,
     SessionRevert.node,
     SessionSummary.node,
+    IntentTracker.node,
     SystemPrompt.node,
     LLM.node,
     EventV2Bridge.node,
