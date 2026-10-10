@@ -93,12 +93,51 @@ describe("MemoryContext.project", () => {
       assistant("a2", [completedTool({ id: "call_2", name: "read", content: [{ type: "text", text: big() }], input: { path: "file2.txt" } })]),
       assistant("a3", [completedTool({ id: "call_3", name: "bash", content: [{ type: "text", text: big() }], input: { command: "wc -l file2.txt" } })]),
     ]
-    const projected = compact(messages)
+    const projected = compact(messages, { midTurn: true })
     expect(toolText(projected[1]!)).toContain("[mem:compacted tool result]")
     expect(toolText(projected[1]!)).toContain("call_id=call_1")
     expect(toolText(projected[1]!)).toContain("kind=generic")
     expect(toolText(projected[2]!)).toBe(big())
     expect(toolText(projected[3]!)).toBe(big())
+  })
+
+  test("leaves a single user turn intact by default to keep the prefix cache stable", () => {
+    const messages = [
+      user("u1"),
+      assistant("a1", [completedTool({ id: "call_1", name: "read", content: [{ type: "text", text: big() }], input: { path: "file1.txt" } })]),
+      assistant("a2", [completedTool({ id: "call_2", name: "read", content: [{ type: "text", text: big() }], input: { path: "file2.txt" } })]),
+      assistant("a3", [completedTool({ id: "call_3", name: "bash", content: [{ type: "text", text: big() }], input: { command: "wc -l file2.txt" } })]),
+    ]
+    expect(JSON.stringify(compact(messages))).toBe(JSON.stringify(messages))
+  })
+
+  test("still compacts previous user turns when mid-turn compression is off", () => {
+    const messages = [
+      user("u1"),
+      assistant("a1", [completedTool({ id: "call_1", name: "bash", content: [{ type: "text", text: big() }], input: { command: "npm test" } })]),
+      user("u2"),
+      assistant("a2", [completedTool({ id: "call_2", name: "bash", content: [{ type: "text", text: big() }], input: { command: "npm run build" } })]),
+      user("u3"),
+    ]
+    const projected = compact(messages, { keepRecentUserTurns: 2 })
+    expect(toolText(projected[1]!)).toContain("[mem:compacted tool result]")
+    expect(toolText(projected[1]!)).toContain("call_id=call_1")
+    expect(toolText(projected[3]!)).toBe(big())
+  })
+
+  test("OPENCODE_MEMORY_MIDTURN re-enables the sliding working-set window", () => {
+    process.env["OPENCODE_MEMORY_MIDTURN"] = "1"
+    try {
+      const messages = [
+        user("u1"),
+        assistant("a1", [completedTool({ id: "call_1", name: "read", content: [{ type: "text", text: big() }], input: { path: "file1.txt" } })]),
+        assistant("a2", [completedTool({ id: "call_2", name: "read", content: [{ type: "text", text: big() }], input: { path: "file2.txt" } })]),
+        assistant("a3", [completedTool({ id: "call_3", name: "read", content: [{ type: "text", text: big() }], input: { path: "file3.txt" } })]),
+      ]
+      expect(toolText(compact(messages)[1]!)).toContain("[mem:compacted tool result]")
+    } finally {
+      delete process.env["OPENCODE_MEMORY_MIDTURN"]
+    }
   })
 
   test("does not compact failed tool results", () => {
@@ -374,7 +413,7 @@ describe("MemoryContext.projectV1", () => {
       v1assistant("a2", [v1tool({ id: "call_2", tool: "read", output: big(), input: { path: "file2.txt" } })]),
       v1assistant("a3", [v1tool({ id: "call_3", tool: "bash", output: big(), input: { command: "wc -l file2.txt" } })]),
     ]
-    const projected = compactV1(messages)
+    const projected = compactV1(messages, { midTurn: true })
     expect(v1toolText(projected[1]!)).toContain("[mem:compacted tool result]")
     expect(v1toolText(projected[1]!)).toContain("call_id=call_1")
     expect(v1toolText(projected[1]!)).toContain("retrieve=get_tool_call_details")
@@ -501,15 +540,18 @@ const markerIDs = (messages: readonly SessionMessage.Message[]) =>
   )
 
 describe("MemoryContext cache-stable boundary", () => {
+  const compactMidTurn = (messages: readonly SessionMessage.Message[], overrides?: Partial<MemoryContext.Options>) =>
+    compact(messages, { midTurn: true, ...overrides })
+
   test("projected prefix is byte-identical between batch jumps", () => {
-    const stable = compact(growth(5))
-    expect(JSON.stringify(compact(growth(6)).slice(0, stable.length))).toBe(JSON.stringify(stable))
+    const stable = compactMidTurn(growth(5))
+    expect(JSON.stringify(compactMidTurn(growth(6)).slice(0, stable.length))).toBe(JSON.stringify(stable))
     expect(toolText(stable[1]!)).toContain("[mem:compacted tool result]")
   })
 
   test("batchSize 1 reproduces the sliding boundary that changes the prefix every step", () => {
-    const sliding = compact(growth(5), { batchSize: 1 })
-    expect(JSON.stringify(compact(growth(6), { batchSize: 1 }).slice(0, sliding.length))).not.toBe(
+    const sliding = compactMidTurn(growth(5), { batchSize: 1 })
+    expect(JSON.stringify(compactMidTurn(growth(6), { batchSize: 1 }).slice(0, sliding.length))).not.toBe(
       JSON.stringify(sliding),
     )
   })
@@ -517,7 +559,7 @@ describe("MemoryContext cache-stable boundary", () => {
   test("boundary is monotone: compacted results stay compacted as the turn grows", () => {
     let previous = new Set<string>()
     for (let steps = 3; steps <= 10; steps++) {
-      const markers = markerIDs(compact(growth(steps)))
+      const markers = markerIDs(compactMidTurn(growth(steps)))
       for (const callID of previous) expect(markers.has(callID)).toBe(true)
       previous = markers
     }
@@ -527,7 +569,7 @@ describe("MemoryContext cache-stable boundary", () => {
   test("OPENCODE_MEMORY_BATCH_SIZE overrides the default batch", () => {
     process.env["OPENCODE_MEMORY_BATCH_SIZE"] = "1"
     try {
-      expect(JSON.stringify(compact(growth(6)))).toBe(JSON.stringify(compact(growth(6), { batchSize: 1 })))
+      expect(JSON.stringify(compactMidTurn(growth(6)))).toBe(JSON.stringify(compactMidTurn(growth(6), { batchSize: 1 })))
     } finally {
       delete process.env["OPENCODE_MEMORY_BATCH_SIZE"]
     }
@@ -542,8 +584,10 @@ describe("MemoryContext cache-stable boundary", () => {
         )
       return messages
     }
-    const stable = compactV1(v1growth(5))
-    expect(JSON.stringify(compactV1(v1growth(6)).slice(0, stable.length))).toBe(JSON.stringify(stable))
+    const stable = compactV1(v1growth(5), { midTurn: true })
+    expect(JSON.stringify(compactV1(v1growth(6), { midTurn: true }).slice(0, stable.length))).toBe(
+      JSON.stringify(stable),
+    )
     expect(v1toolText(stable[1]!)).toContain("[mem:compacted tool result]")
     expect(v1toolText(stable[1]!)).toContain("retrieve=get_tool_call_details")
   })
