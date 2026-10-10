@@ -1,6 +1,6 @@
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { Effect, Context, Layer } from "effect"
-import { and, count, desc, eq } from "drizzle-orm"
+import { and, count, desc, eq, max } from "drizzle-orm"
 import { ulid } from "ulid"
 import { Database } from "@opencode-ai/core/database/database"
 import { IntentTable, IntentSignalTable } from "@opencode-ai/core/session/sql"
@@ -17,6 +17,28 @@ const EMBEDDING_MODEL = "char-ngram-tf-v1"
 const SUMMARY_TEXT_CHARS = 400
 const RECENT_TEXTS = 3
 const DEFAULT_REFRESH_EVERY = 5
+
+// Hysteresis decision layer (issue #25 day 2). Calibrated on 111 real
+// transitions (cache-intent-research REAL-DATA-ANALYSIS.md §B3): topic
+// switches scored cosine 0.23-0.41 against sticky summaries while
+// continuations scored 0.53-1.00 — threshold 0.475 sits in the clean gap.
+const DEFAULT_SWITCH_THRESHOLD = 0.475
+// Guards keep precision ≥0.9 within the FP budget (PLAN.md day 2): an intent
+// must be worth cutting (turns OR tokens), a switch signal needs enough text
+// to be evidence, and switches cannot flap (cool-down after a switch).
+const MIN_INTENT_TURNS = 2
+const MIN_INTENT_TOKENS = 2000
+const COOLDOWN_TURNS = 2
+const MIN_SWITCH_TEXT_CHARS = 30
+
+// 35-55% of real user turns are short continuations (REAL-DATA-ANALYSIS §B5):
+// markers like "ок/да/продолжай", pure punctuation, or additive "еще/+" prefixes.
+// They share almost no ngrams with the summary, so cosine alone would read them
+// as switches (the raw-message baseline had 87% false positives). Guard first.
+const CONTINUATION_MARKER_RE =
+  /^[\s.!…]*((ok(aye)?|yep|yeah|yes|sure|go|continue|done|nice|great)|(ок(ей)?|ага|угу|да|давай|погнали|поехали|продолж\w*|дальше|норм\w*|готово|понял\w*|ясно|понятно|упс|ой))[\s.!…]*$/i
+const CONTINUATION_PUNCT_RE = /^[\s.!…]+$/
+const ADDITIVE_PREFIX_RE = /^[\s]*((еще|ещё)\b|а\s+(еще|ещё)\b|и\s+(еще|ещё)\b|плюс\b|\+)/i
 
 // Deterministic free detector: log-TF over char 3-5 grams, cosine over the
 // sparse vectors. No network, no model — good enough to collect a labeled
@@ -50,6 +72,35 @@ const cosine = (a: Map<string, number>, b: Map<string, number>) => {
 }
 
 const estimateTokens = (text: string) => Math.ceil(text.length / 4)
+
+const resolveSwitchThreshold = () => {
+  const value = Number(Flag.OPENCODE_MEMORY_INTENT_SWITCH_THRESHOLD)
+  return Number.isFinite(value) && value >= 0 && value <= 1 ? value : DEFAULT_SWITCH_THRESHOLD
+}
+
+// Pure hysteresis decision: whether this turn confirms an intent switch.
+// Order matters — cheap text guards first, then the cosine threshold, then
+// the guards that keep precision high (young intent, switch flapping).
+const decideSwitch = (input: {
+  readonly text: string
+  readonly score: number
+  readonly turnCount: number
+  readonly tokenCount: number
+  readonly turnIndex: number
+  readonly lastSwitchTurn: number | undefined
+  readonly threshold: number
+}): boolean => {
+  const trimmed = input.text.trim()
+  if (CONTINUATION_PUNCT_RE.test(trimmed)) return false
+  if (CONTINUATION_MARKER_RE.test(trimmed)) return false
+  if (ADDITIVE_PREFIX_RE.test(trimmed)) return false
+  if (trimmed.length < MIN_SWITCH_TEXT_CHARS) return false
+  if (input.score >= input.threshold) return false
+  if (input.turnCount < MIN_INTENT_TURNS && input.tokenCount < MIN_INTENT_TOKENS) return false
+  if (input.lastSwitchTurn !== undefined && input.turnIndex - input.lastSwitchTurn < COOLDOWN_TURNS)
+    return false
+  return true
+}
 
 const userText = (parts: readonly SessionV1.Part[]) =>
   parts
@@ -121,6 +172,67 @@ const layer = Layer.effect(
       }
 
       const score = cosine(ngrams(active.summary), ngrams(text))
+
+      // Day-2 act mode (issue #25): on a confirmed switch the old intent is
+      // closed and a new child intent takes over. Off (default) keeps the
+      // day-1 log-only behavior byte-for-byte: signals are recorded, nothing
+      // switches. The decision itself never mutates model-visible messages.
+      if (Flag.OPENCODE_MEMORY_INTENT_ACT) {
+        const lastSwitch = yield* db
+          .select({ turn: max(IntentSignalTable.turn_index) })
+          .from(IntentSignalTable)
+          .where(and(eq(IntentSignalTable.session_id, input.sessionID), eq(IntentSignalTable.acted, 1)))
+          .get()
+          .pipe(Effect.orDie)
+        const switched = decideSwitch({
+          text,
+          score,
+          turnCount: active.turn_count,
+          tokenCount: active.token_count,
+          turnIndex,
+          lastSwitchTurn: lastSwitch?.turn ?? undefined,
+          threshold: resolveSwitchThreshold(),
+        })
+        if (switched) {
+          const now2 = Date.now()
+          yield* db
+            .insert(IntentSignalTable)
+            .values({ session_id: input.sessionID, turn_index: turnIndex, cosine: score, acted: 1, ts: now2 })
+            .run()
+            .pipe(Effect.orDie)
+          yield* db
+            .update(IntentTable)
+            .set({ status: "closed", closed_at: now2, close_reason: "switch", last_active_at: now2 })
+            .where(eq(IntentTable.id, active.id))
+            .run()
+            .pipe(Effect.orDie)
+          yield* db
+            .insert(IntentTable)
+            .values({
+              id: ulid(),
+              session_id: input.sessionID,
+              parent_id: active.id,
+              summary: text.slice(0, SUMMARY_TEXT_CHARS),
+              started_at: now2,
+              last_active_at: now2,
+              turn_count: 1,
+              token_count: estimateTokens(text),
+              meta: { embedding_model: EMBEDDING_MODEL, recent_texts: [text.slice(0, SUMMARY_TEXT_CHARS)] },
+            })
+            .run()
+            .pipe(Effect.orDie)
+          if (Flag.OPENCODE_MEMORY_INTENT_DEBUG)
+            console.log("[intent-tracker]", {
+              session: input.sessionID,
+              turn: turnIndex,
+              cosine: score.toFixed(3),
+              switched: true,
+              closed: active.id,
+            })
+          return
+        }
+      }
+
       yield* db
         .insert(IntentSignalTable)
         .values({ session_id: input.sessionID, turn_index: turnIndex, cosine: score, ts: now })
