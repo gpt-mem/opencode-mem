@@ -87,6 +87,8 @@ beforeEach(() => {
 afterEach(() => {
   delete process.env["OPENCODE_MEMORY_INTENT"]
   delete process.env["OPENCODE_MEMORY_INTENT_REFRESH_EVERY"]
+  delete process.env["OPENCODE_MEMORY_INTENT_ACT"]
+  delete process.env["OPENCODE_MEMORY_INTENT_SWITCH_THRESHOLD"]
 })
 
 describe("IntentTracker", () => {
@@ -190,6 +192,180 @@ describe("IntentTracker", () => {
       yield* tracker.track({ sessionID, parts: [textPart("   ")] as never })
       const rows = yield* intents
       expect(rows.length).toBe(0)
+    }),
+  )
+
+  it.live("act off keeps log-only behavior on a topic switch", () =>
+    Effect.gen(function* () {
+      const tracker = yield* IntentTracker.Service
+      yield* seed
+      yield* reset
+      yield* tracker.track({ sessionID, parts: [textPart("fix the login bug in the authentication module")] as never })
+      yield* tracker.track({
+        sessionID,
+        parts: [textPart("the login bug in authentication happens on token refresh")] as never,
+      })
+      yield* tracker.track({
+        sessionID,
+        parts: [textPart("now write a python script that scrapes weather data from public APIs")] as never,
+      })
+      const rows = yield* intents
+      expect(rows.length).toBe(1)
+      expect(rows[0].status).toBe("active")
+      const sigs = yield* signals
+      expect(sigs.length).toBe(3)
+      expect(sigs[2].acted).toBe(0)
+    }),
+  )
+
+  it.live("act on switches: old intent closed, child intent opened", () =>
+    Effect.gen(function* () {
+      process.env["OPENCODE_MEMORY_INTENT_ACT"] = "1"
+      const tracker = yield* IntentTracker.Service
+      yield* seed
+      yield* reset
+      yield* tracker.track({ sessionID, parts: [textPart("fix the login bug in the authentication module")] as never })
+      yield* tracker.track({
+        sessionID,
+        parts: [textPart("the login bug in authentication happens on token refresh")] as never,
+      })
+      yield* tracker.track({
+        sessionID,
+        parts: [textPart("now write a python script that scrapes weather data from public APIs")] as never,
+      })
+      const rows = yield* intents
+      expect(rows.length).toBe(2)
+      const closed = rows.find((row) => row.status === "closed")
+      const active = rows.find((row) => row.status === "active")
+      expect(closed).toBeDefined()
+      expect(closed?.close_reason).toBe("switch")
+      expect(closed?.closed_at).not.toBe(null)
+      expect(active).toBeDefined()
+      expect(active?.parent_id).toBe(closed?.id)
+      expect(active?.summary).toContain("weather")
+      const sigs = yield* signals
+      expect(sigs.length).toBe(3)
+      expect(sigs[2].acted).toBe(1)
+      expect(sigs[0].acted).toBe(0)
+      expect(sigs[1].acted).toBe(0)
+    }),
+  )
+
+  it.live("act on: continuation markers never switch", () =>
+    Effect.gen(function* () {
+      process.env["OPENCODE_MEMORY_INTENT_ACT"] = "1"
+      const tracker = yield* IntentTracker.Service
+      yield* seed
+      yield* reset
+      yield* tracker.track({ sessionID, parts: [textPart("fix the login bug in the authentication module")] as never })
+      yield* tracker.track({
+        sessionID,
+        parts: [textPart("the login bug in authentication happens on token refresh")] as never,
+      })
+      for (const text of ["ок", ".", "да давай", "+ еще добавь тесты", "продолжай"]) {
+        yield* tracker.track({ sessionID, parts: [textPart(text)] as never })
+      }
+      const rows = yield* intents
+      expect(rows.length).toBe(1)
+      expect(rows[0].status).toBe("active")
+      const sigs = yield* signals
+      expect(sigs.length).toBe(7)
+      expect(sigs.slice(2).every((sig) => sig.acted === 0)).toBe(true)
+    }),
+  )
+
+  it.live("act on: young intent is not closed", () =>
+    Effect.gen(function* () {
+      process.env["OPENCODE_MEMORY_INTENT_ACT"] = "1"
+      const tracker = yield* IntentTracker.Service
+      yield* seed
+      yield* reset
+      yield* tracker.track({ sessionID, parts: [textPart("fix the login bug in the authentication module")] as never })
+      yield* tracker.track({
+        sessionID,
+        parts: [textPart("now write a python script that scrapes weather data from public APIs")] as never,
+      })
+      const rows = yield* intents
+      expect(rows.length).toBe(1)
+      expect(rows[0].status).toBe("active")
+      const sigs = yield* signals
+      expect(sigs[1].acted).toBe(0)
+    }),
+  )
+
+  it.live("act on: cool-down prevents back-to-back switches", () =>
+    Effect.gen(function* () {
+      process.env["OPENCODE_MEMORY_INTENT_ACT"] = "1"
+      const tracker = yield* IntentTracker.Service
+      yield* seed
+      yield* reset
+      yield* tracker.track({ sessionID, parts: [textPart("fix the login bug in the authentication module")] as never })
+      yield* tracker.track({
+        sessionID,
+        parts: [textPart("the login bug in authentication happens on token refresh")] as never,
+      })
+      yield* tracker.track({
+        sessionID,
+        parts: [textPart("now write a python script that scrapes weather data from public APIs")] as never,
+      })
+      // Immediately after the switch at turn 3, another unrelated topic — cooldown blocks it.
+      yield* tracker.track({
+        sessionID,
+        parts: [textPart("configure a cron job that archives session logs every fifteen minutes")] as never,
+      })
+      const rows = yield* intents
+      expect(rows.length).toBe(2)
+      const sigs = yield* signals
+      expect(sigs[3].acted).toBe(0)
+      // Two turns after the switch the cool-down is over; a third topic may switch.
+      yield* tracker.track({
+        sessionID,
+        parts: [textPart("research prefix cache pricing models for llm providers and billing")] as never,
+      })
+      const after = yield* intents
+      expect(after.length).toBe(3)
+      const sigsAfter = yield* signals
+      expect(sigsAfter[4].acted).toBe(1)
+    }),
+  )
+
+  it.live("act on: threshold env override forces and blocks switches", () =>
+    Effect.gen(function* () {
+      process.env["OPENCODE_MEMORY_INTENT_ACT"] = "1"
+      process.env["OPENCODE_MEMORY_INTENT_SWITCH_THRESHOLD"] = "0.99"
+      const tracker = yield* IntentTracker.Service
+      yield* seed
+      yield* reset
+      yield* tracker.track({ sessionID, parts: [textPart("fix the login bug in the authentication module")] as never })
+      yield* tracker.track({
+        sessionID,
+        parts: [textPart("the login bug in authentication happens on token refresh")] as never,
+      })
+      // Turn 2 continues (young-intent guard); turn 3 with threshold 0.99
+      // makes even a high-cosine continuation read as a switch.
+      yield* tracker.track({
+        sessionID,
+        parts: [textPart("the authentication login bug also affects the oauth token rotation path")] as never,
+      })
+      const forced = yield* intents
+      expect(forced.length).toBe(2)
+      expect(forced.some((row) => row.close_reason === "switch")).toBe(true)
+
+      delete process.env["OPENCODE_MEMORY_INTENT_SWITCH_THRESHOLD"]
+      process.env["OPENCODE_MEMORY_INTENT_SWITCH_THRESHOLD"] = "0"
+      yield* reset
+      yield* tracker.track({ sessionID, parts: [textPart("fix the login bug in the authentication module")] as never })
+      yield* tracker.track({
+        sessionID,
+        parts: [textPart("the login bug in authentication happens on token refresh")] as never,
+      })
+      yield* tracker.track({
+        sessionID,
+        parts: [textPart("now write a python script that scrapes weather data from public APIs")] as never,
+      })
+      const blocked = yield* intents
+      expect(blocked.length).toBe(1)
+      expect(blocked[0].status).toBe("active")
     }),
   )
 })

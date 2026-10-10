@@ -105,4 +105,10 @@ export const Flag = {
   get OPENCODE_MEMORY_INTENT_REFRESH_EVERY() {
     return process.env["OPENCODE_MEMORY_INTENT_REFRESH_EVERY"]
   },
+  get OPENCODE_MEMORY_INTENT_ACT() {
+    return truthy("OPENCODE_MEMORY_INTENT_ACT")
+  },
+  get OPENCODE_MEMORY_INTENT_SWITCH_THRESHOLD() {
+    return process.env["OPENCODE_MEMORY_INTENT_SWITCH_THRESHOLD"]
+  },
 }
