@@ -13,11 +13,13 @@ export type Options = {
   readonly minOutputChars?: number
   readonly keepRecentUserTurns?: number
   readonly keepRecentAssistantTurns?: number
+  readonly batchSize?: number
 }
 
 const DEFAULT_MIN_OUTPUT_CHARS = 2000
 const DEFAULT_KEEP_RECENT_USER_TURNS = 2
 const DEFAULT_KEEP_RECENT_ASSISTANT_TURNS = 2
+const DEFAULT_BATCH_SIZE = 2
 const PREVIEW_HEAD = 400
 const PREVIEW_TAIL = 200
 const SUMMARY_LIMIT = 200
@@ -133,8 +135,10 @@ export const project = (
     if (message.type === "assistant") assistantIndices.push(index)
   })
   if (userIndices.length === 0) return messages
-  const protectedFrom = protectedStartIndex(userIndices, assistantIndices, options)
-  if (protectedFrom === undefined || protectedFrom <= 0) return messages
+  const rawProtected = protectedStartIndex(userIndices, assistantIndices, options)
+  if (rawProtected === undefined) return messages
+  const protectedFrom = stableBoundary(rawProtected, resolveBatch(options))
+  if (protectedFrom <= 0) return messages
 
   let compacted = 0
   const projected = messages.map((message, index) => {
@@ -203,7 +207,7 @@ export const project = (
 
   if (compacted > 0 && Flag.OPENCODE_MEMORY_CONTEXT_DEBUG)
     console.log(
-      `[mem-context] session=${options.sessionID ?? "?"} compacted=${compacted} protected_from=${protectedFrom}`,
+      `[mem-context] session=${options.sessionID ?? "?"} compacted=${compacted} protected_from=${protectedFrom} raw=${rawProtected}`,
     )
   return projected
 }
@@ -226,8 +230,10 @@ export const projectV1 = (
     if (message.info.role === "assistant") assistantIndices.push(index)
   })
   if (userIndices.length === 0) return messages
-  const protectedFrom = protectedStartIndex(userIndices, assistantIndices, options)
-  if (protectedFrom === undefined || protectedFrom <= 0) return messages
+  const rawProtected = protectedStartIndex(userIndices, assistantIndices, options)
+  if (rawProtected === undefined) return messages
+  const protectedFrom = stableBoundary(rawProtected, resolveBatch(options))
+  if (protectedFrom <= 0) return messages
 
   let compacted = 0
   const projected = messages.map((message, index) => {
@@ -270,7 +276,7 @@ export const projectV1 = (
 
   if (compacted > 0 && Flag.OPENCODE_MEMORY_CONTEXT_DEBUG)
     console.log(
-      `[mem-context] session=${options.sessionID ?? "?"} compacted=${compacted} protected_from=${protectedFrom}`,
+      `[mem-context] session=${options.sessionID ?? "?"} compacted=${compacted} protected_from=${protectedFrom} raw=${rawProtected}`,
     )
   return projected
 }
@@ -299,4 +305,22 @@ const protectedStartIndex = (
   if (conversationWindow === undefined) return workingSet
   if (workingSet === undefined) return conversationWindow
   return Math.min(conversationWindow, workingSet)
+}
+
+// Mid-turn compaction is a prefix edit: the first changed byte invalidates the
+// provider's cached prefix from that point on, so every boundary move re-sends
+// the still-full tail uncached. On a cache-priced provider that made MEM more
+// expensive than no compression at all (issue #20: -45% tokens, +70% cost).
+// Moving the boundary in batches keeps the projected prefix byte-identical
+// between jumps and pays the invalidation once per batch instead of once per
+// step, trading a bounded lag (up to batch-1 late messages stay verbatim) for
+// far fewer cache misses. Monotone for append-only history: a compacted
+// message never goes back to full text, so the marker set only grows.
+const stableBoundary = (raw: number, batch: number) => (batch <= 1 ? raw : Math.floor(raw / batch) * batch)
+
+// Batch size is overridable via OPENCODE_MEMORY_BATCH_SIZE for A/B measurement
+// of the token/cost trade-off (issue #20); 1 reproduces the sliding boundary.
+const resolveBatch = (options: Options) => {
+  const value = options.batchSize ?? Number(Flag.OPENCODE_MEMORY_BATCH_SIZE)
+  return Number.isFinite(value) && value >= 1 ? Math.floor(value) : DEFAULT_BATCH_SIZE
 }
