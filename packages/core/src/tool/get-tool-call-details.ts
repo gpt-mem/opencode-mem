@@ -15,11 +15,20 @@ import { Tools } from "./tools"
 export const name = "get_tool_call_details"
 
 const DEFAULT_MAX_CHARS = 8000
+const HARD_MAX_CHARS = 200_000
 
 export const Input = Schema.Struct({
   call_id: Schema.String.annotate({ description: "Call ID of the tool call to retrieve (from a compacted marker)" }),
   max_chars: Schema.optional(
     Schema.Number.annotate({ description: `Maximum characters of output text (default ${DEFAULT_MAX_CHARS})` }),
+  ),
+  offset: Schema.optional(
+    Schema.Number.annotate({ description: "Character offset into the original output to start from (default 0)" }),
+  ),
+  full: Schema.optional(
+    Schema.Boolean.annotate({
+      description: `Return the complete output up to ${HARD_MAX_CHARS} chars (ignores max_chars); page the rest with offset`,
+    }),
   ),
 })
 
@@ -31,6 +40,8 @@ export const Output = Schema.Struct({
   command: Schema.optional(Schema.String),
   output: Schema.optional(Schema.String),
   truncated: Schema.optional(Schema.Boolean),
+  total_chars: Schema.optional(Schema.Number),
+  offset: Schema.optional(Schema.Number),
   message_id: Schema.optional(Schema.String),
 })
 export type Output = typeof Output.Type
@@ -39,16 +50,21 @@ export const toModelOutput = (output: Output) => JSON.stringify(output, null, 2)
 
 const decodeMessage = Schema.decodeUnknownEffect(SessionMessage.Message)
 
-const bound = (text: string, max: number) =>
-  text.length <= max ? { text, truncated: false } : { text: text.slice(0, max), truncated: true }
+// truncated means "more content remains after this window" so the model can
+// page a large original with offset instead of hitting a silent dead end.
+const window = (text: string, offset: number, max: number) => {
+  const slice = text.slice(offset, offset + max)
+  return { text: slice, truncated: offset + slice.length < text.length }
+}
 
 const extract = (
   message: SessionMessage.Message,
   callID: string,
   maxChars: number,
+  offset: number,
 ): Output | undefined => {
   if (message.type === "shell" && message.callID === callID) {
-    const output = bound(message.output, maxChars)
+    const output = window(message.output, offset, maxChars)
     return {
       found: true,
       call_id: callID,
@@ -57,6 +73,8 @@ const extract = (
       command: message.command,
       output: output.text,
       truncated: output.truncated,
+      total_chars: message.output.length,
+      ...(offset > 0 ? { offset } : {}),
       message_id: message.id,
     }
   }
@@ -81,7 +99,7 @@ const extract = (
       : item.state.content
           .map((part) => (part.type === "text" ? part.text : `[${part.mime}${part.name === undefined ? "" : `: ${part.name}`}]`))
           .join("\n")
-  const output = bound(text, maxChars)
+  const output = window(text, offset, maxChars)
   return {
     found: true,
     call_id: callID,
@@ -89,6 +107,8 @@ const extract = (
     status: item.state.status,
     output: output.text,
     truncated: output.truncated,
+    total_chars: text.length,
+    ...(offset > 0 ? { offset } : {}),
     message_id: message.id,
   }
 }
@@ -104,7 +124,8 @@ const layer = Layer.effectDiscard(
         [name]: Tool.make({
           description:
             "Retrieve the full original output of a previous tool call in this session by its call_id. " +
-            "Use this when a tool result was compacted to a [mem:compacted tool result] marker.",
+            "Use this when a tool result was compacted to a [mem:compacted tool result] marker. " +
+            "When truncated is true more content remains: call again with offset (and max_chars or full) to page through the rest.",
           input: Input,
           output: Output,
           toModelOutput: ({ output }) => [{ type: "text", text: toModelOutput(output) }],
@@ -118,7 +139,8 @@ const layer = Layer.effectDiscard(
                 agent: context.agent,
                 source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
               })
-              const maxChars = input.max_chars ?? DEFAULT_MAX_CHARS
+              const maxChars = input.full === true ? HARD_MAX_CHARS : input.max_chars ?? DEFAULT_MAX_CHARS
+              const offset = Math.max(0, Math.floor(input.offset ?? 0))
               const rows = yield* db
                 .select()
                 .from(SessionMessageTable)
@@ -136,7 +158,7 @@ const layer = Layer.effectDiscard(
                   Effect.catch(() => Effect.succeed(undefined)),
                 )
                 if (!message) continue
-                const found = extract(message, input.call_id, maxChars)
+                const found = extract(message, input.call_id, maxChars, offset)
                 if (found) return found
               }
               const shells = yield* db
@@ -151,7 +173,7 @@ const layer = Layer.effectDiscard(
                   Effect.catch(() => Effect.succeed(undefined)),
                 )
                 if (!message) continue
-                const found = extract(message, input.call_id, maxChars)
+                const found = extract(message, input.call_id, maxChars, offset)
                 if (found) return found
               }
               return { found: false, call_id: input.call_id }

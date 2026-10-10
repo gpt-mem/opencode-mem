@@ -134,6 +134,38 @@ describe("tool.get-tool-call-details (V1)", () => {
     }),
   )
 
+  it.instance("pages output with offset and reports total_chars", () =>
+    Effect.gen(function* () {
+      yield* seed
+      const def = yield* Tool.init(yield* GetToolCallDetailsTool)
+      const mid = JSON.parse(
+        (yield* def.execute({ call_id: "call_big", max_chars: 100, offset: 100 }, ctx(sessionID))).output,
+      )
+      expect(mid.output).toBe("x".repeat(100))
+      expect(mid.truncated).toBe(true)
+      expect(mid.total_chars).toBe(5000)
+      expect(mid.offset).toBe(100)
+      const tail = JSON.parse(
+        (yield* def.execute({ call_id: "call_big", max_chars: 100, offset: 4900 }, ctx(sessionID))).output,
+      )
+      expect(tail.output).toBe("x".repeat(100))
+      expect(tail.truncated).toBe(false)
+      expect(tail.offset).toBe(4900)
+    }),
+  )
+
+  it.instance("full=true returns the complete output", () =>
+    Effect.gen(function* () {
+      yield* seed
+      const def = yield* Tool.init(yield* GetToolCallDetailsTool)
+      const result = yield* def.execute({ call_id: "call_big", full: true }, ctx(sessionID))
+      const parsed = JSON.parse(result.output)
+      expect(parsed.output).toBe("x".repeat(5000))
+      expect(parsed.truncated).toBe(false)
+      expect(parsed.total_chars).toBe(5000)
+    }),
+  )
+
   it.instance("returns error state output", () =>
     Effect.gen(function* () {
       yield* seed

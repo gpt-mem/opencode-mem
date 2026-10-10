@@ -156,6 +156,45 @@ describe("GetToolCallDetailsTool", () => {
     }),
   )
 
+  it.effect("pages output with offset and reports total_chars", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const registry = yield* ToolRegistry.Service
+      const full = "full original output\n".repeat(100)
+      const output = parsed(yield* executeTool(registry, call({ call_id: "call_1", max_chars: 10, offset: 5 })))
+      expect(output["output"]).toBe(full.slice(5, 15))
+      expect(output["truncated"]).toBe(true)
+      expect(output["total_chars"]).toBe(full.length)
+      expect(output["offset"]).toBe(5)
+    }),
+  )
+
+  it.effect("full=true returns the complete output and respects the tail", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const registry = yield* ToolRegistry.Service
+      const full = "full original output\n".repeat(100)
+      const complete = parsed(yield* executeTool(registry, call({ call_id: "call_1", full: true })))
+      expect(complete["output"]).toBe(full)
+      expect(complete["truncated"]).toBe(false)
+      expect(complete["total_chars"]).toBe(full.length)
+      const tail = parsed(yield* executeTool(registry, call({ call_id: "call_1", max_chars: 10, offset: full.length - 4 })))
+      expect(String(tail["output"]).length).toBe(4)
+      expect(tail["truncated"]).toBe(false)
+    }),
+  )
+
+  it.effect("pages shell output with offset", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const registry = yield* ToolRegistry.Service
+      const output = parsed(yield* executeTool(registry, call({ call_id: "call_shell_1", max_chars: 100, offset: 6 })))
+      expect(output["output"]).toBe("file2\n")
+      expect(output["truncated"]).toBe(false)
+      expect(output["total_chars"]).toBe(12)
+    }),
+  )
+
   it.effect("returns error state with message", () =>
     Effect.gen(function* () {
       yield* setup
