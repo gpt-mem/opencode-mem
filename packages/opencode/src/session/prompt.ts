@@ -1061,7 +1061,7 @@ const layer = Layer.effect(
       yield* sessions.touch(input.sessionID)
       // Log-only intent signal (issue #25): never fails or delays the prompt.
       yield* intentTracker.track({ sessionID: input.sessionID, parts: message.parts }).pipe(
-        Effect.catchAll(() => Effect.void),
+        Effect.catch(() => Effect.void),
       )
 
       const permissions: PermissionV1.Rule[] = []
