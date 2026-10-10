@@ -243,6 +243,7 @@ const app = LayerNode.group([
   SessionCompaction.node,
   SessionRevert.node,
   SessionSummary.node,
+  IntentTracker.node,
   SessionPrompt.node,
   Instruction.node,
   LLM.node,
