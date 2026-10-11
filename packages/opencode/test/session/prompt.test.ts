@@ -26,7 +26,8 @@ import { Image } from "../../src/image/image"
 import { Question } from "../../src/question"
 import { Todo } from "../../src/session/todo"
 import { Session } from "@/session/session"
-import { SessionMessageTable } from "@opencode-ai/core/session/sql"
+import { ProviderCacheMarkTable, SessionMessageTable } from "@opencode-ai/core/session/sql"
+import { CacheMark } from "@opencode-ai/core/session/cache-mark"
 import { LLM } from "../../src/session/llm"
 import { MessageV2 } from "../../src/session/message-v2"
 import { FSUtil } from "@opencode-ai/core/fs-util"
@@ -701,6 +702,126 @@ it.instance("loop stops provider overflow instead of auto-compacting when disabl
       expect(result.info.finish).toBe("error")
     }
     expect(messages.some((message) => message.parts.some((part) => part.type === "compaction"))).toBe(false)
+  }),
+)
+
+it.instance("failed provider request collapses the cache-mark ledger (issue #39)", () =>
+  Effect.gen(function* () {
+    const prevContext = process.env["OPENCODE_MEMORY_CONTEXT"]
+    const prevCacheMark = process.env["OPENCODE_MEMORY_CACHE_MARK"]
+    process.env["OPENCODE_MEMORY_CONTEXT"] = "1"
+    process.env["OPENCODE_MEMORY_CACHE_MARK"] = "1"
+    const restore = () => {
+      if (prevContext === undefined) delete process.env["OPENCODE_MEMORY_CONTEXT"]
+      else process.env["OPENCODE_MEMORY_CONTEXT"] = prevContext
+      if (prevCacheMark === undefined) delete process.env["OPENCODE_MEMORY_CACHE_MARK"]
+      else process.env["OPENCODE_MEMORY_CACHE_MARK"] = prevCacheMark
+    }
+    try {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const database = yield* Database.Service
+      const provider = `${ref.providerID}/${ref.modelID}`
+      const chat = yield* sessions.create({ title: "Pinned" })
+      const seeded = yield* seed(chat.id, { finish: "stop" })
+      const bulk = `BULK-${"a".repeat(600)}${"f".repeat(1000)}MIDMARKER-${"q".repeat(50)}${"z".repeat(400)}`
+      yield* sessions.updatePart({
+        id: PartID.ascending(),
+        messageID: seeded.assistant.id,
+        sessionID: chat.id,
+        type: "tool",
+        callID: "call-ledger-failure",
+        tool: "bash",
+        state: {
+          status: "completed",
+          input: {},
+          output: bulk,
+          title: "done",
+          metadata: {},
+          time: { start: 1, end: 2 },
+        },
+      })
+      // Warm ledger: the seeded user+assistant prefix is provider-confirmed,
+      // so the failing request must be sent with that floor intact.
+      yield* database.db
+        .insert(ProviderCacheMarkTable)
+        .values({
+          provider_id: provider,
+          mark_tokens: 5000,
+          mark_index: 2,
+          prefix_hash: null,
+          last_used_at: Date.now(),
+        })
+        .run()
+
+      // Non-retryable 400: one attempt, the turn ends with an error.
+      yield* llm.error(400, { error: { message: "no_kv_space" } })
+      yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        noReply: true,
+        parts: [{ type: "text", text: "hello" }],
+      })
+      const failed = yield* prompt.loop({ sessionID: chat.id })
+      const toolResult = (hits: { body: unknown }[], index: number) => {
+        const body = hits[index]?.body as
+          | { messages?: Array<{ role: string; tool_call_id?: string; content?: unknown }> }
+          | undefined
+        const message = body?.messages?.find((item) => item.tool_call_id === "call-ledger-failure")
+        const content = message?.content
+        return typeof content === "string" ? content : JSON.stringify(content ?? "")
+      }
+      const hits1 = yield* llm.hits
+
+      expect(yield* llm.calls).toBe(1)
+      if (failed.info.role === "assistant") expect(failed.info.error?.name).toBe("APIError")
+      // Prefix below the confirmed mark stays byte-identical on the failed
+      // send — the ledger floor, not compaction, owns those bytes.
+      expect(toolResult(hits1, 0)).toBe(bulk)
+
+      // Failure ≈ cache death: recordUsage ignores usage-less turns, so the
+      // stale mark has to be collapsed explicitly or the next turn would
+      // replay a full prefix into a dead cache.
+      const row = yield* database.db
+        .select()
+        .from(ProviderCacheMarkTable)
+        .where(eq(ProviderCacheMarkTable.provider_id, provider))
+        .get()
+      expect(row).toMatchObject({ mark_tokens: 0, mark_index: 0, prefix_hash: null })
+      expect(yield* CacheMark.markIndexFor(database.db, provider, [{}, {}])).toBe(0)
+
+      // Next turn: the ledger is collapsed, so the suffix goes out compacted
+      // while the originals stay untouched in SQLite.
+      yield* llm.text("recovered")
+      yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        noReply: true,
+        parts: [{ type: "text", text: "again" }],
+      })
+      const ok = yield* prompt.loop({ sessionID: chat.id })
+      const hits = yield* llm.hits
+
+      expect(ok.info.role).toBe("assistant")
+      if (ok.info.role === "assistant") expect(ok.info.error).toBeUndefined()
+      expect(hits).toHaveLength(2)
+      const second = toolResult(hits, 1)
+      expect(second).toContain("[mem:compacted")
+      expect(second).toContain("call_id=call-ledger-failure")
+      // The marker keeps only a preview; the bulk lives in SQLite only.
+      expect(second).not.toContain("MIDMARKER")
+      expect(second.length).toBeLessThan(bulk.length)
+      const stored = yield* sessions.messages({ sessionID: chat.id })
+      const storedTool = stored
+        .flatMap((message) => message.parts)
+        .find((part) => part.type === "tool" && part.callID === "call-ledger-failure")
+      expect(storedTool?.type === "tool" && storedTool.state.status === "completed" && storedTool.state.output).toBe(
+        bulk,
+      )
+    } finally {
+      restore()
+    }
   }),
 )
 

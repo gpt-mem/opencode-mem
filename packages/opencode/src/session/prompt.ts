@@ -1352,6 +1352,24 @@ const layer = Layer.effect(
               ).pipe(Effect.catchDefect(() => Effect.void))
             }
 
+            // Issue #39 (failure ≈ cache death): recordUsage ignores turns
+            // that never produced usage, so a failed request would leave the
+            // old mark in place and the next turn would replay a stale full
+            // prefix into a cache that is likely dead. Collapse the ledger
+            // instead — the next turn sends the compact projection and the
+            // first confirmed response self-heals the mark (§13). Context
+            // overflow is excluded: the provider rejected the request before
+            // touching the cache, so the confirmed mark still holds.
+            if (
+              cacheMarkOn &&
+              handle.message.error &&
+              !SessionV1.ContextOverflowError.isInstance(handle.message.error)
+            ) {
+              yield* CacheMark.reset(database.db, `${model.providerID}/${model.id}`).pipe(
+                Effect.catchDefect(() => Effect.void),
+              )
+            }
+
             if (structured !== undefined) {
               handle.message.structured = structured
               handle.message.finish = handle.message.finish ?? "stop"
