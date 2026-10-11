@@ -4,6 +4,7 @@ import { SessionMessage } from "@opencode-ai/core/session/message"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { MemoryContext } from "@opencode-ai/core/session/memory-context"
+import { Global } from "@opencode-ai/core/global"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 
 const created = DateTime.makeUnsafe(0)
@@ -937,5 +938,111 @@ describe("MemoryContext debug log", () => {
       delete process.env["OPENCODE_MEMORY_CONTEXT_DEBUG"]
     }
     expect(lines.filter((line) => line.includes("[mem-context]"))).toEqual([])
+  })
+})
+
+describe("evidence refs", () => {
+  const managedNotice = (name: string) =>
+    `...output truncated...\n\nFull output saved to: ${Global.Path.data}/tool-output/${name}\n\npreview output`
+
+  test("managed tool output marker states the managed file", () => {
+    const messages = [
+      user("u1"),
+      assistant("a1", [
+        completedTool({
+          id: "call_evidence_1",
+          name: "bash",
+          content: [{ type: "text", text: managedNotice("tool_test_evidence") }],
+          input: { command: "ls" },
+        }),
+      ]),
+      user("u2"),
+    ]
+    const projected = compactV2(messages, { midTurn: true })
+    const text = toolText(projected[1]!)
+    expect(text).toContain("stored=managed_output_file path=")
+    expect(text).toContain(`path=${Global.Path.data}/tool-output/tool_test_evidence`)
+    expect(text).toContain("retrieve=get_tool_call_details(call_id=\"call_evidence_1\")")
+    expect(text).not.toContain("full text kept in SQLite")
+  })
+
+  test("plain large tool result keeps the full_original wording", () => {
+    const messages = [
+      user("u1"),
+      assistant("a1", [completedTool({ id: "call_evidence_2", name: "bash", content: [{ type: "text", text: big() }] })]),
+      user("u2"),
+    ]
+    const projected = compactV2(messages, { midTurn: true })
+    const text = toolText(projected[1]!)
+    expect(text).toContain("stored=full_original")
+    expect(text).toContain("(full text kept in SQLite history)")
+    expect(text).toContain("retrieve=get_tool_call_details")
+  })
+
+  test("does not compact when the pointer is outside the managed directory", () => {
+    const messages = [
+      user("u1"),
+      assistant("a1", [
+        completedTool({
+          id: "call_evidence_3",
+          name: "bash",
+          content: [
+            { type: "text", text: "...output truncated...\n\nFull output saved to: /tmp/evil-output\n\npreview output" },
+          ],
+          input: { command: "ls" },
+        }),
+      ]),
+      user("u2"),
+    ]
+    const projected = compactV2(messages, { midTurn: true })
+    expect(projected[1]).toEqual(messages[1])
+  })
+
+  test("does not compact a V2 tool result with an empty call id", () => {
+    const messages = [
+      user("u1"),
+      assistant("a1", [completedTool({ id: "", name: "bash", content: [{ type: "text", text: big() }] })]),
+      user("u2"),
+    ]
+    const projected = compactV2(messages, { midTurn: true })
+    expect(projected[1]).toEqual(messages[1])
+  })
+
+  test("does not compact a V1 tool part with an empty call id", () => {
+    const messages: SessionV1.WithParts[] = [
+      v1user("u1"),
+      v1assistant("a1", [v1tool({ id: "", tool: "bash", output: big() })]),
+      v1user("u2"),
+    ]
+    const projected = compactV1(messages, { midTurn: true })
+    expect(projected[1]).toEqual(messages[1])
+  })
+
+  test("does not compact a V1 tool part when the pointer is outside the managed directory", () => {
+    const messages: SessionV1.WithParts[] = [
+      v1user("u1"),
+      v1assistant("a1", [v1tool({ id: "call_evidence_4", tool: "bash", output: "Full output saved to: /tmp/evil-output\n\npreview" })]),
+      v1user("u2"),
+    ]
+    const projected = compactV1(messages, { midTurn: true })
+    expect(projected[1]).toEqual(messages[1])
+  })
+
+  test("shell output with a notice inside the managed directory", () => {
+    const shell = SessionMessage.Shell.make({
+      id: id("sh_evidence"),
+      type: "shell",
+      callID: "call_sh_evidence",
+      command: "npm run build",
+      output: managedNotice("tool_shell_evidence"),
+      time: { created },
+    })
+    const projected = compactV2([shell], { midTurn: true })
+    const message = projected[0]!
+    if (message.type !== "shell") throw new Error("expected shell")
+    expect(message.output).toContain("stored=managed_output_file")
+    expect(message.output).toContain(`path=${Global.Path.data}/tool-output/tool_shell_evidence`)
+    expect(message.output).toContain("retrieve=get_tool_call_details")
+    expect(message.output).not.toContain("full output kept in SQLite")
   })
 })
