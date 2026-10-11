@@ -1328,6 +1328,9 @@ const layer = Layer.effect(
             // Issue #29: confirm the cache mark post-factum from the response
             // usage. Aborted/error turns carry no usage and recordUsage
             // ignores them — a missing response never clobbers the mark.
+            // sentCount is the verbatim prefix of what we actually sent: only
+            // raw-original bytes may be floored next time. Compacted messages
+            // were cached as marker bytes and must stay compacted.
             if (cacheMarkOn) {
               const tokens = handle.message.tokens
               yield* CacheMark.recordUsage(
@@ -1338,7 +1341,7 @@ const layer = Layer.effect(
                   output: tokens.output,
                   cacheRead: tokens.cache.read,
                   cacheWrite: tokens.cache.write,
-                  sentCount: projectedMsgs.length,
+                  sentCount: CacheMark.verbatimPrefixLength(projectedMsgs, msgs),
                 },
                 msgs,
               ).pipe(Effect.catchDefect(() => Effect.void))
