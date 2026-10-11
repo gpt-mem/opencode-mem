@@ -116,6 +116,9 @@ export const Flag = {
   get OPENCODE_MEMORY_INTENT_SWITCH_THRESHOLD() {
     return process.env["OPENCODE_MEMORY_INTENT_SWITCH_THRESHOLD"]
   },
+  get OPENCODE_MEMORY_INTENT_SWITCH_RECENT_THRESHOLD() {
+    return process.env["OPENCODE_MEMORY_INTENT_SWITCH_RECENT_THRESHOLD"]
+  },
   // Cache-breaking (issue #25 B3): compact the closed intent's context at a
   // confirmed switch. Off by default — on cache-priced providers any history
   // rewrite invalidates the prompt prefix, so this is opt-in until the S1-S4
