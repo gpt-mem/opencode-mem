@@ -825,6 +825,114 @@ it.instance("failed provider request collapses the cache-mark ledger (issue #39)
   }),
 )
 
+it.instance("ladder total failure auto-continues and recovers (issue #39)", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig((url) => ({
+      ...providerCfg(url),
+      experimental: { ladder_retry_delay: 0 },
+    }))
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const chat = yield* sessions.create({ title: "Pinned" })
+
+    // 400 + ladder wording: SessionRetry leaves it alone (non-retryable,
+    // no5xx, message patterns don't match), so the loop-level auto-continue
+    // owns recovery.
+    yield* llm.error(400, { error: { message: "every rung failed" } })
+    yield* llm.text("recovered")
+    yield* prompt.prompt({
+      sessionID: chat.id,
+      agent: "build",
+      noReply: true,
+      parts: [{ type: "text", text: "hello" }],
+    })
+    const result = yield* prompt.loop({ sessionID: chat.id })
+    const messages = yield* sessions.messages({ sessionID: chat.id })
+
+    expect(yield* llm.calls).toBe(2)
+    expect(result.info.role).toBe("assistant")
+    if (result.info.role === "assistant") {
+      expect(result.info.error).toBeUndefined()
+      expect(result.info.finish).toBe("stop")
+    }
+    // The failed attempt is kept in history — nothing is hidden.
+    const failed = messages.filter((m) => m.info.role === "assistant" && m.info.error?.name === "APIError")
+    expect(failed.length).toBe(1)
+    // The retry is driven by a durable synthetic user message.
+    const autos = messages.filter(
+      (m) =>
+        m.info.role === "user" && m.parts.some((p) => p.type === "text" && p.metadata?.ladder_auto_continue === true),
+    )
+    expect(autos.length).toBe(1)
+    const finalText = result.parts.find((p) => p.type === "text")
+    expect(finalText?.type === "text" && finalText.text).toBe("recovered")
+  }),
+)
+
+it.instance("ladder auto-continue exhausts its budget and ends with an explicit error (issue #39)", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig((url) => ({
+      ...providerCfg(url),
+      experimental: { ladder_retry_delay: 0 },
+    }))
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const chat = yield* sessions.create({ title: "Pinned" })
+
+    // Every attempt fails: 1 initial request + 5 auto-continues = 6 calls.
+    for (let i = 0; i < 6; i++) yield* llm.error(400, { error: { message: "every rung failed" } })
+    yield* prompt.prompt({
+      sessionID: chat.id,
+      agent: "build",
+      noReply: true,
+      parts: [{ type: "text", text: "hello" }],
+    })
+    const result = yield* prompt.loop({ sessionID: chat.id })
+    const messages = yield* sessions.messages({ sessionID: chat.id })
+
+    expect(yield* llm.calls).toBe(6)
+    expect(result.info.role).toBe("assistant")
+    if (result.info.role === "assistant") expect(result.info.error?.name).toBe("APIError")
+    const autos = messages.filter(
+      (m) =>
+        m.info.role === "user" && m.parts.some((p) => p.type === "text" && p.metadata?.ladder_auto_continue === true),
+    )
+    expect(autos.length).toBe(5)
+  }),
+)
+
+it.instance("ladder_retry=false ends the session on total ladder failure (issue #39)", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig((url) => ({
+      ...providerCfg(url),
+      experimental: { ladder_retry: false },
+    }))
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const chat = yield* sessions.create({ title: "Pinned" })
+
+    yield* llm.error(400, { error: { message: "every rung failed" } })
+    yield* llm.text("must not be consumed")
+    yield* prompt.prompt({
+      sessionID: chat.id,
+      agent: "build",
+      noReply: true,
+      parts: [{ type: "text", text: "hello" }],
+    })
+    const result = yield* prompt.loop({ sessionID: chat.id })
+    const messages = yield* sessions.messages({ sessionID: chat.id })
+
+    expect(yield* llm.calls).toBe(1)
+    expect(result.info.role).toBe("assistant")
+    if (result.info.role === "assistant") expect(result.info.error?.name).toBe("APIError")
+    const autos = messages.filter(
+      (m) =>
+        m.info.role === "user" && m.parts.some((p) => p.type === "text" && p.metadata?.ladder_auto_continue === true),
+    )
+    expect(autos.length).toBe(0)
+  }),
+)
+
 noLLMServer.instance.skip(
   "prompt emits v2 prompted and synthetic events (v2 projector disabled)",
   () =>

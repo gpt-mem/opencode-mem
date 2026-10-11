@@ -182,6 +182,13 @@ export const Info = Schema.Struct({
       mcp_timeout: Schema.optional(PositiveInt).annotate({
         description: "Timeout in milliseconds for model context protocol (MCP) requests",
       }),
+      ladder_retry: Schema.optional(Schema.Boolean).annotate({
+        description:
+          'Re-prompt the same user turn after a provider ladder total failure ("every rung failed") with a longer backoff, instead of ending the session',
+      }),
+      ladder_retry_delay: Schema.optional(NonNegativeInt).annotate({
+        description: "Override ladder retry backoff in milliseconds (tests and debugging)",
+      }),
       policies: Schema.optional(Schema.mutable(Schema.Array(ConfigExperimental.Policy))).annotate({
         description: "Policy statements applied to supported resources, such as provider access",
       }),
