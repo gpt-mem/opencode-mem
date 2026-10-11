@@ -46,7 +46,7 @@ import { Truncate } from "@/tool/truncate"
 import { Image } from "@/image/image"
 import { decodeDataUrl } from "@/util/data-url"
 import { Process } from "@/util/process"
-import { Cause, Effect, Exit, Latch, Layer, Option, Scope, Context, Schema, Types } from "effect"
+import { Cause, Duration, Effect, Exit, Latch, Layer, Option, Scope, Context, Schema, Types } from "effect"
 import { InstanceState } from "@/effect/instance-state"
 import { TaskTool, type TaskPromptOps } from "@/tool/task"
 import { SessionRunState } from "./run-state"
@@ -84,6 +84,23 @@ IMPORTANT:
 - This tool provides your final answer - no further actions are taken after calling it`
 
 const STRUCTURED_OUTPUT_SYSTEM_PROMPT = `IMPORTANT: The user has requested structured output. You MUST use the StructuredOutput tool to provide your final response. Do NOT respond with plain text - you MUST call the StructuredOutput tool with your answer formatted according to the schema.`
+
+// Issue #39: the provider ladder gateway reports total failure when every
+// rung in its model ladder is down (typically HTTP 502; wording varies
+// across gateway versions, so match both spellings).
+const LADDER_ERROR_PATTERN = /every rung failed|ladder_error/i
+// SessionRetry already spent its fast in-request retries (2s→30s backoff)
+// against a failing gateway; burning more immediate attempts only delays
+// the inevitable. Re-prompt the same user turn after a longer backoff
+// instead, capped per real user message and counted durably via synthetic
+// continue messages so a resumed session picks up the remaining budget.
+const LADDER_AUTO_CONTINUE_LIMIT = 5
+const LADDER_BACKOFF_MS = [30_000, 60_000, 120_000]
+
+function ladderBackoffMs(attempt: number, override?: number) {
+  if (override !== undefined && Number.isFinite(override) && override >= 0) return override
+  return LADDER_BACKOFF_MS[Math.min(attempt, LADDER_BACKOFF_MS.length - 1)]
+}
 
 function mcpResourceBase64Size(value: string) {
   const trimmed = value.replace(/\s/g, "")
@@ -1062,9 +1079,9 @@ const layer = Layer.effect(
       const message = yield* createUserMessage(input)
       yield* sessions.touch(input.sessionID)
       // Log-only intent signal (issue #25): never fails or delays the prompt.
-      yield* intentTracker.track({ sessionID: input.sessionID, parts: message.parts, messageID: message.info.id }).pipe(
-        Effect.catch(() => Effect.void),
-      )
+      yield* intentTracker
+        .track({ sessionID: input.sessionID, parts: message.parts, messageID: message.info.id })
+        .pipe(Effect.catch(() => Effect.void))
 
       const permissions: PermissionV1.Rule[] = []
       for (const [t, enabled] of Object.entries(input.tools ?? {})) {
@@ -1266,9 +1283,9 @@ const layer = Layer.effect(
             // Issue #25 B3 (cache-breaking, flag off by default): the user
             // message that opened the active intent via a confirmed switch is
             // the compaction boundary for the closed intent's segment.
-            const intentSwitch = yield* intentTracker.activeSwitchMessage({ sessionID }).pipe(
-              Effect.catch(() => Effect.succeed(undefined)),
-            )
+            const intentSwitch = yield* intentTracker
+              .activeSwitchMessage({ sessionID })
+              .pipe(Effect.catch(() => Effect.succeed(undefined)))
 
             // Issue #29 (cache-mark ledger): when enabled, the projection
             // floor is the provider-confirmed cache boundary from the ledger.
@@ -1398,6 +1415,62 @@ const layer = Layer.effect(
                 }).toObject()
                 yield* sessions.updateMessage(handle.message)
                 return "break" as const
+              }
+            }
+
+            // Issue #39 (all rungs failed): the provider ladder gateway is
+            // down and SessionRetry's fast in-request retries are spent.
+            // Re-prompt the same user turn after a longer backoff instead of
+            // ending the session; on exhaustion the loop breaks with the
+            // error attached — an explicit failure, not silence. Attempts
+            // are counted from durable synthetic continue messages, so a
+            // resumed session finishes the budget instead of restarting it.
+            if (
+              result === "stop" &&
+              handle.message.error &&
+              SessionV1.APIError.isInstance(handle.message.error) &&
+              LADDER_ERROR_PATTERN.test(handle.message.error.data.message)
+            ) {
+              const cfg = yield* config.get()
+              if (cfg.experimental?.ladder_retry !== false) {
+                const isLadderAuto = (m: (typeof msgs)[number]) =>
+                  m.info.role === "user" &&
+                  m.parts.some((p) => p.type === "text" && p.metadata?.ladder_auto_continue === true)
+                const lastRealUser = msgs.findLastIndex((m) => m.info.role === "user" && !isLadderAuto(m))
+                const attempts = msgs.slice(lastRealUser + 1).filter(isLadderAuto).length
+                if (attempts < LADDER_AUTO_CONTINUE_LIMIT) {
+                  const backoffMs = ladderBackoffMs(attempts, cfg.experimental?.ladder_retry_delay)
+                  yield* Effect.logWarning("ladder error, auto-continue with backoff", {
+                    "session.id": sessionID,
+                    attempt: attempts + 1,
+                    backoffMs,
+                    message: handle.message.error.data.message,
+                  })
+                  yield* Effect.sleep(Duration.millis(backoffMs))
+                  const continueMsg = yield* sessions.updateMessage({
+                    id: MessageID.ascending(),
+                    role: "user",
+                    sessionID,
+                    time: { created: Date.now() },
+                    agent: lastUser.agent,
+                    model: lastUser.model,
+                  })
+                  yield* sessions.updatePart({
+                    id: PartID.ascending(),
+                    messageID: continueMsg.id,
+                    sessionID,
+                    type: "text" as const,
+                    text: "The model provider ladder is exhausted. Please retry.",
+                    synthetic: true,
+                    metadata: { ladder_auto_continue: true },
+                    time: { start: Date.now(), end: Date.now() },
+                  })
+                  return "continue" as const
+                }
+                yield* Effect.logError("ladder error: max auto-continue attempts reached", {
+                  "session.id": sessionID,
+                  attempts,
+                })
               }
             }
 
