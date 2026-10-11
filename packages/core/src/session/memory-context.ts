@@ -2,6 +2,7 @@ export * as MemoryContext from "./memory-context"
 
 import { Flag } from "../flag/flag"
 import { PII } from "./pii"
+import { MemDebugLog } from "./mem-debug-log"
 import { SessionMessage } from "./message"
 import { SessionV1 } from "../v1/session"
 
@@ -260,7 +261,8 @@ export const project = (
   })
 
   if (compacted > 0 && Flag.OPENCODE_MEMORY_CONTEXT_DEBUG)
-    console.log(
+    MemDebugLog.write(
+      "memory-context.log",
       `[mem-context] session=${options.sessionID ?? "?"} compacted=${compacted} first_delivery=${firstDelivery} protected_from=${protectedFrom} intent_cut=${cutIndex >= 0} mark=${markFloor}`,
     )
   return projected
@@ -343,7 +345,8 @@ export const projectV1 = (
   })
 
   if (compacted > 0 && Flag.OPENCODE_MEMORY_CONTEXT_DEBUG)
-    console.log(
+    MemDebugLog.write(
+      "memory-context.log",
       `[mem-context] session=${options.sessionID ?? "?"} compacted=${compacted} first_delivery=${firstDelivery} protected_from=${protectedFrom} intent_cut=${cutIndex >= 0} mark=${markFloor}`,
     )
   return projected

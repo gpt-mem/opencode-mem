@@ -912,3 +912,30 @@ describe("MemoryContext intent cut", () => {
     expect(toolText(cut[5]!)).toBe(big())
   })
 })
+
+describe("MemoryContext debug log", () => {
+  test("debug stats never leak to stdout", () => {
+    const original = console.log
+    const lines: string[] = []
+    console.log = (...args: unknown[]) => {
+      lines.push(args.map(String).join(" "))
+    }
+    process.env["OPENCODE_MEMORY_CONTEXT_DEBUG"] = "1"
+    try {
+      const messages = [
+        user("u1"),
+        assistant("a1", [completedTool({ id: "call_1", name: "bash", content: [{ type: "text", text: big() }] })]),
+        user("u2"),
+        assistant("a2", [completedTool({ id: "call_2", name: "bash", content: [{ type: "text", text: big() }] })]),
+        user("u3"),
+        assistant("a3", [completedTool({ id: "call_3", name: "bash", content: [{ type: "text", text: big() }] })]),
+      ]
+      const projected = compact(messages)
+      expect(toolText(projected[1]!)).toContain("[mem:compacted tool result]")
+    } finally {
+      console.log = original
+      delete process.env["OPENCODE_MEMORY_CONTEXT_DEBUG"]
+    }
+    expect(lines.filter((line) => line.includes("[mem-context]"))).toEqual([])
+  })
+})

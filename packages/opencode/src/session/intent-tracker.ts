@@ -5,6 +5,7 @@ import { ulid } from "ulid"
 import { Database } from "@opencode-ai/core/database/database"
 import { IntentTable, IntentSignalTable } from "@opencode-ai/core/session/sql"
 import { Flag } from "@opencode-ai/core/flag/flag"
+import { MemDebugLog } from "@opencode-ai/core/session/mem-debug-log"
 import { PII } from "@opencode-ai/core/session/pii"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { SessionID } from "./schema"
@@ -276,15 +277,18 @@ const layer = Layer.effect(
             .run()
             .pipe(Effect.orDie)
           if (Flag.OPENCODE_MEMORY_INTENT_DEBUG)
-            console.log("[intent-tracker]", {
-              session: input.sessionID,
-              turn: turnIndex,
-              cosine: score.toFixed(3),
-              recent: recentScore.toFixed(3),
-              marker,
-              switched: true,
-              closed: active.id,
-            })
+            MemDebugLog.write(
+              "intent-tracker.log",
+              `[intent-tracker] ${JSON.stringify({
+                session: input.sessionID,
+                turn: turnIndex,
+                cosine: score.toFixed(3),
+                recent: recentScore.toFixed(3),
+                marker,
+                switched: true,
+                closed: active.id,
+              })}`,
+            )
           return
         }
       }
@@ -316,15 +320,18 @@ const layer = Layer.effect(
         .pipe(Effect.orDie)
 
       if (Flag.OPENCODE_MEMORY_INTENT_DEBUG)
-        console.log("[intent-tracker]", {
-          session: input.sessionID,
-          turn: turnIndex,
-          cosine: score.toFixed(3),
-          recent: recentScore.toFixed(3),
-          marker,
-          intent: active.id,
-          refreshed,
-        })
+        MemDebugLog.write(
+          "intent-tracker.log",
+          `[intent-tracker] ${JSON.stringify({
+            session: input.sessionID,
+            turn: turnIndex,
+            cosine: score.toFixed(3),
+            recent: recentScore.toFixed(3),
+            marker,
+            intent: active.id,
+            refreshed,
+          })}`,
+        )
     })
 
     const activeSwitchMessage = Effect.fn("IntentTracker.activeSwitchMessage")(function* (input: {
