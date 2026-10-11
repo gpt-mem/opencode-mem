@@ -42,11 +42,13 @@ import { Config } from "@opencode-ai/core/config"
 import { ConfigCompaction } from "@opencode-ai/core/config/compaction"
 import { Tool } from "@opencode-ai/core/tool/tool"
 import {
+  ProviderCacheMarkTable,
   SessionContextEpochTable,
   SessionInputTable,
   SessionMessageTable,
   SessionTable,
 } from "@opencode-ai/core/session/sql"
+import { CacheMark } from "@opencode-ai/core/session/cache-mark"
 import { SessionStore } from "@opencode-ai/core/session/store"
 import { SystemContext } from "@opencode-ai/core/system-context"
 import { SystemContextRegistry } from "@opencode-ai/core/system-context/registry"
@@ -3413,6 +3415,43 @@ describe("SessionRunnerLLM", () => {
       verifyPartialFlushOnInterruption(kind),
     )
   }
+
+  it.effect("collapses the cache-mark ledger when the provider request fails (issue #39)", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const prevContext = process.env["OPENCODE_MEMORY_CONTEXT"]
+      const prevCacheMark = process.env["OPENCODE_MEMORY_CACHE_MARK"]
+      process.env["OPENCODE_MEMORY_CONTEXT"] = "1"
+      process.env["OPENCODE_MEMORY_CACHE_MARK"] = "1"
+      const { db } = yield* Database.Service
+      yield* db
+        .insert(ProviderCacheMarkTable)
+        .values({
+          provider_id: "fake/fake-model",
+          mark_tokens: 5000,
+          mark_index: 1,
+          prefix_hash: null,
+          last_used_at: Date.now(),
+        })
+        .run()
+      const session = yield* SessionV2.Service
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "ledger failure probe" }), resume: false })
+      responseStream = Stream.fail(providerUnavailable())
+      const exit = yield* session.resume(sessionID).pipe(Effect.exit)
+      if (prevContext === undefined) delete process.env["OPENCODE_MEMORY_CONTEXT"]
+      else process.env["OPENCODE_MEMORY_CONTEXT"] = prevContext
+      if (prevCacheMark === undefined) delete process.env["OPENCODE_MEMORY_CACHE_MARK"]
+      else process.env["OPENCODE_MEMORY_CACHE_MARK"] = prevCacheMark
+      expect(exit._tag).toBe("Failure")
+      const mark = yield* db
+        .select()
+        .from(ProviderCacheMarkTable)
+        .where(eq(ProviderCacheMarkTable.provider_id, "fake/fake-model"))
+        .get()
+      expect(mark).toMatchObject({ mark_tokens: 0, mark_index: 0, prefix_hash: null })
+      expect(yield* CacheMark.markIndexFor(db, "fake/fake-model", [{}, {}])).toBe(0)
+    }),
+  )
 
   it.effect("rejects duplicate streamed text starts", () =>
     Effect.gen(function* () {

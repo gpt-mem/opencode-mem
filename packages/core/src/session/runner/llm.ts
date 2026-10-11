@@ -313,6 +313,18 @@ const layer = Layer.effect(
           )
             return yield* Effect.die(continueAfterOverflowCompaction(currentStep))
           if (overflowFailure) yield* publish(overflowFailure)
+          // Issue #39 (ledger hook): a failed, timed-out or aborted attempt
+          // leaves the provider cache unverifiable — collapse the mark so the
+          // next attempt sends the compact projection instead of
+          // resuscitating a full verbatim prefix into a cold cache. The next
+          // confirmed response self-heals it from usage (ARCHITECTURE §13).
+          // Context overflow is excluded: the provider rejected the request
+          // before touching the cache, so the confirmed mark still holds.
+          const attemptFailed =
+            (stream._tag === "Failure" && !isContextOverflowFailure(failure)) ||
+            (publisher.hasProviderError() && !isContextOverflowFailure(overflowFailure ?? failure))
+          if (cacheMarkOn && attemptFailed)
+            yield* CacheMark.reset(db, cacheMarkKey).pipe(Effect.catchDefect(() => Effect.void))
           const llmFailure = failure instanceof LLMError ? failure : undefined
           if (llmFailure && !publisher.hasProviderError()) {
             yield* withPublication(publisher.failUnsettledTools("Provider did not return a tool result", true))
