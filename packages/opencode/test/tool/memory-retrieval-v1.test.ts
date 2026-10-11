@@ -1,4 +1,6 @@
 import { afterEach, describe, expect } from "bun:test"
+import { mkdir, rm, writeFile } from "fs/promises"
+import { Global } from "@opencode-ai/core/global"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { Database } from "@opencode-ai/core/database/database"
 import { PartTable, MessageTable, SessionTable } from "@opencode-ai/core/session/sql"
@@ -30,10 +32,11 @@ const toolPart = (args: {
   output?: string
   error?: string
   input?: Record<string, unknown>
+  sessionID?: typeof sessionID
 }) => ({
   id: PartID.make(`prt_${args.id}`),
   message_id: MessageID.make(`msg_${args.id}`),
-  session_id: sessionID,
+  session_id: args.sessionID ?? sessionID,
   time_created: 0,
   data: {
     type: "tool" as const,
@@ -118,6 +121,66 @@ const seedMemoryParts = Effect.gen(function* () {
     .values([
       toolPart({ id: "call_find", tool: "find_tool_calls", output: "[]", input: { query: "secret-pattern" } }),
       toolPart({ id: "call_overview", tool: "get_tool_call_overview", output: "{}", input: {} }),
+    ])
+    .run()
+    .pipe(Effect.orDie)
+})
+
+// Evidence-ref fixtures live in their own session: find/overview assertions
+// count the shared session, so these parts must not land there.
+const evidenceSessionID = SessionID.make("ses_v1_evidence_test")
+
+const seedEvidence = Effect.gen(function* () {
+  const { db } = yield* Database.Service
+  yield* db
+    .insert(ProjectTable)
+    .values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] })
+    .onConflictDoNothing()
+    .run()
+    .pipe(Effect.orDie)
+  yield* db
+    .insert(SessionTable)
+    .values({
+      id: evidenceSessionID,
+      project_id: Project.ID.global,
+      slug: "v1-evidence",
+      directory: AbsolutePath.make("/project"),
+      title: "test",
+      version: "0.0.0",
+    })
+    .onConflictDoNothing()
+    .run()
+    .pipe(Effect.orDie)
+  yield* db
+    .insert(MessageTable)
+    .values(
+      ["call_managed", "call_missing_file"].map((id) => ({
+        id: MessageID.make(`msg_${id}`),
+        session_id: evidenceSessionID,
+        time_created: 0,
+        data: { role: "assistant" as const, agent: "build", time: { created: 0 } },
+      })),
+    )
+    .onConflictDoNothing()
+    .run()
+    .pipe(Effect.orDie)
+  yield* db
+    .insert(PartTable)
+    .values([
+      toolPart({
+        id: "call_managed",
+        tool: "bash",
+        output: `...output truncated...\n\nFull output saved to: ${Global.Path.data}/tool-output/tool_v1_test_managed\n\npreview`,
+        input: { command: "cat bigfile" },
+        sessionID: evidenceSessionID,
+      }),
+      toolPart({
+        id: "call_missing_file",
+        tool: "bash",
+        output: `...output truncated...\n\nFull output saved to: ${Global.Path.data}/tool-output/tool_v1_test_missing\n\npreview`,
+        input: { command: "cat missing" },
+        sessionID: evidenceSessionID,
+      }),
     ])
     .run()
     .pipe(Effect.orDie)
@@ -208,7 +271,63 @@ describe("tool.get-tool-call-details (V1)", () => {
       yield* seed
       const def = yield* Tool.init(yield* GetToolCallDetailsTool)
       const result = yield* def.execute({ call_id: "call_missing" }, ctx(sessionID))
-      expect(JSON.parse(result.output)).toEqual({ found: false, call_id: "call_missing" })
+      expect(JSON.parse(result.output)).toEqual({ found: false, call_id: "call_missing", source: "unavailable" })
+    }),
+  )
+
+  it.instance("reads the full output from the managed tool-output file", () =>
+    Effect.gen(function* () {
+      yield* seedEvidence
+      const file = `${Global.Path.data}/tool-output/tool_v1_test_managed`
+      const content = "Y".repeat(20000)
+      yield* Effect.promise(() => mkdir(`${Global.Path.data}/tool-output`, { recursive: true }))
+      yield* Effect.promise(() => writeFile(file, content))
+      try {
+        const def = yield* Tool.init(yield* GetToolCallDetailsTool)
+        const result = yield* def.execute({ call_id: "call_managed" }, ctx(evidenceSessionID))
+        const parsed = JSON.parse(result.output)
+        expect(parsed.source).toBe("managed_output_file")
+        expect(parsed.total_chars).toBe(content.length)
+        expect(parsed.managed_path).toBe(file)
+        expect(parsed.output).toBe(content.slice(0, 8000))
+        expect(parsed.truncated).toBe(true)
+        const paged = JSON.parse(
+          (yield* def.execute({ call_id: "call_managed", max_chars: 8000, offset: 19900 }, ctx(evidenceSessionID)))
+            .output,
+        )
+        expect(paged.output).toBe("Y".repeat(100))
+        expect(paged.truncated).toBe(false)
+        expect(paged.total_chars).toBe(content.length)
+      } finally {
+        yield* Effect.promise(() => rm(file, { force: true }))
+      }
+    }),
+  )
+
+  it.instance("degrades to bounded_stored_output when the managed file is missing", () =>
+    Effect.gen(function* () {
+      yield* seedEvidence
+      const file = `${Global.Path.data}/tool-output/tool_v1_test_missing`
+      yield* Effect.promise(() => rm(file, { force: true }))
+      const def = yield* Tool.init(yield* GetToolCallDetailsTool)
+      const result = yield* def.execute({ call_id: "call_missing_file" }, ctx(evidenceSessionID))
+      const parsed = JSON.parse(result.output)
+      expect(parsed.source).toBe("bounded_stored_output")
+      expect(String(parsed.note)).toContain("no longer available")
+      expect(parsed.managed_path).toBe(file)
+      expect(parsed.output).toContain("preview")
+      expect(parsed.truncated).toBe(false)
+    }),
+  )
+
+  it.instance("returns source=unavailable for unknown call_id", () =>
+    Effect.gen(function* () {
+      yield* seed
+      const def = yield* Tool.init(yield* GetToolCallDetailsTool)
+      const result = yield* def.execute({ call_id: "call_missing" }, ctx(sessionID))
+      const parsed = JSON.parse(result.output)
+      expect(parsed.found).toBe(false)
+      expect(parsed.source).toBe("unavailable")
     }),
   )
 
