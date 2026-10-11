@@ -72,18 +72,34 @@ describe("CacheMark.prefixHash", () => {
   })
 })
 
+describe("CacheMark.verbatimPrefixLength", () => {
+  test("counts the leading run of identical references", () => {
+    const a = { id: 1 }
+    const b = { id: 2 }
+    const c = { id: 3 }
+    expect(CacheMark.verbatimPrefixLength([a, b, c], [a, b, c])).toBe(3)
+    expect(CacheMark.verbatimPrefixLength([a, { id: 2 }, c], [a, b, c])).toBe(1)
+    expect(CacheMark.verbatimPrefixLength([{ id: 0 }, b], [a, b])).toBe(0)
+  })
+
+  test("is bounded by the shorter of the two lists", () => {
+    const a = { id: 1 }
+    expect(CacheMark.verbatimPrefixLength([a], [a, a, a])).toBe(1)
+  })
+})
+
 describe("CacheMark ledger", () => {
   const provider = "prov/model-a"
 
   const row = (db: Effect.Success<typeof migratedDb>, id = provider) =>
     db.select().from(ProviderCacheMarkTable).where(eq(ProviderCacheMarkTable.provider_id, id)).get().pipe(Effect.orDie)
 
-  test("markIndexFor returns undefined without a ledger row (fail-safe)", () =>
+  test("markIndexFor returns 0 without a ledger row (provider confirmed nothing)", () =>
     run(
       Effect.gen(function* () {
         const db = yield* migratedDb
         const mark = yield* CacheMark.markIndexFor(db, provider, ["m0", "m1"])
-        expect(mark).toBeUndefined()
+        expect(mark).toBe(0)
       }),
     ))
 
@@ -289,5 +305,42 @@ describe("MemoryContext markIndex (suffix-only compression)", () => {
     expect(JSON.stringify(projected[0])).toBe(JSON.stringify(messages[0]))
     expect(toolText(projected[1]!)).toContain("[mem:compacted tool result]")
     expect(toolText(projected[2]!)).toContain("[mem:compacted tool result]")
+  })
+
+  // Regression (issue #29 acceptance, fdmark arm): the ledger used to floor
+  // the whole sent request (sentCount = projected length), so compacted
+  // messages fell below the grown mark and were re-sent as raw originals —
+  // mutating the provider's cached marker prefix and re-uploading the full
+  // bulk every turn. The mark must only cover the verbatim prefix.
+  test("mark grown from the verbatim prefix keeps re-compacting the tail (two-step FD)", () => {
+    const step1 = [
+      user("u1"),
+      assistant("a1", [completedTool({ id: "call_1", name: "read", text: big(), input: { path: "f1.txt" } })]),
+    ]
+    const projected1 = MemoryContext.project(step1, { enabled: true, firstDelivery: true, minOutputChars: 100 })
+    const mark1 = CacheMark.verbatimPrefixLength(projected1, step1)
+    expect(mark1).toBe(1)
+    expect(CacheMark.applyUsage(undefined, usage({ sentCount: mark1, cacheRead: 4000 }))).toEqual({
+      tokens: 4000,
+      index: 1,
+    })
+
+    const step2 = [
+      ...step1,
+      assistant("a2", [completedTool({ id: "call_2", name: "read", text: big(), input: { path: "f2.txt" } })]),
+    ]
+    const projected2 = MemoryContext.project(step2, {
+      enabled: true,
+      firstDelivery: true,
+      minOutputChars: 100,
+      markIndex: 1,
+    })
+    expect(JSON.stringify(projected2[0])).toBe(JSON.stringify(step2[0]))
+    expect(toolText(projected2[1]!)).toContain("[mem:compacted tool result]")
+    expect(toolText(projected2[2]!)).toContain("[mem:compacted tool result]")
+    // The re-compacted tail is byte-identical to step 1's marker, so the
+    // projected prefix stays append-only across steps.
+    expect(JSON.stringify(projected2.slice(0, 2))).toBe(JSON.stringify(projected1))
+    expect(CacheMark.verbatimPrefixLength(projected2, step2)).toBe(1)
   })
 })
