@@ -307,6 +307,32 @@ describe("MemoryContext markIndex (suffix-only compression)", () => {
     expect(toolText(projected[2]!)).toContain("[mem:compacted tool result]")
   })
 
+  // Issue #29 P1: the ledger flag alone selects first-delivery — B0 is the
+  // ledger policy, not a second flag. The projection must be byte-identical
+  // to the explicit firstDelivery:true arm (the acceptance-tested fdmark).
+  test("OPENCODE_MEMORY_CACHE_MARK env implies first-delivery (byte-identical to explicit FD)", () => {
+    process.env["OPENCODE_MEMORY_CACHE_MARK"] = "1"
+    try {
+      const messages = [
+        user("u1"),
+        assistant("a1", [completedTool({ id: "call_1", name: "read", text: big(), input: { path: "f1.txt" } })]),
+        assistant("a2", [completedTool({ id: "call_2", name: "read", text: big(), input: { path: "f2.txt" } })]),
+      ]
+      const implied = MemoryContext.project(messages, { enabled: true, minOutputChars: 100, markIndex: 1 })
+      const explicit = MemoryContext.project(messages, {
+        enabled: true,
+        firstDelivery: true,
+        minOutputChars: 100,
+        markIndex: 1,
+      })
+      expect(JSON.stringify(implied)).toBe(JSON.stringify(explicit))
+      expect(toolText(implied[1]!)).toContain("[mem:compacted tool result]")
+      expect(JSON.stringify(implied[0])).toBe(JSON.stringify(messages[0]))
+    } finally {
+      delete process.env["OPENCODE_MEMORY_CACHE_MARK"]
+    }
+  })
+
   // Regression (issue #29 acceptance, fdmark arm): the ledger used to floor
   // the whole sent request (sentCount = projected length), so compacted
   // messages fell below the grown mark and were re-sent as raw originals —

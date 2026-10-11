@@ -658,6 +658,35 @@ describe("MemoryContext first-delivery", () => {
     expect(JSON.stringify(delivery(messages, { firstDelivery: false, minOutputChars: 100 }))).toBe(JSON.stringify(compact(messages)))
   })
 
+  // Issue #29 P1: the ledger flag implies first-delivery — bare CACHE_MARK in
+  // boundary mode degenerates to no-compaction once the mark covers the
+  // verbatim prefix, so B0 is the ledger policy, not a second flag.
+  test("OPENCODE_MEMORY_CACHE_MARK implies first-delivery without the FD flag", () => {
+    process.env["OPENCODE_MEMORY_CACHE_MARK"] = "1"
+    process.env["OPENCODE_MEMORY_FIRST_DELIVERY_MIN_CHARS"] = "100"
+    try {
+      const messages = [user("u1"), assistant("a1", [completedTool({ id: "call_1", name: "bash", content: [{ type: "text", text: big() }], input: { command: "npm test" } })])]
+      const projected = MemoryContext.project(messages, { enabled: true })
+      expect(toolText(projected[1]!)).toContain("[mem:compacted tool result]")
+    } finally {
+      delete process.env["OPENCODE_MEMORY_CACHE_MARK"]
+      delete process.env["OPENCODE_MEMORY_FIRST_DELIVERY_MIN_CHARS"]
+    }
+  })
+
+  test("explicit firstDelivery:false overrides the ledger policy", () => {
+    process.env["OPENCODE_MEMORY_CACHE_MARK"] = "1"
+    try {
+      // Single user turn: boundary mode keeps everything verbatim, so the
+      // override is observable as byte-identity with the raw history.
+      const messages = [user("u1"), assistant("a1", [completedTool({ id: "call_1", name: "bash", content: [{ type: "text", text: big() }], input: { command: "npm test" } })])]
+      const projected = MemoryContext.project(messages, { enabled: true, firstDelivery: false, minOutputChars: 100 })
+      expect(JSON.stringify(projected)).toBe(JSON.stringify(messages))
+    } finally {
+      delete process.env["OPENCODE_MEMORY_CACHE_MARK"]
+    }
+  })
+
   test("V1 compacts the freshest result that boundary mode protects", () => {
     const messages = [v1user("u1"), v1assistant("a1", [v1tool({ id: "call_1", tool: "bash", output: big(), input: { command: "npm test" } })])]
     expect(v1toolText(compactV1(messages)[1]!)).toBe(big())
@@ -666,6 +695,19 @@ describe("MemoryContext first-delivery", () => {
     )
     expect(marker).toContain("[mem:compacted tool result]")
     expect(marker).toContain("retrieve=get_tool_call_details")
+  })
+
+  test("V1: OPENCODE_MEMORY_CACHE_MARK implies first-delivery", () => {
+    process.env["OPENCODE_MEMORY_CACHE_MARK"] = "1"
+    process.env["OPENCODE_MEMORY_FIRST_DELIVERY_MIN_CHARS"] = "100"
+    try {
+      const messages = [v1user("u1"), v1assistant("a1", [v1tool({ id: "call_1", tool: "bash", output: big(), input: { command: "npm test" } })])]
+      const marker = v1toolText(MemoryContext.projectV1(messages, { enabled: true })[1]!)
+      expect(marker).toContain("[mem:compacted tool result]")
+    } finally {
+      delete process.env["OPENCODE_MEMORY_CACHE_MARK"]
+      delete process.env["OPENCODE_MEMORY_FIRST_DELIVERY_MIN_CHARS"]
+    }
   })
 
   test("V1 projects byte-identical prefix as the turn grows", () => {

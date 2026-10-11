@@ -142,13 +142,23 @@ const shellMarker = (args: ShellArgs) =>
     .filter((line): line is string => line !== undefined)
     .join("\n")
 
+// Issue #29 P1: with the ledger enabled, first-delivery compaction is the
+// policy — the mark floors the confirmed prefix and the fresh tail is
+// compacted on arrival (B0 = ledger-политика). Bare CACHE_MARK in boundary
+// mode degenerates to no-compaction on caching providers because the mark
+// grows to cover the whole verbatim prefix, including the protected window
+// (live e2e on ladder/free). FIRST_DELIVERY alone still selects the mode on
+// ledger-less setups (zero-cache providers, FD-only acceptance runs).
+const firstDeliveryPolicy = (options: Options) =>
+  options.firstDelivery ?? (Flag.OPENCODE_MEMORY_FIRST_DELIVERY || Flag.OPENCODE_MEMORY_CACHE_MARK)
+
 export const project = (
   messages: readonly SessionMessage.Message[],
   options: Options = {},
 ): readonly SessionMessage.Message[] => {
   const enabled = options.enabled ?? Flag.OPENCODE_MEMORY_CONTEXT
   if (!enabled) return messages
-  const firstDelivery = options.firstDelivery ?? Flag.OPENCODE_MEMORY_FIRST_DELIVERY
+  const firstDelivery = firstDeliveryPolicy(options)
   const minChars = firstDelivery
     ? resolveFirstDeliveryMinChars(options)
     : (options.minOutputChars ?? DEFAULT_MIN_OUTPUT_CHARS)
@@ -265,7 +275,7 @@ export const projectV1 = (
 ): readonly SessionV1.WithParts[] => {
   const enabled = options.enabled ?? Flag.OPENCODE_MEMORY_CONTEXT
   if (!enabled) return messages
-  const firstDelivery = options.firstDelivery ?? Flag.OPENCODE_MEMORY_FIRST_DELIVERY
+  const firstDelivery = firstDeliveryPolicy(options)
   const minChars = firstDelivery
     ? resolveFirstDeliveryMinChars(options)
     : (options.minOutputChars ?? DEFAULT_MIN_OUTPUT_CHARS)
