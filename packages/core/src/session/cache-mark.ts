@@ -137,3 +137,31 @@ export const recordUsage = Effect.fn("CacheMark.recordUsage")(function* (
     .run()
     .pipe(Effect.orDie)
 })
+
+// Issue #39 (failure ≈ cache death): a request that failed, timed out or was
+// aborted leaves the provider cache unverifiable — TTL outlived the stall,
+// the rung went down, routing moved. Collapse the mark to zero
+// (pending-verification) so the next attempt sends the compact projection
+// instead of resuscitating a full verbatim prefix into a cold cache. The next
+// confirmed response self-heals the mark through applyUsage (ARCHITECTURE §13).
+export const reset = Effect.fn("CacheMark.reset")(function* (
+  db: DatabaseService,
+  providerID: string,
+) {
+  const now = Date.now()
+  yield* db
+    .insert(ProviderCacheMarkTable)
+    .values({
+      provider_id: providerID,
+      mark_tokens: 0,
+      mark_index: 0,
+      prefix_hash: null,
+      last_used_at: now,
+    })
+    .onConflictDoUpdate({
+      target: ProviderCacheMarkTable.provider_id,
+      set: { mark_tokens: 0, mark_index: 0, prefix_hash: null, last_used_at: now },
+    })
+    .run()
+    .pipe(Effect.orDie)
+})

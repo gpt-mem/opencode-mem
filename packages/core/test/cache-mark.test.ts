@@ -214,6 +214,45 @@ describe("CacheMark ledger", () => {
         expect(yield* row(db, "prov/model-b")).toMatchObject({ mark_tokens: 0, mark_index: 0 })
       }),
     ))
+
+  test("failure reset collapses a confirmed mark to zero (issue #39)", () =>
+    run(
+      Effect.gen(function* () {
+        const db = yield* migratedDb
+        yield* CacheMark.recordUsage(db, provider, usage({ sentCount: 3, cacheRead: 900, cacheWrite: 300 }), [
+          "m0",
+          "m1",
+          "m2",
+        ])
+        expect(yield* row(db)).toMatchObject({ mark_tokens: 1200, mark_index: 3 })
+        yield* CacheMark.reset(db, provider)
+        expect(yield* row(db)).toMatchObject({ mark_tokens: 0, mark_index: 0, prefix_hash: null })
+        expect(yield* CacheMark.markIndexFor(db, provider, ["m0", "m1", "m2"])).toBe(0)
+      }),
+    ))
+
+  test("self-heal: the next confirmed response restores the mark after a failure reset (issue #39)", () =>
+    run(
+      Effect.gen(function* () {
+        const db = yield* migratedDb
+        yield* CacheMark.recordUsage(db, provider, usage({ sentCount: 3, cacheRead: 900, cacheWrite: 300 }), [
+          "m0",
+          "m1",
+          "m2",
+        ])
+        yield* CacheMark.reset(db, provider)
+        yield* CacheMark.recordUsage(db, provider, usage({ sentCount: 6, cacheRead: 0, cacheWrite: 5000 }), [
+          "m0",
+          "m1",
+          "m2",
+          "m3",
+          "m4",
+          "m5",
+        ])
+        expect(yield* row(db)).toMatchObject({ mark_tokens: 5000, mark_index: 6 })
+        expect(yield* CacheMark.markIndexFor(db, provider, ["m0", "m1", "m2", "m3", "m4", "m5"])).toBe(6)
+      }),
+    ))
 })
 
 const created = DateTime.makeUnsafe(0)
