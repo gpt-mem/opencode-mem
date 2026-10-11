@@ -264,4 +264,36 @@ describe("FindToolCallsTool", () => {
       expect(bySecret.map((candidate) => candidate["call_id"])).toEqual(["call_secret"])
     }),
   )
+
+  it.effect("excludes memory tool calls so a query cannot index itself (issue #34)", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const { db } = yield* Database.Service
+      yield* db
+        .insert(SessionMessageTable)
+        .values([
+          assistantRow(SessionMessage.ID.make("msg_call_search"), 6, [
+            SessionMessage.AssistantTool.make({
+              type: "tool",
+              id: "call_search_echo",
+              name: FindToolCallsTool.name,
+              state: SessionMessage.ToolStateCompleted.make({
+                status: "completed",
+                input: { query: "echo-needle" },
+                content: [{ type: "text", text: "no matches for echo-needle" }],
+                structured: {},
+              }),
+              time: { created },
+            }),
+          ]),
+        ])
+        .run()
+        .pipe(Effect.orDie)
+      const registry = yield* ToolRegistry.Service
+      const byQuery = parsed(yield* executeTool(registry, call({ query: "echo-needle" })))
+      expect(byQuery["matched"]).toBe(0)
+      const unfiltered = parsed(yield* executeTool(registry, call({})))
+      expect(unfiltered["matched"]).toBe(5)
+    }),
+  )
 })
