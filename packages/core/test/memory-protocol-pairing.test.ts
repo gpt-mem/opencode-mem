@@ -21,8 +21,7 @@ const id = (value: string) => SessionMessage.ID.make(`msg_${value}`)
 // contain it, so "not.toContain" really proves the original was dropped.
 const bulk = (canary: string) => `${"x".repeat(1000)}\n${canary}\n${"x".repeat(2000)}`
 
-const user = (value: string) =>
-  SessionMessage.User.make({ id: id(value), type: "user", text: "go", time: { created } })
+const user = (value: string) => SessionMessage.User.make({ id: id(value), type: "user", text: "go", time: { created } })
 
 const assistant = (value: string, content: SessionMessage.Assistant["content"]) =>
   SessionMessage.Assistant.make({
@@ -75,7 +74,12 @@ const history = [
   assistant("a1", [
     completedTool({ id: "call_big", name: "bash", text: bulk("BIG-ORIGINAL"), structured: { secret: "CANARY" } }),
     completedTool({ id: "call_mem", name: "find_tool_calls", text: bulk("MEM-ORIGINAL") }),
-    completedTool({ id: "call_hosted", name: "web_search", text: bulk("HOSTED-ORIGINAL"), provider: { executed: true } }),
+    completedTool({
+      id: "call_hosted",
+      name: "web_search",
+      text: bulk("HOSTED-ORIGINAL"),
+      provider: { executed: true },
+    }),
     errorTool({ id: "call_err", name: "bash", message: "boom" }),
   ]),
   SessionMessage.Shell.make({
@@ -114,6 +118,12 @@ const toolCalls = (messages: readonly Message[]) =>
     message.role === "assistant" ? message.content.flatMap((part) => (part.type === "tool-call" ? [part] : [])) : [],
   )
 
+const toolValue = (result: unknown): string => {
+  if (result !== null && typeof result === "object" && "value" in result && typeof result.value === "string")
+    return result.value
+  return JSON.stringify(result)
+}
+
 describe("MemoryContext protocol pairing (V2)", () => {
   test("every tool call keeps exactly one result and the compacted original is only a marker", () => {
     const messages = toLLMMessages(projected(), model)
@@ -123,13 +133,13 @@ describe("MemoryContext protocol pairing (V2)", () => {
     expect(calls.map((call) => call.id).sort()).toEqual(["call_big", "call_err", "call_hosted", "call_mem"])
     for (const call of calls) expect(results.has(call.id)).toBe(true)
 
-    const big = results.get("call_big") as { type: string; value: string }
-    expect(big.type).toBe("text")
-    expect(big.value).toContain("[mem:compacted tool result]")
-    expect(big.value).toContain('retrieve=get_tool_call_details(call_id="call_big")')
-    expect(big.value).not.toContain("BIG-ORIGINAL")
+    expect(results.get("call_big")).toMatchObject({ type: "text" })
+    const big = toolValue(results.get("call_big"))
+    expect(big).toContain("[mem:compacted tool result]")
+    expect(big).toContain('retrieve=get_tool_call_details(call_id="call_big")')
+    expect(big).not.toContain("BIG-ORIGINAL")
     // structured survives in SQLite history but must not leak into the provider result
-    expect(big.value).not.toContain("CANARY")
+    expect(big).not.toContain("CANARY")
 
     expect(results.get("call_mem")).toEqual({ type: "text", value: expect.stringContaining("MEM-ORIGINAL") })
     expect(results.get("call_hosted")).toEqual({ type: "text", value: expect.stringContaining("HOSTED-ORIGINAL") })
@@ -141,13 +151,15 @@ describe("MemoryContext protocol pairing (V2)", () => {
 
   test("compact shell output stays a user message with a working retrieval path", () => {
     const messages = toLLMMessages(projected(), model)
-    const text = (message: { content: unknown } | undefined) =>
-      Array.isArray(message?.content)
-        ? message.content
-            .flatMap((part) => (part?.type === "text" ? [part.text] : []))
-            .join("")
-        : String(message?.content ?? "")
-    const shell = messages.find((message) => message.role === "user" && text(message).includes("compacted shell output"))
+    const text = (message: { content: unknown } | undefined) => {
+      const content = message?.content
+      if (typeof content === "string") return content
+      if (!Array.isArray(content)) return ""
+      return content.flatMap((part) => (part?.type === "text" ? [String(part.text)] : [])).join("")
+    }
+    const shell = messages.find(
+      (message) => message.role === "user" && text(message).includes("compacted shell output"),
+    )
     expect(shell).toBeDefined()
     expect(text(shell)).toContain("[mem:compacted shell output]")
     expect(text(shell)).toContain('retrieve=get_tool_call_details(call_id="shell-1")')

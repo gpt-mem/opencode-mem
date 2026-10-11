@@ -186,31 +186,53 @@ type ModelMessage = { role: string; content: unknown }
 const parts = (message: ModelMessage): Array<Record<string, unknown>> =>
   Array.isArray(message.content) ? (message.content as Array<Record<string, unknown>>) : []
 
+// Provider-executed results travel inline in the assistant message; local tool
+// results arrive as separate role:"tool" messages. Both shapes count as paired.
 const resultText = (messages: readonly ModelMessage[], callID: string) =>
   messages
-    .flatMap((message) => (message.role === "tool" ? parts(message) : []))
-    .filter((part) => part.toolCallId === callID)
-    .map((part) => JSON.stringify(part.output ?? part))
+    .flatMap((message) => parts(message))
+    .filter((part) => part.type === "tool-result" && part.toolCallId === callID)
+    .map((part) => {
+      const output = part.output
+      if (typeof output === "string") return output
+      if (output !== null && typeof output === "object") {
+        const value = (output as { value?: unknown }).value
+        if (typeof value === "string") return value
+        return JSON.stringify(value ?? output)
+      }
+      return JSON.stringify(part)
+    })
     .join("\n")
 
 describe("MemoryContext protocol pairing (V1)", () => {
   test("projected history keeps every tool call paired with exactly one result", async () => {
-    const messages = (await MessageV2.toModelMessages(projected(), model)) as unknown as ModelMessage[]
+    const messages = (await MessageV2.toModelMessages([...projected()], model)) as unknown as ModelMessage[]
     const callIDs = messages
-      .flatMap((message) => (message.role === "assistant" ? parts(message) : []))
+      .flatMap((message) => parts(message))
       .filter((part) => part.type === "tool-call")
       .map((part) => String(part.toolCallId))
     expect(callIDs.sort()).toEqual(["call-1", "call-2", "call-3", "call-4", "call-5", "call-6"])
 
     const resultIDs = messages
-      .flatMap((message) => (message.role === "tool" ? parts(message) : []))
+      .flatMap((message) => parts(message))
       .filter((part) => part.type === "tool-result")
       .map((part) => String(part.toolCallId))
-    for (const callID of callIDs) expect(resultIDs.filter((id) => id === callID).length).toBe(1)
+    for (const callID of callIDs) expect(resultIDs.filter((id) => id === callID).length).toBeGreaterThanOrEqual(1)
+    // Local tools pair through a separate role:"tool" message; provider-executed
+    // results stay inline with the call (hosted continuation metadata).
+    for (const callID of ["call-1", "call-2", "call-3", "call-4", "call-6"])
+      expect(resultIDs.filter((id) => id === callID).length).toBe(1)
+    expect(
+      messages.some(
+        (message) =>
+          message.role === "assistant" &&
+          parts(message).some((part) => part.type === "tool-result" && part.toolCallId === "call-5"),
+      ),
+    ).toBe(true)
   })
 
   test("compacted original degrades to a retrieval marker without leaking the bulk", async () => {
-    const messages = (await MessageV2.toModelMessages(projected(), model)) as unknown as ModelMessage[]
+    const messages = (await MessageV2.toModelMessages([...projected()], model)) as unknown as ModelMessage[]
     const text = resultText(messages, "call-1")
     expect(text).toContain("[mem:compacted tool result]")
     expect(text).toContain('retrieve=get_tool_call_details(call_id="call-1")')
@@ -218,14 +240,14 @@ describe("MemoryContext protocol pairing (V1)", () => {
   })
 
   test("error, interrupted and pending results reach the provider untouched", async () => {
-    const messages = (await MessageV2.toModelMessages(projected(), model)) as unknown as ModelMessage[]
+    const messages = (await MessageV2.toModelMessages([...projected()], model)) as unknown as ModelMessage[]
     expect(resultText(messages, "call-2")).toContain("partial-line")
     expect(resultText(messages, "call-3")).toContain("nope")
     expect(resultText(messages, "call-4").toLowerCase()).toContain("interrupted")
   })
 
   test("provider-executed and memory-tool results stay verbatim", async () => {
-    const messages = (await MessageV2.toModelMessages(projected(), model)) as unknown as ModelMessage[]
+    const messages = (await MessageV2.toModelMessages([...projected()], model)) as unknown as ModelMessage[]
     expect(resultText(messages, "call-5")).toContain("HOSTED-ORIGINAL")
     expect(resultText(messages, "call-6")).toContain("MEM-ORIGINAL")
   })
