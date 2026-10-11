@@ -14,6 +14,8 @@ import { SessionMessage } from "@opencode-ai/core/session/message"
 import { SessionMessageTable, SessionTable } from "@opencode-ai/core/session/sql"
 import { ToolRegistry } from "@opencode-ai/core/tool/registry"
 import { GetToolCallDetailsTool } from "@opencode-ai/core/tool/get-tool-call-details"
+import { FSUtil } from "@opencode-ai/core/fs-util"
+import { Global } from "@opencode-ai/core/global"
 import { ToolOutputStore } from "@opencode-ai/core/tool-output-store"
 import { testEffect } from "./lib/effect"
 import { toolIdentity, executeTool } from "./lib/tool"
@@ -32,7 +34,7 @@ const permission = Layer.succeed(
 
 const it = testEffect(
   AppNodeBuilder.build(
-    LayerNode.group([Database.node, ToolRegistry.node, ToolRegistry.toolsNode, GetToolCallDetailsTool.node]),
+    LayerNode.group([Database.node, ToolRegistry.node, ToolRegistry.toolsNode, GetToolCallDetailsTool.node, FSUtil.node]),
     [
       [PermissionV2.node, permission],
       [ToolOutputStore.node, ToolOutputStore.nodeWithoutConfig],
@@ -44,6 +46,9 @@ const sessionID = SessionV2.ID.make("ses_tool_call_details_test")
 const created = DateTime.makeUnsafe(0)
 const model = { id: ModelV2.ID.make("model"), providerID: ProviderV2.ID.make("provider") }
 const encodeMessage = Schema.encodeSync(SessionMessage.Message)
+
+const MANAGED_NOTICE = (name: string) =>
+  `...output truncated...\n\nFull output saved to: ${Global.Path.data}/tool-output/${name}\n\npreview`
 
 const assistantRow = (id: SessionMessage.ID, seq: number, content: SessionMessage.Assistant["content"]) => {
   const { id: _id, type, ...data } = encodeMessage(
@@ -118,6 +123,34 @@ const setup = Effect.gen(function* () {
         }),
       ]),
       shellRow(SessionMessage.ID.make("msg_shell_1"), 3, "ls -la", "file1\nfile2\n"),
+      assistantRow(SessionMessage.ID.make("msg_call_managed"), 4, [
+        SessionMessage.AssistantTool.make({
+          type: "tool",
+          id: "call_managed",
+          name: "bash",
+          state: SessionMessage.ToolStateCompleted.make({
+            status: "completed",
+            input: { command: "cat bigfile" },
+            content: [{ type: "text", text: MANAGED_NOTICE("tool_test_details_managed") }],
+            structured: {},
+          }),
+          time: { created },
+        }),
+      ]),
+      assistantRow(SessionMessage.ID.make("msg_call_missing_file"), 5, [
+        SessionMessage.AssistantTool.make({
+          type: "tool",
+          id: "call_missing_file",
+          name: "bash",
+          state: SessionMessage.ToolStateCompleted.make({
+            status: "completed",
+            input: { command: "cat missing" },
+            content: [{ type: "text", text: MANAGED_NOTICE("tool_test_details_missing") }],
+            structured: {},
+          }),
+          time: { created },
+        }),
+      ]),
     ])
     .run()
     .pipe(Effect.orDie)
@@ -222,6 +255,51 @@ describe("GetToolCallDetailsTool", () => {
       const registry = yield* ToolRegistry.Service
       const output = parsed(yield* executeTool(registry, call({ call_id: "call_missing" })))
       expect(output["found"]).toBe(false)
+      expect(output["source"]).toBe("unavailable")
+    }),
+  )
+
+  it.effect("reads the full output from the managed tool-output file", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const registry = yield* ToolRegistry.Service
+      const file = `${Global.Path.data}/tool-output/tool_test_details_managed`
+      const content = "X".repeat(20000)
+      yield* Effect.promise(() => import("fs/promises").then((fs) => fs.writeFile(file, content)))
+      try {
+        const output = parsed(yield* executeTool(registry, call({ call_id: "call_managed" })))
+        expect(output["source"]).toBe("managed_output_file")
+        expect(output["total_chars"]).toBe(content.length)
+        expect(output["managed_path"]).toBe(file)
+        // Default window is max_chars (8000)
+        expect(output["output"]).toBe(content.slice(0, 8000))
+        expect(output["truncated"]).toBe(true)
+        const tail = parsed(
+          yield* executeTool(registry, call({ call_id: "call_managed", offset: content.length - 100, max_chars: 800 })),
+        )
+        expect(tail["output"]).toBe(content.slice(-100))
+        expect(tail["truncated"]).toBe(false)
+      } finally {
+        yield* Effect.promise(() => import("fs/promises").then((fs) => fs.rm(file)))
+      }
+    }),
+  )
+
+  it.effect("degrades to bounded_stored_output when the managed file is missing", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const registry = yield* ToolRegistry.Service
+      const file = `${Global.Path.data}/tool-output/tool_test_details_missing`
+      yield* Effect.promise(() => import("fs/promises").then((fs) => fs.rm(file, { force: true })))
+      const output = parsed(yield* executeTool(registry, call({ call_id: "call_missing_file" })))
+      expect(output["source"]).toBe("bounded_stored_output")
+      expect(String(output["note"])).toContain("no longer available")
+      expect(output["managed_path"]).toBe(file)
+      expect(String(output["output"])).toContain("preview")
+      expect(output["truncated"]).toBe(false)
+      expect(output["total_chars"]).toBe(
+        `...output truncated...\n\nFull output saved to: ${file}\n\npreview`.length,
+      )
     }),
   )
 })

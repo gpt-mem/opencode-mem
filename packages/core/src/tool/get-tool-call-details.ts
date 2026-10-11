@@ -6,6 +6,7 @@ import { Effect, Layer, Schema } from "effect"
 import { Database } from "../database/database"
 import { FSUtil } from "../fs-util"
 import { makeLocationNode } from "../effect/app-node"
+import { PermissionV2 } from "../permission"
 import { SessionMessage } from "../session/message"
 import { Evidence } from "../session/evidence"
 import { SessionMessageTable } from "../session/sql"
@@ -163,7 +164,7 @@ const extract = (
           .map((part) => (part.type === "text" ? part.text : `[${part.mime}]`))
           .join("\n")}`
       : item.state.content
-          .map((part) => (part.type === "text" ? part.text : `[${part.mime}${part.name === undefined ? "" : `: ${part.name}]`}]))
+          .map((part) => (part.type === "text" ? part.text : `[${part.mime}${part.name === undefined ? "" : `: ${part.name}`}]`))
           .join("\n")
   return retrieve(fs, text, callID, item.name, item.state.status, undefined, offset, maxChars, message.id)
 }

@@ -220,7 +220,7 @@ export const project = (
     if (index < markFloor) return message
     if (message.type === "shell") {
       // A pointer outside the managed tool-output directory is not a recovery path we may follow.
-      if (Evidence.classify(text).kind === "unavailable") return message
+      if (Evidence.classify(message.output).kind === "unavailable") return message
       // Without a callID the original cannot be retrieved later, so keep the output intact.
       if (message.output.length < minChars || message.callID === "") return message
       if (allow !== undefined && !allow.has("bash")) return message

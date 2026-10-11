@@ -1,4 +1,6 @@
 import { afterEach, describe, expect } from "bun:test"
+import { mkdir, rm, writeFile } from "fs/promises"
+import { Global } from "@opencode-ai/core/global"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { Database } from "@opencode-ai/core/database/database"
 import { PartTable, MessageTable, SessionTable } from "@opencode-ai/core/session/sql"
@@ -93,6 +95,18 @@ const seed = Effect.gen(function* () {
       toolPart({ id: "call_big", tool: "bash", output: "x".repeat(5000), input: { command: "cat big.txt" } }),
       toolPart({ id: "call_err", tool: "bash", error: "exit code 1", input: { command: "npm test" } }),
       toolPart({ id: "call_small", tool: "read", output: "ok", input: { path: "a.ts" } }),
+      toolPart({
+        id: "call_managed",
+        tool: "bash",
+        output: `...output truncated...\n\nFull output saved to: ${Global.Path.data}/tool-output/tool_v1_test_managed\n\npreview`,
+        input: { command: "cat bigfile" },
+      }),
+      toolPart({
+        id: "call_missing_file",
+        tool: "bash",
+        output: `...output truncated...\n\nFull output saved to: ${Global.Path.data}/tool-output/tool_v1_test_missing\n\npreview`,
+        input: { command: "cat missing" },
+      }),
     ])
     .run()
     .pipe(Effect.orDie)
@@ -209,6 +223,61 @@ describe("tool.get-tool-call-details (V1)", () => {
       const def = yield* Tool.init(yield* GetToolCallDetailsTool)
       const result = yield* def.execute({ call_id: "call_missing" }, ctx(sessionID))
       expect(JSON.parse(result.output)).toEqual({ found: false, call_id: "call_missing" })
+    }),
+  )
+
+  it.instance("reads the full output from the managed tool-output file", () =>
+    Effect.gen(function* () {
+      yield* seed
+      const file = `${Global.Path.data}/tool-output/tool_v1_test_managed`
+      const content = "Y".repeat(20000)
+      yield* Effect.promise(() => mkdir(`${Global.Path.data}/tool-output`, { recursive: true }))
+      yield* Effect.promise(() => writeFile(file, content))
+      try {
+        const def = yield* Tool.init(yield* GetToolCallDetailsTool)
+        const result = yield* def.execute({ call_id: "call_managed" }, ctx(sessionID))
+        const parsed = JSON.parse(result.output)
+        expect(parsed.source).toBe("managed_output_file")
+        expect(parsed.total_chars).toBe(content.length)
+        expect(parsed.managed_path).toBe(file)
+        expect(parsed.output).toBe(content.slice(0, 8000))
+        expect(parsed.truncated).toBe(false)
+        const paged = JSON.parse(
+          (yield* def.execute({ call_id: "call_managed", max_chars: 100, offset: 100 }, ctx(sessionID))).output,
+        )
+        expect(paged.output).toBe("Y".repeat(100))
+        expect(paged.truncated).toBe(true)
+        expect(paged.total_chars).toBe(content.length)
+      } finally {
+        yield* Effect.promise(() => rm(file))
+      }
+    }),
+  )
+
+  it.instance("degrades to bounded_stored_output when the managed file is missing", () =>
+    Effect.gen(function* () {
+      yield* seed
+      const file = `${Global.Path.data}/tool-output/tool_v1_test_missing`
+      yield* Effect.promise(() => rm(file, { force: true }))
+      const def = yield* Tool.init(yield* GetToolCallDetailsTool)
+      const result = yield* def.execute({ call_id: "call_missing_file" }, ctx(sessionID))
+      const parsed = JSON.parse(result.output)
+      expect(parsed.source).toBe("bounded_stored_output")
+      expect(String(parsed.note)).toContain("no longer available")
+      expect(parsed.managed_path).toBe(file)
+      expect(parsed.output).toContain("preview")
+      expect(parsed.truncated).toBe(false)
+    }),
+  )
+
+  it.instance("returns source=unavailable for unknown call_id", () =>
+    Effect.gen(function* () {
+      yield* seed
+      const def = yield* Tool.init(yield* GetToolCallDetailsTool)
+      const result = yield* def.execute({ call_id: "call_missing" }, ctx(sessionID))
+      const parsed = JSON.parse(result.output)
+      expect(parsed.found).toBe(false)
+      expect(parsed.source).toBe("unavailable")
     }),
   )
 

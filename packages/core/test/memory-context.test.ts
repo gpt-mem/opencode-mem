@@ -958,7 +958,7 @@ describe("evidence refs", () => {
       ]),
       user("u2"),
     ]
-    const projected = compactV2(messages, { midTurn: true })
+    const projected = compact(messages, { midTurn: true })
     const text = toolText(projected[1]!)
     expect(text).toContain("stored=managed_output_file path=")
     expect(text).toContain(`path=${Global.Path.data}/tool-output/tool_test_evidence`)
@@ -972,7 +972,7 @@ describe("evidence refs", () => {
       assistant("a1", [completedTool({ id: "call_evidence_2", name: "bash", content: [{ type: "text", text: big() }] })]),
       user("u2"),
     ]
-    const projected = compactV2(messages, { midTurn: true })
+    const projected = compact(messages, { midTurn: true })
     const text = toolText(projected[1]!)
     expect(text).toContain("stored=full_original")
     expect(text).toContain("(full text kept in SQLite history)")
@@ -994,7 +994,7 @@ describe("evidence refs", () => {
       ]),
       user("u2"),
     ]
-    const projected = compactV2(messages, { midTurn: true })
+    const projected = compact(messages, { midTurn: true })
     expect(projected[1]).toEqual(messages[1])
   })
 
@@ -1004,7 +1004,7 @@ describe("evidence refs", () => {
       assistant("a1", [completedTool({ id: "", name: "bash", content: [{ type: "text", text: big() }] })]),
       user("u2"),
     ]
-    const projected = compactV2(messages, { midTurn: true })
+    const projected = compact(messages, { midTurn: true })
     expect(projected[1]).toEqual(messages[1])
   })
 
@@ -1037,8 +1037,8 @@ describe("evidence refs", () => {
       output: managedNotice("tool_shell_evidence"),
       time: { created },
     })
-    const projected = compactV2([shell], { midTurn: true })
-    const message = projected[0]!
+    const projected = compact([user("u1"), shell, user("u2")], { midTurn: true })
+    const message = projected[1]!
     if (message.type !== "shell") throw new Error("expected shell")
     expect(message.output).toContain("stored=managed_output_file")
     expect(message.output).toContain(`path=${Global.Path.data}/tool-output/tool_shell_evidence`)
