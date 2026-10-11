@@ -10,6 +10,7 @@ import { SessionMessage } from "../session/message"
 import { SessionSchema } from "../session/schema"
 import { SessionMessageTable } from "../session/sql"
 import { PII } from "../session/pii"
+import { MemoryTools } from "./memory-tools"
 import { ToolRegistry } from "./registry"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
@@ -95,6 +96,9 @@ export type Candidate = {
 const toolCandidates = (message: SessionMessage.Assistant, seq: number): readonly Candidate[] =>
   message.content.flatMap((item) => {
     if (item.type !== "tool") return []
+    // Self-indexing guard: memory tools are how this index is queried, so
+    // indexing them back would make every search a new match (issue #34).
+    if (MemoryTools.names.has(item.name)) return []
     const state = item.state
     const input = inputSummary(state.input)
     // haystack stays raw: it is internal (never returned to the model) so the

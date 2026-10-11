@@ -1281,6 +1281,11 @@ const layer = Layer.effect(
                     database.db,
                     `${model.providerID}/${model.id}`,
                     msgs,
+                    // Issue #39 (idle mask reset): only the first request of
+                    // the turn may treat a stale ledger as cold; mid-turn an
+                    // in-flight task owns the cache and time alone never
+                    // resets the mark.
+                    { idleMs: step === 1 ? Flag.OPENCODE_MEMORY_MARK_IDLE_MS : 0 },
                   ).pipe(Effect.catchDefect(() => Effect.succeed(undefined)))
                   if (mark === undefined) return msgs
                   return MemoryContext.projectV1(msgs, {

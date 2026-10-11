@@ -3,6 +3,7 @@ import { and, eq, sql } from "drizzle-orm"
 import { Database } from "@opencode-ai/core/database/database"
 import { PII } from "@opencode-ai/core/session/pii"
 import { PartTable } from "@opencode-ai/core/session/sql"
+import { MemoryTools } from "@opencode-ai/core/tool/memory-tools"
 import type { SessionID } from "../session/schema"
 import * as Tool from "./tool"
 
@@ -68,6 +69,9 @@ const candidate = (data: unknown, id: string): Candidate | undefined => {
     state?: { status?: string; input?: unknown; output?: string; error?: string }
   }
   if (part.type !== "tool" || typeof part.callID !== "string") return undefined
+  // Self-indexing guard: memory tools are how this index is queried, so
+  // indexing them back would make every search a new match (issue #34).
+  if (part.tool !== undefined && MemoryTools.names.has(part.tool)) return undefined
   const state = part.state
   const input = inputSummary(state?.input)
   const output = typeof state?.output === "string" ? state.output : undefined

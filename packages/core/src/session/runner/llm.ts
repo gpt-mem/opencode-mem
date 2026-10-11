@@ -209,9 +209,12 @@ const layer = Layer.effect(
       const cacheMarkOn = Flag.OPENCODE_MEMORY_CONTEXT && Flag.OPENCODE_MEMORY_CACHE_MARK
       const context = cacheMarkOn
         ? yield* Effect.gen(function* () {
-            const mark = yield* CacheMark.markIndexFor(db, cacheMarkKey, rawMessages).pipe(
-              Effect.catchDefect(() => Effect.succeed(undefined)),
-            )
+            const mark = yield* CacheMark.markIndexFor(db, cacheMarkKey, rawMessages, {
+              // Issue #39 (idle mask reset): only a fresh turn may treat a
+              // stale ledger as cold; mid-turn an in-flight task owns the
+              // cache and time alone never resets the mark.
+              idleMs: currentStep === 1 ? Flag.OPENCODE_MEMORY_MARK_IDLE_MS : 0,
+            }).pipe(Effect.catchDefect(() => Effect.succeed(undefined)))
             if (mark === undefined) return rawMessages
             return MemoryContext.project(rawMessages, { sessionID: session.id, markIndex: mark })
           }).pipe(Effect.catchDefect(() => Effect.succeed(rawMessages)))

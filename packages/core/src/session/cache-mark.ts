@@ -80,10 +80,21 @@ export const prefixHash = (serialized: string) => {
 // first-delivery compaction on the very first request and let the provider
 // cache the full bulk — the mark then pinned that bulk verbatim forever
 // (issue #29 acceptance: fdmark arm cost ≈ off instead of ≈ fd).
+export type MarkForOptions = {
+  // Issue #39 (idle-gap mask reset): treat the ledger as cold once the last
+  // provider response is at least this old, so the request carries the
+  // compact projection instead of a verbatim prefix nobody may still hold.
+  // Read-only: the row is left alone and the next confirmed response
+  // re-warms it through recordUsage. 0 (or omitted) disables the check;
+  // callers pass 0 mid-turn so an in-flight task never resets by time.
+  readonly idleMs?: number
+}
+
 export const markIndexFor = Effect.fn("CacheMark.markIndexFor")(function* (
   db: DatabaseService,
   providerID: string,
   messages: readonly unknown[],
+  options?: MarkForOptions,
 ) {
   const row = yield* db
     .select()
@@ -93,6 +104,8 @@ export const markIndexFor = Effect.fn("CacheMark.markIndexFor")(function* (
     .pipe(Effect.orDie)
   if (row === undefined) return 0
   if (row.mark_index <= 0) return 0
+  const idleMs = options?.idleMs ?? 0
+  if (idleMs > 0 && Date.now() - row.last_used_at >= idleMs) return 0
   if (row.mark_index > messages.length) return undefined
   if (row.prefix_hash !== null && row.prefix_hash !== prefixHash(JSON.stringify(messages.slice(0, row.mark_index))))
     return undefined
