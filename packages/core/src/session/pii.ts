@@ -23,7 +23,8 @@ const API_KEY_BARE: readonly RegExp[] = [
 const API_KEY_ASSIGNMENT =
   /(?<![\w-])((?:api[_-]?key|apikey|secret|access[_-]?token|auth[_-]?token|password)["']?\s*[:=]\s*)["']?[A-Za-z0-9_./+-]{16,}(?![\w-])/gi
 const API_KEY_PATTERNS: readonly RegExp[] = [...API_KEY_BARE, API_KEY_ASSIGNMENT]
-const URL_SECRET_PARAM = /([?&](?:access[_-]?token|api[_-]?key|auth|credential|key|password|secret|sig|signature|token)=)[^&\s"'<>]+/gi
+const URL_SECRET_PARAM =
+  /([?&](?:access[_-]?token|api[_-]?key|auth|credential|key|password|secret|sig|signature|token)=)[^&\s"'<>]+/gi
 const BEARER_TOKEN = /\b(Bearer\s+)[A-Za-z0-9._~+/=-]{16,}/gi
 
 const CATEGORIES: readonly PIICategory[] = ["email", "phone", "credit_card", "api_key"]
@@ -125,6 +126,117 @@ export const tag = (text: string): string | undefined => {
 export type Redaction = {
   readonly text: string
   readonly redacted: readonly string[]
+}
+
+type Marked = { readonly start: number; readonly end: number; readonly type: PIICategory }
+
+// Left behind by redact(): an already-masked carrier is still a carrier, so an
+// audit must count it even though the value is gone from the text.
+const REDACTED_PLACEHOLDER = /\[REDACTED:(api_key|url_secret|bearer|credit_card|email|phone)\]/g
+
+const placeholderType = (kind: string): PIICategory =>
+  kind === "email" || kind === "phone" ? kind : kind === "credit_card" ? "credit_card" : "api_key"
+
+// Spans whose capture group is a visible prefix (parameter name, `Bearer `,
+// `?token=`) are masked from the value only, keeping the prefix readable.
+const valueSpans = (regex: RegExp, text: string, type: PIICategory, into: Marked[]) => {
+  countMatches(regex, text, (match) => {
+    const offset = typeof match[1] === "string" ? match[1].length : 0
+    into.push({ start: match.index + offset, end: match.index + match[0].length, type })
+  })
+}
+
+const markedSpans = (text: string): readonly Marked[] => {
+  const spans: Marked[] = []
+  const cards: Span[] = []
+  countMatches(CARD, text, (match) => {
+    const digits = digitsOf(match[0])
+    if (digits.length >= 13 && digits.length <= 19 && luhn(digits))
+      cards.push({ start: match.index, end: match.index + match[0].length })
+  })
+  for (const card of cards) spans.push({ ...card, type: "credit_card" })
+  countMatches(EMAIL, text, (match) =>
+    spans.push({ start: match.index, end: match.index + match[0].length, type: "email" }),
+  )
+  const phones: Span[] = []
+  const markPhone = (span: Span) => {
+    if (overlaps(span, cards) || overlaps(span, phones)) return
+    phones.push(span)
+    spans.push({ ...span, type: "phone" })
+  }
+  countMatches(INTERNATIONAL_PHONE, text, (match) =>
+    markPhone({ start: match.index, end: match.index + match[0].length }),
+  )
+  countMatches(SEPARATED_RUN, text, (match) => {
+    const span = { start: match.index, end: match.index + match[0].length }
+    if (overlaps(span, cards) || overlaps(span, phones)) return
+    const raw = match[0]
+    const digits = digitsOf(raw)
+    if (digits.length < 10 || digits.length > 15) return
+    const hasSeparator = /[ .-]/.test(raw)
+    if (!hasSeparator && digits.length > 11) return
+    markPhone(span)
+  })
+  for (const pattern of [...API_KEY_PATTERNS, URL_SECRET_PARAM, BEARER_TOKEN])
+    valueSpans(pattern, text, "api_key", spans)
+  countMatches(REDACTED_PLACEHOLDER, text, (match) =>
+    spans.push({
+      start: match.index,
+      end: match.index + match[0].length,
+      type: placeholderType(match[1]),
+    }),
+  )
+  return spans
+}
+
+// Discovery output of find_pii: the value itself is never returned, only a
+// placeholder and the line that carried it (issue #11 — detecting PII is not
+// permission to send it to the model). Raw carriers stay behind the
+// authorized get_tool_call_details(call_id) path.
+export const mask = (text: string): string => {
+  let out = redact(text).text
+  out = out.replace(EMAIL, "[REDACTED:email]")
+  out = out.replace(INTERNATIONAL_PHONE, "[REDACTED:phone]")
+  out = out.replace(SEPARATED_RUN, (match) => {
+    const digits = digitsOf(match)
+    if (digits.length < 10 || digits.length > 15) return match
+    if (!/[ .-]/.test(match) && digits.length > 11) return match
+    return "[REDACTED:phone]"
+  })
+  return out
+}
+
+export type Scan = {
+  readonly counts: Readonly<Record<PIICategory, number>>
+  readonly types: readonly PIICategory[]
+  readonly evidence: readonly string[]
+}
+
+const EVIDENCE_WINDOW_BEFORE = 80
+const EVIDENCE_WINDOW_AFTER = 160
+const EVIDENCE_CHARS = 240
+
+export const scan = (text: string, options?: { readonly evidence?: number }): Scan => {
+  const spans = [...markedSpans(text)].sort((left, right) => left.start - right.start)
+  const counts = emptyCounts()
+  for (const span of spans) counts[span.type]++
+  const types = CATEGORIES.filter((type) => counts[type] > 0)
+  const max = options?.evidence ?? 2
+  const evidence: string[] = []
+  let taken = -1
+  for (const span of spans) {
+    if (evidence.length >= max) break
+    const lineStart = text.lastIndexOf("\n", span.start - 1) + 1
+    if (lineStart === taken) continue
+    taken = lineStart
+    const newline = text.indexOf("\n", span.end)
+    const lineEnd = newline === -1 ? text.length : newline
+    const from = Math.max(lineStart, span.start - EVIDENCE_WINDOW_BEFORE)
+    const to = Math.min(lineEnd, span.end + EVIDENCE_WINDOW_AFTER)
+    const line = mask(text.slice(from, to))
+    evidence.push(line.length <= EVIDENCE_CHARS ? line : line.slice(0, EVIDENCE_CHARS))
+  }
+  return { counts, types, evidence }
 }
 
 // Replaces credential-bearing content with self-describing placeholders before

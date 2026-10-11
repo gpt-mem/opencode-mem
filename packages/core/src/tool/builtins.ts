@@ -5,6 +5,7 @@ import { Layer } from "effect"
 import { BashTool } from "./bash"
 import { ApplyPatchTool } from "./apply-patch"
 import { EditTool } from "./edit"
+import { FindPiiTool } from "./find-pii"
 import { FindToolCallsTool } from "./find-tool-calls"
 import { GetToolCallDetailsTool } from "./get-tool-call-details"
 import { GetToolCallOverviewTool } from "./get-tool-call-overview"
@@ -38,6 +39,7 @@ export const node = makeLocationNode({
     ApplyPatchTool.node,
     BashTool.node,
     EditTool.node,
+    FindPiiTool.node,
     FindToolCallsTool.node,
     GetToolCallDetailsTool.node,
     GetToolCallOverviewTool.node,

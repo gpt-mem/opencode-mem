@@ -9,4 +9,5 @@ export const names: ReadonlySet<string> = new Set([
   "find_tool_calls",
   "get_tool_call_overview",
   "get_tool_call_details",
+  "find_pii",
 ])

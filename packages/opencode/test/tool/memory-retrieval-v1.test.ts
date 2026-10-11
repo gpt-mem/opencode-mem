@@ -14,6 +14,7 @@ import { Tool } from "@/tool/tool"
 import { Truncate } from "@/tool/truncate"
 import { GetToolCallDetailsTool } from "../../src/tool/get-tool-call-details"
 import { FindToolCallsTool } from "../../src/tool/find-tool-calls"
+import { FindPiiTool } from "../../src/tool/find-pii"
 import { GetToolCallOverviewTool } from "../../src/tool/get-tool-call-overview"
 import { disposeAllInstances } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
@@ -573,6 +574,159 @@ describe("tool.get-tool-call-overview (V1)", () => {
       expect(byMemory.total).toBe(1)
       expect(byMemory.groups.length).toBe(0)
       expect(byMemory.memory_tools).toEqual([{ tool: "find_tool_calls", count: 1 }])
+    }),
+  )
+})
+
+// find_pii fixtures live in their own session: find/overview assertions count
+// the shared session, and an audit must not disturb those totals.
+const piiSessionID = SessionID.make("ses_v1_pii_test")
+
+const seedPii = Effect.gen(function* () {
+  const { db } = yield* Database.Service
+  yield* db
+    .insert(ProjectTable)
+    .values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] })
+    .onConflictDoNothing()
+    .run()
+    .pipe(Effect.orDie)
+  yield* db
+    .insert(SessionTable)
+    .values({
+      id: piiSessionID,
+      project_id: Project.ID.global,
+      slug: "v1-pii",
+      directory: AbsolutePath.make("/project"),
+      title: "test",
+      version: "0.0.0",
+    })
+    .onConflictDoNothing()
+    .run()
+    .pipe(Effect.orDie)
+  yield* db
+    .insert(MessageTable)
+    .values(
+      ["call_pii_mail", "call_pii_key", "call_pii_clean"].map((id) => ({
+        id: MessageID.make(`msg_${id}`),
+        session_id: piiSessionID,
+        time_created: 0,
+        data: { role: "assistant" as const, agent: "build", time: { created: 0 } },
+      })),
+    )
+    .onConflictDoNothing()
+    .run()
+    .pipe(Effect.orDie)
+  yield* db
+    .insert(PartTable)
+    .values([
+      toolPart({
+        id: "call_pii_mail",
+        tool: "bash",
+        output: "found william.shekspier@example.com in docs/contacts.md",
+        input: { command: "grep -r contact ." },
+        sessionID: piiSessionID,
+      }),
+      toolPart({
+        id: "call_pii_key",
+        tool: "bash",
+        output: "200 ok",
+        input: { command: 'curl -H "Authorization: Bearer ghp_abcdefghij1234567890ABCD" https://api.example.com' },
+        sessionID: piiSessionID,
+      }),
+      toolPart({
+        id: "call_pii_clean",
+        tool: "read",
+        output: "ok",
+        input: { path: "a.ts" },
+        sessionID: piiSessionID,
+      }),
+    ])
+    .run()
+    .pipe(Effect.orDie)
+})
+
+describe("tool.find-pii (V1)", () => {
+  it.instance("reports PII carriers newest first without the values", () =>
+    Effect.gen(function* () {
+      yield* seedPii
+      const def = yield* Tool.init(yield* FindPiiTool)
+      const raw = (yield* def.execute({}, ctx(piiSessionID))).output
+      expect(raw).not.toContain("william.shekspier@example.com")
+      expect(raw).not.toContain("ghp_abcdefghij")
+      expect(raw).toContain("[REDACTED:email]")
+      expect(raw).toContain("[REDACTED:bearer]")
+      const parsed = JSON.parse(raw)
+      expect(parsed.matched).toBe(2)
+      expect(parsed.matches.map((match: { call_id: string }) => match.call_id)).toEqual([
+        "call_pii_key",
+        "call_pii_mail",
+      ])
+      const mail = parsed.matches.find((match: { call_id: string }) => match.call_id === "call_pii_mail")
+      expect(mail.evidence.join("\n")).toContain("docs/contacts.md")
+      expect(mail.evidence.join("\n")).not.toContain("william.shekspier")
+      expect(
+        [...parsed.counts].sort((a: { type: string }, b: { type: string }) => a.type.localeCompare(b.type)),
+      ).toEqual([
+        { type: "api_key", count: 1 },
+        { type: "email", count: 1 },
+      ])
+    }),
+  )
+
+  it.instance("filters by PII type and reports an empty session", () =>
+    Effect.gen(function* () {
+      yield* seedPii
+      const def = yield* Tool.init(yield* FindPiiTool)
+      const mail = JSON.parse((yield* def.execute({ type: "email" }, ctx(piiSessionID))).output)
+      expect(mail.matched).toBe(1)
+      expect(mail.matches[0].call_id).toBe("call_pii_mail")
+      const cards = JSON.parse((yield* def.execute({ type: "credit_card" }, ctx(piiSessionID))).output)
+      expect(cards.matched).toBe(0)
+      const empty = JSON.parse((yield* def.execute({}, ctx(SessionID.make("ses_v1_pii_empty")))).output)
+      expect(empty.matched).toBe(0)
+    }),
+  )
+
+  it.instance("excludes find_pii calls from its own audit and from the index (issue #34)", () =>
+    Effect.gen(function* () {
+      yield* seedPii
+      const { db } = yield* Database.Service
+      yield* db
+        .insert(MessageTable)
+        .values({
+          id: MessageID.make("msg_call_pii_echo"),
+          session_id: piiSessionID,
+          time_created: 1,
+          data: { role: "assistant" as const, agent: "build", time: { created: 0 } },
+        })
+        .onConflictDoNothing()
+        .run()
+        .pipe(Effect.orDie)
+      yield* db
+        .insert(PartTable)
+        .values([
+          toolPart({
+            id: "call_pii_echo",
+            tool: "find_pii",
+            output: "[REDACTED:email] audit marker pii-echo-marker",
+            input: { type: "email" },
+            sessionID: piiSessionID,
+          }),
+        ])
+        .run()
+        .pipe(Effect.orDie)
+      const findPii = yield* Tool.init(yield* FindPiiTool)
+      const audited = JSON.parse((yield* findPii.execute({}, ctx(piiSessionID))).output)
+      expect(audited.matched).toBe(2)
+      expect(audited.matches.some((match: { call_id: string }) => match.call_id === "call_pii_echo")).toBe(false)
+      const find = yield* Tool.init(yield* FindToolCallsTool)
+      const indexed = JSON.parse((yield* find.execute({ query: "pii-echo-marker" }, ctx(piiSessionID))).output)
+      expect(indexed.matched).toBe(0)
+      const overview = yield* Tool.init(yield* GetToolCallOverviewTool)
+      const inventory = JSON.parse((yield* overview.execute({}, ctx(piiSessionID))).output)
+      expect(inventory.total).toBe(4)
+      expect(inventory.groups.map((group: { tool: string }) => group.tool)).toEqual(["bash", "read"])
+      expect(inventory.memory_tools).toEqual([{ tool: "find_pii", count: 1 }])
     }),
   )
 })
