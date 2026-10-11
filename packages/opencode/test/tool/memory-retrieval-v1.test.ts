@@ -299,6 +299,41 @@ describe("tool.find-tool-calls (V1)", () => {
       expect(full.output).toContain("sk-proj-abcdef1234567890ABCDEF")
     }),
   )
+
+  it.instance("excludes memory tool calls so a query cannot index itself (issue #34)", () =>
+    Effect.gen(function* () {
+      yield* seed
+      const { db } = yield* Database.Service
+      yield* db
+        .insert(MessageTable)
+        .values({
+          id: MessageID.make("msg_call_search"),
+          session_id: sessionID,
+          time_created: 1,
+          data: { role: "assistant" as const, agent: "build", time: { created: 0 } },
+        })
+        .onConflictDoNothing()
+        .run()
+        .pipe(Effect.orDie)
+      yield* db
+        .insert(PartTable)
+        .values([
+          toolPart({
+            id: "call_search",
+            tool: "find_tool_calls",
+            output: "no matches for echo-needle",
+            input: { query: "echo-needle" },
+          }),
+        ])
+        .run()
+        .pipe(Effect.orDie)
+      const find = yield* Tool.init(yield* FindToolCallsTool)
+      const byQuery = JSON.parse((yield* find.execute({ query: "echo-needle" }, ctx(sessionID))).output)
+      expect(byQuery.matched).toBe(0)
+      const unfiltered = JSON.parse((yield* find.execute({}, ctx(sessionID))).output)
+      expect(unfiltered.matched).toBe(3)
+    }),
+  )
 })
 
 describe("tool.get-tool-call-overview (V1)", () => {
