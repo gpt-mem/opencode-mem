@@ -87,6 +87,11 @@ export const Flag = {
   get OPENCODE_MEMORY_MIDTURN() {
     return truthy("OPENCODE_MEMORY_MIDTURN")
   },
+  // Issue #23 (first-delivery compaction). Issue #29 P1: when the cache-mark
+  // ledger (OPENCODE_MEMORY_CACHE_MARK) is on, first-delivery is the default
+  // policy without this flag — the mark floors the confirmed prefix and the
+  // fresh tail is compacted on arrival. Set this alone for ledger-less
+  // setups (zero-cache providers).
   get OPENCODE_MEMORY_FIRST_DELIVERY() {
     return truthy("OPENCODE_MEMORY_FIRST_DELIVERY")
   },
