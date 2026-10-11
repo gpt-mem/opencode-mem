@@ -6,6 +6,8 @@ import os from "os"
 import { SessionID, MessageID, PartID } from "./schema"
 import { MessageV2 } from "./message-v2"
 import { MemoryContext } from "@opencode-ai/core/session/memory-context"
+import { CacheMark } from "@opencode-ai/core/session/cache-mark"
+import { Flag } from "@opencode-ai/core/flag/flag"
 import { SessionRevert } from "./revert"
 import { Session } from "./session"
 import { Agent } from "../agent/agent"
@@ -1268,20 +1270,36 @@ const layer = Layer.effect(
               Effect.catch(() => Effect.succeed(undefined)),
             )
 
+            // Issue #29 (cache-mark ledger): when enabled, the projection
+            // floor is the provider-confirmed cache boundary from the ledger.
+            // Any ledger failure (no row, prefix hash mismatch) fails safe to
+            // a verbatim send — never a broken projection.
+            const cacheMarkOn = Flag.OPENCODE_MEMORY_CONTEXT && Flag.OPENCODE_MEMORY_CACHE_MARK
+            const projectedMsgs = cacheMarkOn
+              ? yield* Effect.gen(function* () {
+                  const mark = yield* CacheMark.markIndexFor(
+                    database.db,
+                    `${model.providerID}/${model.id}`,
+                    msgs,
+                  ).pipe(Effect.catchDefect(() => Effect.succeed(undefined)))
+                  if (mark === undefined) return msgs
+                  return MemoryContext.projectV1(msgs, {
+                    sessionID,
+                    markIndex: mark,
+                    ...(intentSwitch === undefined ? {} : { intentSwitchMessageID: intentSwitch }),
+                  })
+                }).pipe(Effect.catchDefect(() => Effect.succeed(msgs)))
+              : MemoryContext.projectV1(msgs, {
+                  sessionID,
+                  ...(intentSwitch === undefined ? {} : { intentSwitchMessageID: intentSwitch }),
+                })
+
             const [skills, env, instructions, mcpInstructions, modelMsgs] = yield* Effect.all([
               sys.skills(agent),
               sys.environment(model),
               instruction.system().pipe(Effect.orDie),
               sys.mcp(agent, session.permission),
-              MessageV2.toModelMessagesEffect(
-                [
-                  ...MemoryContext.projectV1(msgs, {
-                    sessionID,
-                    ...(intentSwitch === undefined ? {} : { intentSwitchMessageID: intentSwitch }),
-                  }),
-                ],
-                model,
-              ),
+              MessageV2.toModelMessagesEffect([...projectedMsgs], model),
             ])
             const system = [
               ...env,
@@ -1306,6 +1324,25 @@ const layer = Layer.effect(
               model,
               toolChoice: format.type === "json_schema" ? "required" : undefined,
             })
+
+            // Issue #29: confirm the cache mark post-factum from the response
+            // usage. Aborted/error turns carry no usage and recordUsage
+            // ignores them — a missing response never clobbers the mark.
+            if (cacheMarkOn) {
+              const tokens = handle.message.tokens
+              yield* CacheMark.recordUsage(
+                database.db,
+                `${model.providerID}/${model.id}`,
+                {
+                  input: tokens.input,
+                  output: tokens.output,
+                  cacheRead: tokens.cache.read,
+                  cacheWrite: tokens.cache.write,
+                  sentCount: projectedMsgs.length,
+                },
+                msgs,
+              ).pipe(Effect.catchDefect(() => Effect.void))
+            }
 
             if (structured !== undefined) {
               handle.message.structured = structured

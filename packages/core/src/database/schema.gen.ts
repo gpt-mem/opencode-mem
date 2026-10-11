@@ -177,6 +177,15 @@ export default {
         );
       `)
       yield* tx.run(`
+        CREATE TABLE \`provider_cache_mark\` (
+          \`provider_id\` text PRIMARY KEY,
+          \`mark_tokens\` integer DEFAULT 0 NOT NULL,
+          \`mark_index\` integer DEFAULT 0 NOT NULL,
+          \`prefix_hash\` text,
+          \`last_used_at\` integer NOT NULL
+        );
+      `)
+      yield* tx.run(`
         CREATE TABLE \`session_context_epoch\` (
           \`session_id\` text PRIMARY KEY,
           \`baseline\` text NOT NULL,
