@@ -409,3 +409,55 @@ describe("MemoryContext markIndex (suffix-only compression)", () => {
     expect(CacheMark.verbatimPrefixLength(projected2, step2)).toBe(1)
   })
 })
+
+describe("CacheMark.markIndexFor idle reset (issue #39)", () => {
+  const provider = "prov/model-idle"
+  const messages = ["m0", "m1", "m2"]
+
+  test("stale confirmation collapses the floor to 0; fresh or idle-disabled keeps the mark", () =>
+    run(
+      Effect.gen(function* () {
+        const db = yield* migratedDb
+        yield* CacheMark.recordUsage(
+          db,
+          provider,
+          usage({ sentCount: messages.length, cacheRead: 900, cacheWrite: 300 }),
+          messages,
+        )
+        const aged = Date.now() - 10 * 60_000
+        yield* db
+          .update(ProviderCacheMarkTable)
+          .set({ last_used_at: aged })
+          .where(eq(ProviderCacheMarkTable.provider_id, provider))
+          .run()
+          .pipe(Effect.orDie)
+
+        // No options / idleMs 0: the idle check is opt-in per call site.
+        expect(yield* CacheMark.markIndexFor(db, provider, messages)).toBe(3)
+        expect(yield* CacheMark.markIndexFor(db, provider, messages, { idleMs: 0 })).toBe(3)
+        // Confirmation older than the idle window: mask on, whole history eligible.
+        expect(yield* CacheMark.markIndexFor(db, provider, messages, { idleMs: 5 * 60_000 })).toBe(0)
+        // Still inside a generous window: the confirmed floor stands.
+        expect(yield* CacheMark.markIndexFor(db, provider, messages, { idleMs: 60 * 60_000 })).toBe(3)
+
+        // Read-only: an idle read must not clobber the row, so the next
+        // confirmed response can re-warm the mark through applyUsage.
+        const stored = yield* db
+          .select()
+          .from(ProviderCacheMarkTable)
+          .where(eq(ProviderCacheMarkTable.provider_id, provider))
+          .get()
+          .pipe(Effect.orDie)
+        expect(stored?.mark_index).toBe(3)
+        expect(stored?.last_used_at).toBe(aged)
+      }),
+    ))
+
+  test("no ledger row stays 0 regardless of the idle window", () =>
+    run(
+      Effect.gen(function* () {
+        const db = yield* migratedDb
+        expect(yield* CacheMark.markIndexFor(db, "prov/unknown", messages, { idleMs: 1 })).toBe(0)
+      }),
+    ))
+})
