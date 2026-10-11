@@ -1060,7 +1060,7 @@ const layer = Layer.effect(
       const message = yield* createUserMessage(input)
       yield* sessions.touch(input.sessionID)
       // Log-only intent signal (issue #25): never fails or delays the prompt.
-      yield* intentTracker.track({ sessionID: input.sessionID, parts: message.parts }).pipe(
+      yield* intentTracker.track({ sessionID: input.sessionID, parts: message.parts, messageID: message.info.id }).pipe(
         Effect.catch(() => Effect.void),
       )
 
@@ -1261,12 +1261,27 @@ const layer = Layer.effect(
 
             yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages: msgs })
 
+            // Issue #25 B3 (cache-breaking, flag off by default): the user
+            // message that opened the active intent via a confirmed switch is
+            // the compaction boundary for the closed intent's segment.
+            const intentSwitch = yield* intentTracker.activeSwitchMessage({ sessionID }).pipe(
+              Effect.catch(() => Effect.succeed(undefined)),
+            )
+
             const [skills, env, instructions, mcpInstructions, modelMsgs] = yield* Effect.all([
               sys.skills(agent),
               sys.environment(model),
               instruction.system().pipe(Effect.orDie),
               sys.mcp(agent, session.permission),
-              MessageV2.toModelMessagesEffect([...MemoryContext.projectV1(msgs, { sessionID })], model),
+              MessageV2.toModelMessagesEffect(
+                [
+                  ...MemoryContext.projectV1(msgs, {
+                    sessionID,
+                    ...(intentSwitch === undefined ? {} : { intentSwitchMessageID: intentSwitch }),
+                  }),
+                ],
+                model,
+              ),
             ])
             const system = [
               ...env,
