@@ -1,9 +1,19 @@
 export * as MemoryContext from "./memory-context"
 
+import fs from "fs/promises"
+import path from "path"
 import { Flag } from "../flag/flag"
+import { Global } from "../global"
 import { PII } from "./pii"
 import { SessionMessage } from "./message"
 import { SessionV1 } from "../v1/session"
+
+// Debug projection stats go to the server log file, never to stdout: the
+// server's stdout is inherited by the TUI/terminal client, so console.log
+// here leaks `[mem-context] ...` lines into the user's view.
+const debugLog = (line: string) => {
+  fs.appendFile(path.join(Global.Path.log, "memory-context.log"), line + "\n").catch(() => {})
+}
 
 export type Kind = "bash" | "url" | "artifact" | "generic"
 
@@ -260,7 +270,7 @@ export const project = (
   })
 
   if (compacted > 0 && Flag.OPENCODE_MEMORY_CONTEXT_DEBUG)
-    console.log(
+    debugLog(
       `[mem-context] session=${options.sessionID ?? "?"} compacted=${compacted} first_delivery=${firstDelivery} protected_from=${protectedFrom} intent_cut=${cutIndex >= 0} mark=${markFloor}`,
     )
   return projected
@@ -343,7 +353,7 @@ export const projectV1 = (
   })
 
   if (compacted > 0 && Flag.OPENCODE_MEMORY_CONTEXT_DEBUG)
-    console.log(
+    debugLog(
       `[mem-context] session=${options.sessionID ?? "?"} compacted=${compacted} first_delivery=${firstDelivery} protected_from=${protectedFrom} intent_cut=${cutIndex >= 0} mark=${markFloor}`,
     )
   return projected
