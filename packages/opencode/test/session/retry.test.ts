@@ -427,6 +427,114 @@ describe("session.retry.retryable", () => {
   })
 })
 
+// Issue #39 п.1: Esc (manual abort) must never be retried, transport failures
+// must be. The classification runs through the same MessageV2.fromError →
+// SessionRetry.retryable path the processor's Effect.retry schedule uses.
+describe("session.retry Esc-vs-network (issue #39)", () => {
+  test("manual Esc abort is never classified as retryable", () => {
+    const abort = MessageV2.fromError(new DOMException("Aborted", "AbortError"), {
+      providerID,
+      aborted: true,
+    })
+    expect(abort.name).toBe("MessageAbortedError")
+    expect(SessionRetry.retryable(abort, retryProvider)).toBeUndefined()
+  })
+
+  test("transport and timeout failures stay classified as retryable", () => {
+    const failures: unknown[] = [
+      new TypeError("fetch failed"),
+      Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }),
+      new ProviderError.HeaderTimeoutError(5000),
+      new APICallError({
+        message: "fetch failed",
+        url: "https://api.example.com/v1/chat/completions",
+        requestBodyValues: {},
+        isRetryable: false,
+        responseHeaders: {},
+      }),
+    ]
+    for (const failure of failures) {
+      const parsed = MessageV2.fromError(failure, { providerID, aborted: false })
+      expect(SessionRetry.retryable(parsed, retryProvider)).toBeDefined()
+    }
+  })
+
+  test("abort context decides whether a mid-stream decompression failure retries", () => {
+    const zlib = Object.assign(new Error("unexpected end of file"), { code: "ZlibError" })
+    const duringEsc = MessageV2.fromError(zlib, { providerID, aborted: true })
+    expect(duringEsc.name).toBe("MessageAbortedError")
+    expect(SessionRetry.retryable(duringEsc, retryProvider)).toBeUndefined()
+
+    const duringNetwork = MessageV2.fromError(zlib, { providerID, aborted: false })
+    expect(SessionRetry.retryable(duringNetwork, retryProvider)).toBeDefined()
+  })
+
+  it.instance("policy issues no retry attempt for an Esc abort", () =>
+    Effect.gen(function* () {
+      const attempts: number[] = []
+      const step = yield* Schedule.toStepWithMetadata(
+        SessionRetry.policy({
+          provider: retryProvider,
+          parse: (e) => MessageV2.fromError(e, { providerID, aborted: true }),
+          set: (info) =>
+            Effect.sync(() => {
+              attempts.push(info.attempt)
+            }),
+        }),
+      )
+
+      const abort = new DOMException("Aborted", "AbortError")
+      yield* Effect.ignore(step(abort))
+      yield* Effect.ignore(step(abort))
+
+      expect(attempts).toStrictEqual([])
+    }),
+  )
+
+  it.instance("policy schedules retries for a network failure", () =>
+    Effect.gen(function* () {
+      const attempts: { attempt: number; message: string }[] = []
+      const step = yield* Schedule.toStepWithMetadata(
+        SessionRetry.policy({
+          provider: retryProvider,
+          parse: (e) => MessageV2.fromError(e, { providerID, aborted: false }),
+          set: (info) =>
+            Effect.sync(() => {
+              attempts.push({ attempt: info.attempt, message: info.message })
+            }),
+        }),
+      )
+
+      // retry-after-ms pins the schedule delay at zero so the test stays fast;
+      // the exponential backoff itself is asserted below.
+      const failure = new APICallError({
+        message: "fetch failed",
+        url: "https://api.example.com/v1/chat/completions",
+        requestBodyValues: {},
+        isRetryable: false,
+        responseHeaders: { "retry-after-ms": "0" },
+      })
+      yield* Effect.forEach(Array.from({ length: SessionRetry.RETRY_MAX_RETRIES + 1 }), () =>
+        Effect.ignore(step(failure)),
+      )
+
+      expect(attempts.map((entry) => entry.attempt)).toStrictEqual([1, 2, 3, 4, 5])
+      expect(new Set(attempts.map((entry) => entry.message))).toEqual(new Set(["fetch failed"]))
+    }),
+  )
+
+  test("network failures back off exponentially without response headers", () => {
+    const waits = [1, 2, 3, 4, 5].map((attempt) => SessionRetry.delay(attempt, undefined, 0))
+    expect(waits).toStrictEqual([
+      SessionRetry.RETRY_INITIAL_DELAY,
+      SessionRetry.RETRY_INITIAL_DELAY * SessionRetry.RETRY_BACKOFF_FACTOR,
+      SessionRetry.RETRY_INITIAL_DELAY * SessionRetry.RETRY_BACKOFF_FACTOR ** 2,
+      SessionRetry.RETRY_INITIAL_DELAY * SessionRetry.RETRY_BACKOFF_FACTOR ** 3,
+      SessionRetry.RETRY_MAX_DELAY_NO_HEADERS,
+    ])
+  })
+})
+
 describe("session.message-v2.fromError", () => {
   test.concurrent(
     "converts ECONNRESET socket errors to retryable APIError",
