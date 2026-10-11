@@ -29,6 +29,8 @@ import { SessionCompaction } from "../compaction"
 import { SessionEvent } from "../event"
 import { SessionHistory } from "../history"
 import { MemoryContext } from "../memory-context"
+import { CacheMark } from "../cache-mark"
+import { Flag } from "../../flag/flag"
 import { SessionInput } from "../input"
 import { SessionSchema } from "../schema"
 import { SessionStore } from "../store"
@@ -199,10 +201,21 @@ const layer = Layer.effect(
         initialized ?? (yield* SessionContextEpoch.prepare(db, events, loadSystemContext(agent), session.id))
       const model = yield* models.resolve(session)
       const entries = yield* SessionHistory.entriesForRunner(db, session.id, system.baselineSeq)
-      const context = MemoryContext.project(
-        entries.map((entry) => entry.message),
-        { sessionID: session.id },
-      )
+      const rawMessages = entries.map((entry) => entry.message)
+      const cacheMarkKey = `${model.provider}/${model.id}`
+      // Issue #29 (cache-mark ledger): floor the projection at the
+      // provider-confirmed cache boundary; any ledger failure fails safe to a
+      // verbatim send.
+      const cacheMarkOn = Flag.OPENCODE_MEMORY_CONTEXT && Flag.OPENCODE_MEMORY_CACHE_MARK
+      const context = cacheMarkOn
+        ? yield* Effect.gen(function* () {
+            const mark = yield* CacheMark.markIndexFor(db, cacheMarkKey, rawMessages).pipe(
+              Effect.catchDefect(() => Effect.succeed(undefined)),
+            )
+            if (mark === undefined) return rawMessages
+            return MemoryContext.project(rawMessages, { sessionID: session.id, markIndex: mark })
+          }).pipe(Effect.catchDefect(() => Effect.succeed(rawMessages)))
+        : MemoryContext.project(rawMessages, { sessionID: session.id })
       const isLastStep = agent.info?.steps !== undefined && currentStep >= agent.info.steps
       const toolMaterialization = isLastStep ? undefined : yield* tools.materialize(agent.info?.permissions)
       const promptCacheKey = /^ses_[0-9a-f]{64}$/.test(session.id) ? session.id.slice(4) : session.id
@@ -347,6 +360,21 @@ const layer = Layer.effect(
                 files,
               }),
             )
+            // Issue #29: confirm the cache mark post-factum from the response
+            // usage; ledger failures never break the turn.
+            if (cacheMarkOn)
+              yield* CacheMark.recordUsage(
+                db,
+                cacheMarkKey,
+                {
+                  input: stepSettlement.tokens.input,
+                  output: stepSettlement.tokens.output,
+                  cacheRead: stepSettlement.tokens.cache.read,
+                  cacheWrite: stepSettlement.tokens.cache.write,
+                  sentCount: context.length,
+                },
+                rawMessages,
+              ).pipe(Effect.catchDefect(() => Effect.void))
           }
           if (publisher.hasProviderError())
             yield* withPublication(publisher.failUnsettledTools("Tool execution interrupted"))

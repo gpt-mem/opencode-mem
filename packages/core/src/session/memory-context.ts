@@ -29,6 +29,12 @@ export type Options = {
   // append-only jump instead of sliding one user turn at a time. Falls back to
   // the normal boundary when the message is not in the list.
   readonly intentSwitchMessageID?: string
+  // Issue #29: provider cache-mark ledger floor. Messages below this index
+  // were confirmed cached by the provider (usage.cache_read post-factum), so
+  // they stay byte-identical even when the boundary/first-delivery rules
+  // would otherwise compact them — mutating them would invalidate the
+  // provider's prefix cache. 0 (default) = no ledger constraint.
+  readonly markIndex?: number
 }
 
 const DEFAULT_MIN_OUTPUT_CHARS = 2000
@@ -171,10 +177,14 @@ export const project = (
       : messages.findIndex((message) => message.id === options.intentSwitchMessageID)
   const protectedFrom = cutIndex > boundary ? cutIndex : boundary
   if (protectedFrom <= 0) return messages
+  const markFloor = Math.max(0, options.markIndex ?? 0)
 
   let compacted = 0
   const projected = messages.map((message, index) => {
     if (index >= protectedFrom) return message
+    // Ledger floor (issue #29): below the confirmed cache mark the bytes must
+    // stay identical or the provider's prefix cache dies.
+    if (index < markFloor) return message
     if (message.type === "shell") {
       // Without a callID the original cannot be retrieved later, so keep the output intact.
       if (message.output.length < minChars || message.callID === "") return message
@@ -241,7 +251,7 @@ export const project = (
 
   if (compacted > 0 && Flag.OPENCODE_MEMORY_CONTEXT_DEBUG)
     console.log(
-      `[mem-context] session=${options.sessionID ?? "?"} compacted=${compacted} first_delivery=${firstDelivery} protected_from=${protectedFrom} intent_cut=${cutIndex >= 0}`,
+      `[mem-context] session=${options.sessionID ?? "?"} compacted=${compacted} first_delivery=${firstDelivery} protected_from=${protectedFrom} intent_cut=${cutIndex >= 0} mark=${markFloor}`,
     )
   return projected
 }
@@ -278,10 +288,13 @@ export const projectV1 = (
       : messages.findIndex((message) => message.info.id === options.intentSwitchMessageID)
   const protectedFrom = cutIndex > boundary ? cutIndex : boundary
   if (protectedFrom <= 0) return messages
+  const markFloor = Math.max(0, options.markIndex ?? 0)
 
   let compacted = 0
   const projected = messages.map((message, index) => {
     if (index >= protectedFrom) return message
+    // Ledger floor (issue #29): same cache-mark protection as project().
+    if (index < markFloor) return message
     if (message.info.role !== "assistant") return message
     let changed = false
     const parts = message.parts.map((part) => {
@@ -321,7 +334,7 @@ export const projectV1 = (
 
   if (compacted > 0 && Flag.OPENCODE_MEMORY_CONTEXT_DEBUG)
     console.log(
-      `[mem-context] session=${options.sessionID ?? "?"} compacted=${compacted} first_delivery=${firstDelivery} protected_from=${protectedFrom} intent_cut=${cutIndex >= 0}`,
+      `[mem-context] session=${options.sessionID ?? "?"} compacted=${compacted} first_delivery=${firstDelivery} protected_from=${protectedFrom} intent_cut=${cutIndex >= 0} mark=${markFloor}`,
     )
   return projected
 }
