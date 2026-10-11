@@ -22,6 +22,13 @@ export type Options = {
   readonly firstDelivery?: boolean
   readonly firstDeliveryMinChars?: number
   readonly firstDeliveryTools?: string
+  // Issue #25 B3 (cache-breaking, opt-in): ID of the user message that opened
+  // the currently active intent via a confirmed switch. When set, that message
+  // and everything after it stays verbatim while every eligible tool output
+  // before it is compacted — the old intent's segment is finalized in one
+  // append-only jump instead of sliding one user turn at a time. Falls back to
+  // the normal boundary when the message is not in the list.
+  readonly intentSwitchMessageID?: string
 }
 
 const DEFAULT_MIN_OUTPUT_CHARS = 2000
@@ -151,9 +158,18 @@ export const project = (
   // First-delivery mode (issue #23) has no protected window: eligibility is a
   // pure per-message function, so the projected prefix is append-only and the
   // provider prefix cache sees zero invalidations.
-  const protectedFrom = firstDelivery
-    ? Number.POSITIVE_INFINITY
-    : boundaryFor(userIndices, assistantIndices, options)
+  // Intent cut (issue #25 B3, cache-breaking): when a confirmed switch opened
+  // the active intent, finalize the closed intent's segment in one jump — the
+  // switch message and everything after it stay verbatim, everything eligible
+  // before it is compacted. max() keeps the cut subsumed by the sliding window
+  // once later user turns move the boundary past the switch point, so the
+  // projected prefix stays monotone.
+  const boundary = firstDelivery ? Number.POSITIVE_INFINITY : boundaryFor(userIndices, assistantIndices, options)
+  const cutIndex =
+    firstDelivery || options.intentSwitchMessageID === undefined
+      ? -1
+      : messages.findIndex((message) => message.id === options.intentSwitchMessageID)
+  const protectedFrom = cutIndex > boundary ? cutIndex : boundary
   if (protectedFrom <= 0) return messages
 
   let compacted = 0
@@ -225,7 +241,7 @@ export const project = (
 
   if (compacted > 0 && Flag.OPENCODE_MEMORY_CONTEXT_DEBUG)
     console.log(
-      `[mem-context] session=${options.sessionID ?? "?"} compacted=${compacted} first_delivery=${firstDelivery} protected_from=${protectedFrom}`,
+      `[mem-context] session=${options.sessionID ?? "?"} compacted=${compacted} first_delivery=${firstDelivery} protected_from=${protectedFrom} intent_cut=${cutIndex >= 0}`,
     )
   return projected
 }
@@ -252,9 +268,15 @@ export const projectV1 = (
     if (message.info.role === "assistant") assistantIndices.push(index)
   })
   if (!firstDelivery && userIndices.length === 0) return messages
-  const protectedFrom = firstDelivery
-    ? Number.POSITIVE_INFINITY
-    : boundaryFor(userIndices, assistantIndices, options)
+  // Same boundary rules as project(), including the intent cut (issue #25 B3):
+  // the switch message that opened the active intent protects itself and
+  // everything after it, while the closed intent's segment is compacted.
+  const boundary = firstDelivery ? Number.POSITIVE_INFINITY : boundaryFor(userIndices, assistantIndices, options)
+  const cutIndex =
+    firstDelivery || options.intentSwitchMessageID === undefined
+      ? -1
+      : messages.findIndex((message) => message.info.id === options.intentSwitchMessageID)
+  const protectedFrom = cutIndex > boundary ? cutIndex : boundary
   if (protectedFrom <= 0) return messages
 
   let compacted = 0
@@ -299,7 +321,7 @@ export const projectV1 = (
 
   if (compacted > 0 && Flag.OPENCODE_MEMORY_CONTEXT_DEBUG)
     console.log(
-      `[mem-context] session=${options.sessionID ?? "?"} compacted=${compacted} first_delivery=${firstDelivery} protected_from=${protectedFrom}`,
+      `[mem-context] session=${options.sessionID ?? "?"} compacted=${compacted} first_delivery=${firstDelivery} protected_from=${protectedFrom} intent_cut=${cutIndex >= 0}`,
     )
   return projected
 }
