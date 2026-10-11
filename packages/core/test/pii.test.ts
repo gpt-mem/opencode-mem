@@ -31,7 +31,7 @@ describe("PII.detect", () => {
   })
 
   test("finds API keys", () => {
-    const report = PII.detect('sk-proj-abcdef1234567890ABCDEF and ghp_abcdefghijklmnopqrstuv123456')
+    const report = PII.detect("sk-proj-abcdef1234567890ABCDEF and ghp_abcdefghijklmnopqrstuv123456")
     expect(report.counts.api_key).toBe(2)
   })
 
@@ -106,5 +106,64 @@ describe("PII.redact", () => {
     const result = PII.redact("run npm test and check packages/core/src/session/pii.ts")
     expect(result.text).toBe("run npm test and check packages/core/src/session/pii.ts")
     expect(result.redacted).toEqual([])
+  })
+})
+
+describe("PII.mask", () => {
+  test("masks emails and phones while redacting credentials", () => {
+    const masked = PII.mask("mail vova@example.com key sk-proj-abcdef1234567890ABCDEF call +7 916 123 45 67")
+    expect(masked).not.toContain("vova@example.com")
+    expect(masked).not.toContain("sk-proj-abcdef")
+    expect(masked).not.toContain("916 123 45 67")
+    expect(masked).toContain("[REDACTED:email]")
+    expect(masked).toContain("[REDACTED:api_key]")
+    expect(masked).toContain("[REDACTED:phone]")
+  })
+
+  test("keeps clean text unchanged", () => {
+    expect(PII.mask("run npm test")).toBe("run npm test")
+  })
+})
+
+describe("PII.scan", () => {
+  test("counts carriers and returns masked evidence lines", () => {
+    const scan = PII.scan("contact william.shekspier@example.com in docs/contacts.md\nclean line")
+    expect(scan.counts.email).toBe(1)
+    expect(scan.types).toEqual(["email"])
+    expect(scan.evidence.length).toBe(1)
+    expect(scan.evidence[0]).not.toContain("william.shekspier@example.com")
+    expect(scan.evidence[0]).toContain("[REDACTED:email]")
+    expect(scan.evidence[0]).toContain("docs/contacts.md")
+  })
+
+  test("counts an already-redacted placeholder as a carrier", () => {
+    const scan = PII.scan('command=curl -H "Authorization: [REDACTED:bearer]" https://api.example.com')
+    expect(scan.counts.api_key).toBe(1)
+    expect(scan.types).toEqual(["api_key"])
+    expect(scan.evidence[0]).toContain("[REDACTED:bearer]")
+  })
+
+  test("separates credit cards from phones", () => {
+    const scan = PII.scan("charged 4111 1111 1111 1111")
+    expect(scan.counts.credit_card).toBe(1)
+    expect(scan.counts.phone).toBe(0)
+    expect(scan.evidence[0]).toContain("[REDACTED:credit_card]")
+  })
+
+  test("bounds evidence and honours an explicit limit", () => {
+    const scan = PII.scan(
+      ["a".repeat(400) + " mail one@x.io", "b".repeat(400) + " mail two@y.io", "three@z.io"].join("\n"),
+    )
+    expect(scan.types).toEqual(["email"])
+    expect(scan.counts.email).toBe(3)
+    expect(scan.evidence.length).toBe(2)
+    expect(scan.evidence.every((line) => line.length <= 240)).toBe(true)
+    expect(PII.scan("mail one@x.io", { evidence: 0 }).evidence).toEqual([])
+  })
+
+  test("reports nothing for clean text", () => {
+    const scan = PII.scan("run npm test and check packages/core/src/session/pii.ts")
+    expect(scan.types).toEqual([])
+    expect(scan.evidence).toEqual([])
   })
 })

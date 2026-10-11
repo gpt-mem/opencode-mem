@@ -48,7 +48,7 @@ const PREVIEW_HEAD = 400
 const PREVIEW_TAIL = 200
 const SUMMARY_LIMIT = 200
 
-const MEMORY_TOOL_PATTERN = /(operational_memory|get_tool_call_|find_tool_calls|find_agent_artifact)/
+const MEMORY_TOOL_PATTERN = /(operational_memory|get_tool_call_|find_tool_calls|find_pii|find_agent_artifact)/
 
 const serializeContent = (content: SessionMessage.ToolStateCompleted["content"]) =>
   content

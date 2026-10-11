@@ -186,9 +186,12 @@ describe("MemoryContext.project", () => {
       user("u1"),
       assistant("a1", [completedTool({ id: "call_m", name: "search_operational_memory", content: [{ type: "text", text: big() }] })]),
       user("u2"),
+      assistant("a2", [completedTool({ id: "call_p", name: "find_pii", content: [{ type: "text", text: big() }] })]),
+      user("u3"),
     ]
     const projected = compact(messages)
     expect(toolText(projected[1]!)).toBe(big())
+    expect(toolText(projected[3]!)).toBe(big())
   })
 
   test("compacts large shell output", () => {
@@ -449,8 +452,11 @@ describe("MemoryContext.projectV1", () => {
       v1user("u1"),
       v1assistant("a1", [v1tool({ id: "call_m", tool: "get_tool_call_details", output: big() })]),
       v1user("u2"),
+      v1assistant("a2", [v1tool({ id: "call_p", tool: "find_pii", output: big() })]),
+      v1user("u3"),
     ]
     expect(v1toolText(compactV1(messages)[1]!)).toBe(big())
+    expect(v1toolText(compactV1(messages)[3]!)).toBe(big())
   })
 
   test("does not recompact already compacted V1 outputs", () => {
