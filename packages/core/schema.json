@@ -1,9 +1,9 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "7f2cb6dd-081f-4ad3-bc6b-3cc69002fca7",
+  "id": "dabad18c-cc8c-4265-a97b-34dbcca02666",
   "prevIds": [
-    "f14a9b18-8207-487e-a3d3-227e629ba9ad"
+    "7f2cb6dd-081f-4ad3-bc6b-3cc69002fca7"
   ],
   "ddl": [
     {
@@ -64,6 +64,10 @@
     },
     {
       "name": "part",
+      "entityType": "tables"
+    },
+    {
+      "name": "provider_cache_mark",
       "entityType": "tables"
     },
     {
@@ -1106,6 +1110,56 @@
       "autoincrement": false,
       "default": null,
       "generated": null,
+      "name": "provider_id",
+      "entityType": "columns",
+      "table": "provider_cache_mark"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "0",
+      "generated": null,
+      "name": "mark_tokens",
+      "entityType": "columns",
+      "table": "provider_cache_mark"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "0",
+      "generated": null,
+      "name": "mark_index",
+      "entityType": "columns",
+      "table": "provider_cache_mark"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "prefix_hash",
+      "entityType": "columns",
+      "table": "provider_cache_mark"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "last_used_at",
+      "entityType": "columns",
+      "table": "provider_cache_mark"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
       "name": "session_id",
       "entityType": "columns",
       "table": "session_context_epoch"
@@ -2070,6 +2124,15 @@
       "nameExplicit": false,
       "name": "part_pk",
       "table": "part",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "provider_id"
+      ],
+      "nameExplicit": false,
+      "name": "provider_cache_mark_pk",
+      "table": "provider_cache_mark",
       "entityType": "pks"
     },
     {

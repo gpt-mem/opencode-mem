@@ -118,4 +118,12 @@ export const Flag = {
   get OPENCODE_MEMORY_INTENT_CUT() {
     return truthy("OPENCODE_MEMORY_INTENT_CUT")
   },
+  // Issue #29: unified mask via the provider cache-mark ledger. Requires
+  // OPENCODE_MEMORY_CONTEXT. Off by default — on = projection reads the
+  // confirmed cache boundary per provider and only compresses the suffix
+  // above it; any ledger failure (no row, prefix hash mismatch) fails safe to
+  // a verbatim send.
+  get OPENCODE_MEMORY_CACHE_MARK() {
+    return truthy("OPENCODE_MEMORY_CACHE_MARK")
+  },
 }
