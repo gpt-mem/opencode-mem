@@ -5,12 +5,13 @@ import { IntentTable, IntentSignalTable, SessionTable } from "@opencode-ai/core/
 import { ProjectTable } from "@opencode-ai/core/project/sql"
 import { Project } from "@opencode-ai/core/project"
 import { AbsolutePath } from "@opencode-ai/core/schema"
-import { desc, eq } from "drizzle-orm"
+import { and, desc, eq } from "drizzle-orm"
 import { Effect } from "effect"
 import { SessionID } from "../../src/session/schema"
 import { IntentTracker } from "../../src/session/intent-tracker"
 import { disposeAllInstances } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
+import { scenarioS1, scenarioS2, scenarioS4, scenarioTruth } from "../fixture/intent-scenarios"
 
 afterEach(async () => {
   await disposeAllInstances()
@@ -89,6 +90,7 @@ afterEach(() => {
   delete process.env["OPENCODE_MEMORY_INTENT_REFRESH_EVERY"]
   delete process.env["OPENCODE_MEMORY_INTENT_ACT"]
   delete process.env["OPENCODE_MEMORY_INTENT_SWITCH_THRESHOLD"]
+  delete process.env["OPENCODE_MEMORY_INTENT_SWITCH_RECENT_THRESHOLD"]
   delete process.env["OPENCODE_MEMORY_INTENT_CUT"]
 })
 
@@ -333,7 +335,10 @@ describe("IntentTracker", () => {
   it.live("act on: threshold env override forces and blocks switches", () =>
     Effect.gen(function* () {
       process.env["OPENCODE_MEMORY_INTENT_ACT"] = "1"
+      // Issue #37: marker-less switches require BOTH cosine floors, so forcing
+      // a switch on a similar continuation needs both thresholds raised.
       process.env["OPENCODE_MEMORY_INTENT_SWITCH_THRESHOLD"] = "0.99"
+      process.env["OPENCODE_MEMORY_INTENT_SWITCH_RECENT_THRESHOLD"] = "0.99"
       const tracker = yield* IntentTracker.Service
       yield* seed
       yield* reset
@@ -342,8 +347,8 @@ describe("IntentTracker", () => {
         sessionID,
         parts: [textPart("the login bug in authentication happens on token refresh")] as never,
       })
-      // Turn 2 continues (young-intent guard); turn 3 with threshold 0.99
-      // makes even a high-cosine continuation read as a switch.
+      // Turn 2 continues (young-intent guard); turn 3 with both thresholds at
+      // 0.99 makes even a high-cosine continuation read as a switch.
       yield* tracker.track({
         sessionID,
         parts: [textPart("the authentication login bug also affects the oauth token rotation path")] as never,
@@ -353,6 +358,7 @@ describe("IntentTracker", () => {
       expect(forced.some((row) => row.close_reason === "switch")).toBe(true)
 
       delete process.env["OPENCODE_MEMORY_INTENT_SWITCH_THRESHOLD"]
+      delete process.env["OPENCODE_MEMORY_INTENT_SWITCH_RECENT_THRESHOLD"]
       process.env["OPENCODE_MEMORY_INTENT_SWITCH_THRESHOLD"] = "0"
       yield* reset
       yield* tracker.track({ sessionID, parts: [textPart("fix the login bug in the authentication module")] as never })
@@ -427,6 +433,111 @@ describe("IntentTracker", () => {
       const active = rows.find((row) => row.status === "active")
       const meta = active?.meta as { switch_message_id?: string }
       expect(meta.switch_message_id).toBe("msg_t3")
+    }),
+  )
+
+  it.live("act on: explicit switch marker fires even when text resembles recent turns", () =>
+    Effect.gen(function* () {
+      process.env["OPENCODE_MEMORY_INTENT_ACT"] = "1"
+      const tracker = yield* IntentTracker.Service
+      yield* seed
+      yield* reset
+      for (const text of [
+        "Add a one-line comment above the validateConfig function.",
+        "Add a one-line comment above the loadUser function.",
+        "Add a one-line comment above the calculateTotal function. New task, completely unrelated: count the lines in data.csv",
+      ]) {
+        yield* tracker.track({ sessionID, parts: [textPart(text)] as never })
+      }
+      const rows = yield* intents
+      expect(rows.length).toBe(2)
+      expect(rows.some((row) => row.close_reason === "switch")).toBe(true)
+      const sigs = yield* signals
+      expect(sigs[2].acted).toBe(1)
+    }),
+  )
+
+  it.live("act on: russian switch marker fires", () =>
+    Effect.gen(function* () {
+      process.env["OPENCODE_MEMORY_INTENT_ACT"] = "1"
+      const tracker = yield* IntentTracker.Service
+      yield* seed
+      yield* reset
+      for (const text of [
+        "почини баг авторизации в auth.ts при обновлении токена",
+        "добавь комментарий над функцией validateConfig",
+        "новая задача: посчитай выручку по регионам из sales.csv",
+      ]) {
+        yield* tracker.track({ sessionID, parts: [textPart(text)] as never })
+      }
+      const rows = yield* intents
+      expect(rows.length).toBe(2)
+      expect(rows.some((row) => row.close_reason === "switch")).toBe(true)
+    }),
+  )
+
+  it.live("act on: marker respects the cool-down after a switch", () =>
+    Effect.gen(function* () {
+      process.env["OPENCODE_MEMORY_INTENT_ACT"] = "1"
+      const tracker = yield* IntentTracker.Service
+      yield* seed
+      yield* reset
+      for (const text of [
+        "fix the login bug in the authentication module",
+        "the login bug in authentication happens on token refresh",
+        "now write a python script that scrapes weather data from public APIs",
+        "New task, unrelated: count the lines in README.md",
+      ]) {
+        yield* tracker.track({ sessionID, parts: [textPart(text)] as never })
+      }
+      // Turn 4 carries a marker but the cool-down from the turn-3 switch blocks it.
+      const sigs = yield* signals
+      expect(sigs.length).toBe(4)
+      expect(sigs[3].acted).toBe(0)
+      const rows = yield* intents
+      expect(rows.length).toBe(2)
+    }),
+  )
+
+  it.live("labeled scenarios S1/S2/S4: switches fire exactly on ground-truth turns (issue #37)", () =>
+    Effect.gen(function* () {
+      process.env["OPENCODE_MEMORY_INTENT_ACT"] = "1"
+      const { db } = yield* Database.Service
+      const tracker = yield* IntentTracker.Service
+      yield* seed
+      const scenarios: { id: string; turns: readonly string[]; expected: readonly number[] }[] = [
+        { id: "ses_v1_intent_scenario_s1", turns: scenarioS1, expected: scenarioTruth.s1 },
+        { id: "ses_v1_intent_scenario_s2", turns: scenarioS2, expected: scenarioTruth.s2 },
+        { id: "ses_v1_intent_scenario_s4", turns: scenarioS4, expected: scenarioTruth.s4 },
+      ]
+      for (const scenario of scenarios) {
+        const sid = SessionID.make(scenario.id)
+        yield* db
+          .insert(SessionTable)
+          .values({
+            id: sid,
+            project_id: Project.ID.global,
+            slug: scenario.id,
+            directory: AbsolutePath.make("/project"),
+            title: "test",
+            version: "0.0.0",
+          })
+          .onConflictDoNothing()
+          .run()
+          .pipe(Effect.orDie)
+        yield* db.delete(IntentSignalTable).where(eq(IntentSignalTable.session_id, sid)).run().pipe(Effect.orDie)
+        yield* db.delete(IntentTable).where(eq(IntentTable.session_id, sid)).run().pipe(Effect.orDie)
+        for (const turn of scenario.turns) {
+          yield* tracker.track({ sessionID: sid, parts: [textPart(turn)] as never })
+        }
+        const fired = yield* db
+          .select({ turn: IntentSignalTable.turn_index })
+          .from(IntentSignalTable)
+          .where(and(eq(IntentSignalTable.session_id, sid), eq(IntentSignalTable.acted, 1)))
+          .all()
+          .pipe(Effect.orDie)
+        expect(fired.map((row) => row.turn)).toEqual([...scenario.expected])
+      }
     }),
   )
 })

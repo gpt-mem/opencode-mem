@@ -23,6 +23,17 @@ const DEFAULT_REFRESH_EVERY = 5
 // switches scored cosine 0.23-0.41 against sticky summaries while
 // continuations scored 0.53-1.00 — threshold 0.475 sits in the clean gap.
 const DEFAULT_SWITCH_THRESHOLD = 0.475
+// Issue #37: cosine-to-summary fails on short formulaic imperatives — on the
+// S1/S2/S4 scenario set (44 labeled signals) continuation cosines (0.011-0.313)
+// fully overlap switch cosines (0.042-0.079), so a single cosine threshold
+// cannot hold precision. The fix is precision-first and two-tier:
+//   1. explicit switch markers (user says the topic changes) act on their own;
+//   2. marker-less switches need BOTH cosine-to-summary AND cosine-to-recent
+//      session texts below their floors. The recent floor (0.07) is the max
+//      recent-cosine observed over the labeled continuations — the conservative
+//      edge of the data, so the marker-less tier may miss fuzzy switches
+//      (acceptable: missing a cut is cache-safe, a false cut is not).
+const DEFAULT_SWITCH_RECENT_THRESHOLD = 0.07
 // Guards keep precision ≥0.9 within the FP budget (PLAN.md day 2): an intent
 // must be worth cutting (turns OR tokens), a switch signal needs enough text
 // to be evidence, and switches cannot flap (cool-down after a switch).
@@ -30,6 +41,14 @@ const MIN_INTENT_TURNS = 2
 const MIN_INTENT_TOKENS = 2000
 const COOLDOWN_TURNS = 2
 const MIN_SWITCH_TEXT_CHARS = 30
+
+// Explicit switch markers (issue #37 tier 1). On the labeled scenario set all
+// three true switches carry one ("New task, completely unrelated domain:",
+// "Let's go back to the first task") and none of the 41 continuations does.
+// Markers are discourse-level evidence, so they bypass the cosine floors and
+// the length guard but still respect the young-intent and cool-down guards.
+const SWITCH_MARKER_RE =
+  /new (task|topic)\b|\bunrelated\b|\bswitch(ing)? (topics?|tasks?|to (another|a different|the))\b|let'?s (go|get) back\b|back to the (first|previous|earlier|original)\b|новая (задача|тема|запрос)\b|другая (тема|задача)\b|к другой (теме|задаче)\b|сменим тему\b|отдельная (задача|тема|вопрос)\b|отдельный вопрос\b|не связан(а|о|ный)?\s+с\b|верн(ём|ем|и)ся\b/i
 
 // 35-55% of real user turns are short continuations (REAL-DATA-ANALYSIS §B5):
 // markers like "ок/да/продолжай", pure punctuation, or additive "еще/+" prefixes.
@@ -78,24 +97,33 @@ const resolveSwitchThreshold = () => {
   return Number.isFinite(value) && value >= 0 && value <= 1 ? value : DEFAULT_SWITCH_THRESHOLD
 }
 
+const resolveSwitchRecentThreshold = () => {
+  const value = Number(Flag.OPENCODE_MEMORY_INTENT_SWITCH_RECENT_THRESHOLD)
+  return Number.isFinite(value) && value >= 0 && value <= 1 ? value : DEFAULT_SWITCH_RECENT_THRESHOLD
+}
+
 // Pure hysteresis decision: whether this turn confirms an intent switch.
-// Order matters — cheap text guards first, then the cosine threshold, then
-// the guards that keep precision high (young intent, switch flapping).
+// Order matters — cheap text guards first, then the marker fast path, then
+// the dual cosine floors, then the guards that keep precision high (young
+// intent, switch flapping).
 const decideSwitch = (input: {
   readonly text: string
   readonly score: number
+  readonly recentScore: number
+  readonly marker: boolean
   readonly turnCount: number
   readonly tokenCount: number
   readonly turnIndex: number
   readonly lastSwitchTurn: number | undefined
   readonly threshold: number
+  readonly recentThreshold: number
 }): boolean => {
   const trimmed = input.text.trim()
   if (CONTINUATION_PUNCT_RE.test(trimmed)) return false
   if (CONTINUATION_MARKER_RE.test(trimmed)) return false
   if (ADDITIVE_PREFIX_RE.test(trimmed)) return false
-  if (trimmed.length < MIN_SWITCH_TEXT_CHARS) return false
-  if (input.score >= input.threshold) return false
+  if (!input.marker && trimmed.length < MIN_SWITCH_TEXT_CHARS) return false
+  if (!input.marker && !(input.score < input.threshold && input.recentScore < input.recentThreshold)) return false
   if (input.turnCount < MIN_INTENT_TURNS && input.tokenCount < MIN_INTENT_TOKENS) return false
   if (input.lastSwitchTurn !== undefined && input.turnIndex - input.lastSwitchTurn < COOLDOWN_TURNS)
     return false
@@ -181,6 +209,14 @@ const layer = Layer.effect(
       }
 
       const score = cosine(ngrams(active.summary), ngrams(text))
+      const marker = SWITCH_MARKER_RE.test(text.trim())
+      const meta = (active.meta ?? {}) as { recent_texts?: string[] }
+      // Issue #37 tier 2: cosine to the most similar recent session text of the
+      // active intent. prior texts only — the current turn is not yet in meta.
+      const priorRecent = meta.recent_texts ?? []
+      const recentScore = priorRecent.length
+        ? Math.max(...priorRecent.map((recent) => cosine(ngrams(recent), ngrams(text))))
+        : 1
 
       // Day-2 act mode (issue #25): on a confirmed switch the old intent is
       // closed and a new child intent takes over. Off (default) keeps the
@@ -196,11 +232,14 @@ const layer = Layer.effect(
         const switched = decideSwitch({
           text,
           score,
+          recentScore,
+          marker,
           turnCount: active.turn_count,
           tokenCount: active.token_count,
           turnIndex,
           lastSwitchTurn: lastSwitch?.turn ?? undefined,
           threshold: resolveSwitchThreshold(),
+          recentThreshold: resolveSwitchRecentThreshold(),
         })
         if (switched) {
           const now2 = Date.now()
@@ -241,6 +280,8 @@ const layer = Layer.effect(
               session: input.sessionID,
               turn: turnIndex,
               cosine: score.toFixed(3),
+              recent: recentScore.toFixed(3),
+              marker,
               switched: true,
               closed: active.id,
             })
@@ -254,8 +295,7 @@ const layer = Layer.effect(
         .run()
         .pipe(Effect.orDie)
 
-      const meta = (active.meta ?? {}) as { recent_texts?: string[] }
-      const recent = [...(meta.recent_texts ?? []), text.slice(0, SUMMARY_TEXT_CHARS)].slice(-RECENT_TEXTS)
+      const recent = [...priorRecent, text.slice(0, SUMMARY_TEXT_CHARS)].slice(-RECENT_TEXTS)
       const turnCount = active.turn_count + 1
       const refreshEvery = Number(Flag.OPENCODE_MEMORY_INTENT_REFRESH_EVERY ?? DEFAULT_REFRESH_EVERY)
       const refreshed = turnCount % refreshEvery === 0
@@ -280,6 +320,8 @@ const layer = Layer.effect(
           session: input.sessionID,
           turn: turnIndex,
           cosine: score.toFixed(3),
+          recent: recentScore.toFixed(3),
+          marker,
           intent: active.id,
           refreshed,
         })
