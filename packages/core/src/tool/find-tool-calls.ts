@@ -36,7 +36,9 @@ export const Input = Schema.Struct({
     }),
   ),
   limit: Schema.optional(
-    Schema.Number.annotate({ description: `Maximum results to return, most recent first (default ${DEFAULT_LIMIT}, max ${MAX_LIMIT})` }),
+    Schema.Number.annotate({
+      description: `Maximum results to return, most recent first (default ${DEFAULT_LIMIT}, max ${MAX_LIMIT})`,
+    }),
   ),
 })
 
@@ -78,7 +80,9 @@ const inputSummary = (input: unknown) => {
 
 const contentText = (content: readonly SessionMessage.ToolStateCompleted["content"][number][]) =>
   content
-    .map((part) => (part.type === "text" ? part.text : `[${part.mime}${part.name === undefined ? "" : `: ${part.name}`}]`))
+    .map((part) =>
+      part.type === "text" ? part.text : `[${part.mime}${part.name === undefined ? "" : `: ${part.name}`}]`,
+    )
     .join("\n")
 
 export type Candidate = {
@@ -93,19 +97,24 @@ export type Candidate = {
   readonly haystack: string
 }
 
-const toolCandidates = (message: SessionMessage.Assistant, seq: number): readonly Candidate[] =>
+const toolCandidates = (
+  message: SessionMessage.Assistant,
+  seq: number,
+  includeMemoryTools = false,
+): readonly Candidate[] =>
   message.content.flatMap((item) => {
     if (item.type !== "tool") return []
     // Self-indexing guard: memory tools are how this index is queried, so
     // indexing them back would make every search a new match (issue #34).
-    if (MemoryTools.names.has(item.name)) return []
+    // get_tool_call_overview opts in (includeMemoryTools) so the inventory
+    // still counts them and never reads as data loss (issue #48).
+    if (!includeMemoryTools && MemoryTools.names.has(item.name)) return []
     const state = item.state
     const input = inputSummary(state.input)
     // haystack stays raw: it is internal (never returned to the model) so the
     // agent can still regex-match original content; all model-visible fields
     // are redacted.
-    const raw =
-      state.status === "completed" || state.status === "error" ? contentText(state.content) : undefined
+    const raw = state.status === "completed" || state.status === "error" ? contentText(state.content) : undefined
     const preview = raw === undefined ? undefined : bound(PII.redact(raw).text, PREVIEW_CHARS)
     const error = state.status === "error" ? bound(PII.redact(state.error.message).text, PREVIEW_CHARS) : undefined
     return [
@@ -142,6 +151,7 @@ const shellCandidate = (message: SessionMessage.Shell, seq: number): Candidate =
 export const collectCandidates = (
   db: Database.Interface["db"],
   sessionID: SessionSchema.ID,
+  options?: { readonly includeMemoryTools?: boolean },
 ): Effect.Effect<readonly Candidate[]> =>
   Effect.gen(function* () {
     const rows = yield* db
@@ -158,7 +168,8 @@ export const collectCandidates = (
       )
       if (!message) continue
       if (message.type === "shell") candidates.push(shellCandidate(message, row.seq))
-      else if (message.type === "assistant") candidates.push(...toolCandidates(message, row.seq))
+      else if (message.type === "assistant")
+        candidates.push(...toolCandidates(message, row.seq, options?.includeMemoryTools ?? false))
     }
     return candidates
   })
@@ -176,7 +187,9 @@ const layer = Layer.effectDiscard(
             "Search tool calls in this session by tool name, status or pattern. " +
             "Returns compact entries (call_id, status, input, preview) so you can locate a call and then load its full " +
             "output with get_tool_call_details(call_id). Compacted [mem:compacted] results are searchable here because " +
-            "the originals live in session history.",
+            "the originals live in session history. Memory-tool calls are never returned here " +
+            "(a query would match its own earlier searches, issue #34); they are counted in " +
+            "get_tool_call_overview and load by call_id (issue #48).",
           input: Input,
           output: Output,
           toModelOutput: ({ output }) => [{ type: "text", text: toModelOutput(output) }],

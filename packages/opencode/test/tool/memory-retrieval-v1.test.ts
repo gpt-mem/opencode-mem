@@ -98,6 +98,31 @@ const seed = Effect.gen(function* () {
     .pipe(Effect.orDie)
 })
 
+const seedMemoryParts = Effect.gen(function* () {
+  const { db } = yield* Database.Service
+  yield* db
+    .insert(MessageTable)
+    .values(
+      ["call_find", "call_overview"].map((id) => ({
+        id: MessageID.make(`msg_${id}`),
+        session_id: sessionID,
+        time_created: 0,
+        data: { role: "assistant" as const, agent: "build", time: { created: 0 } },
+      })),
+    )
+    .onConflictDoNothing()
+    .run()
+    .pipe(Effect.orDie)
+  yield* db
+    .insert(PartTable)
+    .values([
+      toolPart({ id: "call_find", tool: "find_tool_calls", output: "[]", input: { query: "secret-pattern" } }),
+      toolPart({ id: "call_overview", tool: "get_tool_call_overview", output: "{}", input: {} }),
+    ])
+    .run()
+    .pipe(Effect.orDie)
+})
+
 const ctx = (sid: SessionID): Tool.Context => ({
   sessionID: sid,
   messageID: MessageID.ascending(),
@@ -292,7 +317,9 @@ describe("tool.find-tool-calls (V1)", () => {
       expect(entry.preview).toContain("[REDACTED:api_key]")
       expect(entry.input).not.toContain("ghp_abcdefghij")
       expect(entry.input).toContain("[REDACTED:bearer]")
-      const bySecret = JSON.parse((yield* find.execute({ query: "sk-proj-abcdef1234567890ABCDEF" }, ctx(sessionID))).output)
+      const bySecret = JSON.parse(
+        (yield* find.execute({ query: "sk-proj-abcdef1234567890ABCDEF" }, ctx(sessionID))).output,
+      )
       expect(bySecret.matched).toBe(1)
       const details = yield* Tool.init(yield* GetToolCallDetailsTool)
       const full = JSON.parse((yield* details.execute({ call_id: "call_secret" }, ctx(sessionID))).output)
@@ -404,6 +431,29 @@ describe("tool.get-tool-call-overview (V1)", () => {
       const parsed = JSON.parse(result.output)
       expect(parsed.total).toBe(0)
       expect(parsed.groups.length).toBe(0)
+    }),
+  )
+
+  it.instance("counts memory-tool calls in total but never groups them (issue #48)", () =>
+    Effect.gen(function* () {
+      yield* seed
+      yield* seedMemoryParts
+      const def = yield* Tool.init(yield* GetToolCallOverviewTool)
+      const parsed = JSON.parse((yield* def.execute({}, ctx(sessionID))).output)
+      expect(parsed.total).toBe(5)
+      expect(parsed.groups_total).toBe(2)
+      expect(parsed.groups.map((group: { tool: string }) => group.tool)).toEqual(["bash", "read"])
+      expect(parsed.memory_tools).toEqual([
+        { tool: "find_tool_calls", count: 1 },
+        { tool: "get_tool_call_overview", count: 1 },
+      ])
+      const find = yield* Tool.init(yield* FindToolCallsTool)
+      const found = JSON.parse((yield* find.execute({ tool: "find_tool_calls" }, ctx(sessionID))).output)
+      expect(found.matched).toBe(0)
+      const byMemory = JSON.parse((yield* def.execute({ tool: "find_tool_calls" }, ctx(sessionID))).output)
+      expect(byMemory.total).toBe(1)
+      expect(byMemory.groups.length).toBe(0)
+      expect(byMemory.memory_tools).toEqual([{ tool: "find_tool_calls", count: 1 }])
     }),
   )
 })
