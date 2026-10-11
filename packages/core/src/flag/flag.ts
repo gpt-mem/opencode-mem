@@ -134,4 +134,19 @@ export const Flag = {
   get OPENCODE_MEMORY_CACHE_MARK() {
     return truthy("OPENCODE_MEMORY_CACHE_MARK")
   },
+  // Issue #39 (idle-gap mask reset): milliseconds since the last provider
+  // response after which the ledger stops trusting its confirmed mark and the
+  // next request carries the compact projection (mask on) instead of a
+  // verbatim prefix. Only consulted on the first step of a turn — a request
+  // mid-task never resets by time alone. 0 disables. Default 30 minutes:
+  // TTL-CALIBRATION shows 15-30 min pauses still hit ~0.83, so a longer gap
+  // is more likely cold than hot, and a wrong guess costs one compressed
+  // turn before usage self-heals the mark.
+  get OPENCODE_MEMORY_MARK_IDLE_MS() {
+    const raw = process.env["OPENCODE_MEMORY_MARK_IDLE_MS"]
+    if (raw === undefined || raw.trim() === "") return 30 * 60 * 1000
+    const parsed = Number(raw)
+    if (!Number.isFinite(parsed) || parsed < 0) return 30 * 60 * 1000
+    return Math.floor(parsed)
+  },
 }
