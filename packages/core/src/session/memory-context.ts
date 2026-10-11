@@ -1,6 +1,7 @@
 export * as MemoryContext from "./memory-context"
 
 import { Flag } from "../flag/flag"
+import { Evidence } from "./evidence"
 import { PII } from "./pii"
 import { MemDebugLog } from "./mem-debug-log"
 import { SessionMessage } from "./message"
@@ -105,6 +106,19 @@ type MarkerArgs = {
   readonly pii?: string
 }
 
+// State what retrieval actually returns: the stored text may be only a preview
+// whose full output lives in a managed tool-output file.
+const evidenceLines = (text: string, original: string, kept: string): readonly string[] => {
+  const ref = Evidence.classify(text)
+  if (ref.kind === "full_original") return ["stored=full_original", `${original} (${kept})`]
+  if (ref.kind === "managed_output_file" && ref.path !== undefined)
+    return [
+      `stored=managed_output_file path=${ref.path}`,
+      `${original} (stored text is a preview; full output lives in the managed tool-output file)`,
+    ]
+  return [original]
+}
+
 const toolMarker = (args: MarkerArgs) =>
   [
     "[mem:compacted tool result]",
@@ -115,7 +129,11 @@ const toolMarker = (args: MarkerArgs) =>
     args.outputPaths && args.outputPaths.length > 0
       ? `output_paths=${args.outputPaths.slice(0, 5).join(",")}`
       : undefined,
-    `original=session ${args.sessionID ?? "?"} message ${args.messageID} (full text kept in SQLite history)`,
+    ...evidenceLines(
+      args.text,
+      `original=session ${args.sessionID ?? "?"} message ${args.messageID}`,
+      "full text kept in SQLite history",
+    ),
     `retrieve=get_tool_call_details(call_id="${args.callID}")`,
   ]
     .filter((line): line is string => line !== undefined)
@@ -137,7 +155,11 @@ const shellMarker = (args: ShellArgs) =>
     `call_id=${args.callID} status=success`,
     args.pii,
     `preview=${preview(args.text)}`,
-    `original=session ${args.sessionID ?? "?"} message ${args.messageID} (full output kept in SQLite history)`,
+    ...evidenceLines(
+      args.text,
+      `original=session ${args.sessionID ?? "?"} message ${args.messageID}`,
+      "full output kept in SQLite history",
+    ),
     `retrieve=get_tool_call_details(call_id="${args.callID}")`,
   ]
     .filter((line): line is string => line !== undefined)
@@ -197,6 +219,8 @@ export const project = (
     // stay identical or the provider's prefix cache dies.
     if (index < markFloor) return message
     if (message.type === "shell") {
+      // A pointer outside the managed tool-output directory is not a recovery path we may follow.
+      if (Evidence.classify(text).kind === "unavailable") return message
       // Without a callID the original cannot be retrieved later, so keep the output intact.
       if (message.output.length < minChars || message.callID === "") return message
       if (allow !== undefined && !allow.has("bash")) return message
@@ -228,6 +252,10 @@ export const project = (
       if (allow !== undefined && !allow.has(item.name)) return item
       const text = serializeContent(item.state.content)
       if (text.length < minChars) return item
+      // A pointer outside the managed tool-output directory is not a recovery path we may follow.
+      if (Evidence.classify(text).kind === "unavailable") return item
+      // Without a call id the original cannot be retrieved later, so keep the output intact.
+      if (item.id === "") return item
       const kind = detectKind(item.name, item.state.input, text)
       const pii = PII.tag(text)
       changed = true
@@ -318,6 +346,10 @@ export const projectV1 = (
       if (allow !== undefined && !allow.has(part.tool)) return part
       const text = part.state.output
       if (text.length < minChars) return part
+      // A pointer outside the managed tool-output directory is not a recovery path we may follow.
+      if (Evidence.classify(text).kind === "unavailable") return part
+      // Without a call id the original cannot be retrieved later, so keep the output intact.
+      if (part.callID === "") return part
       const kind = detectKind(part.tool, part.state.input, text)
       const pii = PII.tag(text)
       changed = true

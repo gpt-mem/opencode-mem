@@ -4,9 +4,10 @@ import { and, asc, eq } from "drizzle-orm"
 import { ToolFailure } from "@opencode-ai/llm"
 import { Effect, Layer, Schema } from "effect"
 import { Database } from "../database/database"
+import { FSUtil } from "../fs-util"
 import { makeLocationNode } from "../effect/app-node"
-import { PermissionV2 } from "../permission"
 import { SessionMessage } from "../session/message"
+import { Evidence } from "../session/evidence"
 import { SessionMessageTable } from "../session/sql"
 import { ToolRegistry } from "./registry"
 import { Tool } from "./tool"
@@ -43,6 +44,9 @@ export const Output = Schema.Struct({
   total_chars: Schema.optional(Schema.Number),
   offset: Schema.optional(Schema.Number),
   message_id: Schema.optional(Schema.String),
+  source: Schema.optional(Schema.String),
+  managed_path: Schema.optional(Schema.String),
+  note: Schema.optional(Schema.String),
 })
 export type Output = typeof Output.Type
 
@@ -57,60 +61,111 @@ const window = (text: string, offset: number, max: number) => {
   return { text: slice, truncated: offset + slice.length < text.length }
 }
 
+// When the stored text is only a truncation notice, the full output lives in the
+// managed tool-output file; read it there and window the real content. A missing
+// file degrades to the bounded_stored_output branch, never to a tool failure.
+const retrieve = (
+  fs: FSUtil.Interface,
+  text: string,
+  callID: string,
+  tool: string,
+  status: string,
+  command: string | undefined,
+  offset: number,
+  maxChars: number,
+  messageID: string,
+): Effect.Effect<Output> =>
+  Effect.gen(function* () {
+    const ref = Evidence.classify(text)
+    if (ref.kind !== "managed_output_file" || ref.path === undefined) {
+      const output = window(text, offset, maxChars)
+      return {
+        found: true,
+        call_id: callID,
+        tool,
+        status,
+        ...(command !== undefined ? { command } : {}),
+        output: output.text,
+        truncated: output.truncated,
+        total_chars: text.length,
+        ...(offset > 0 ? { offset } : {}),
+        message_id: messageID,
+        source: ref.kind,
+      }
+    }
+    const content = yield* fs
+      .existsSafe(ref.path)
+      .pipe(
+        Effect.flatMap((exists) => (exists ? fs.readFileStringSafe(ref.path) : Effect.succeed(undefined))),
+        Effect.catch(() => Effect.succeed(undefined)),
+      )
+    if (content !== undefined) {
+      const output = window(content, offset, maxChars)
+      return {
+        found: true,
+        call_id: callID,
+        tool,
+        status,
+        ...(command !== undefined ? { command } : {}),
+        output: output.text,
+        truncated: output.truncated,
+        total_chars: content.length,
+        ...(offset > 0 ? { offset } : {}),
+        message_id: messageID,
+        source: "managed_output_file",
+        managed_path: ref.path,
+      }
+    }
+    const output = window(text, offset, maxChars)
+    return {
+      found: true,
+      call_id: callID,
+      tool,
+      status,
+      ...(command !== undefined ? { command } : {}),
+      output: output.text,
+      truncated: output.truncated,
+      total_chars: text.length,
+      ...(offset > 0 ? { offset } : {}),
+      message_id: messageID,
+      source: "bounded_stored_output",
+      managed_path: ref.path,
+      note: "The managed tool-output file is no longer available (retention cleanup); only the stored preview remains.",
+    }
+  })
+
 const extract = (
+  fs: FSUtil.Interface,
   message: SessionMessage.Message,
   callID: string,
   maxChars: number,
   offset: number,
-): Output | undefined => {
+): Effect.Effect<Output | undefined> => {
   if (message.type === "shell" && message.callID === callID) {
-    const output = window(message.output, offset, maxChars)
-    return {
-      found: true,
-      call_id: callID,
-      tool: "bash",
-      status: "completed",
-      command: message.command,
-      output: output.text,
-      truncated: output.truncated,
-      total_chars: message.output.length,
-      ...(offset > 0 ? { offset } : {}),
-      message_id: message.id,
-    }
+    return retrieve(fs, message.output, callID, "bash", "completed", message.command, offset, maxChars, message.id)
   }
-  if (message.type !== "assistant") return undefined
+  if (message.type !== "assistant") return Effect.succeed(undefined)
   const item = message.content.find(
     (content): content is SessionMessage.AssistantTool => content.type === "tool" && content.id === callID,
   )
-  if (!item) return undefined
+  if (!item) return Effect.succeed(undefined)
   if (item.state.status === "pending" || item.state.status === "running")
-    return {
+    return Effect.succeed({
       found: true,
       call_id: callID,
       tool: item.name,
       status: item.state.status,
       message_id: message.id,
-    }
+    })
   const text =
     item.state.status === "error"
       ? `${item.state.error.message}\n\n${item.state.content
           .map((part) => (part.type === "text" ? part.text : `[${part.mime}]`))
           .join("\n")}`
       : item.state.content
-          .map((part) => (part.type === "text" ? part.text : `[${part.mime}${part.name === undefined ? "" : `: ${part.name}`}]`))
+          .map((part) => (part.type === "text" ? part.text : `[${part.mime}${part.name === undefined ? "" : `: ${part.name}]`}]))
           .join("\n")
-  const output = window(text, offset, maxChars)
-  return {
-    found: true,
-    call_id: callID,
-    tool: item.name,
-    status: item.state.status,
-    output: output.text,
-    truncated: output.truncated,
-    total_chars: text.length,
-    ...(offset > 0 ? { offset } : {}),
-    message_id: message.id,
-  }
+  return retrieve(fs, text, callID, item.name, item.state.status, undefined, offset, maxChars, message.id)
 }
 
 const layer = Layer.effectDiscard(
@@ -118,6 +173,7 @@ const layer = Layer.effectDiscard(
     const tools = yield* Tools.Service
     const permission = yield* PermissionV2.Service
     const db = (yield* Database.Service).db
+    const fs = yield* FSUtil.Service
 
     yield* tools
       .register({
@@ -125,7 +181,8 @@ const layer = Layer.effectDiscard(
           description:
             "Retrieve the full original output of a previous tool call in this session by its call_id. " +
             "Use this when a tool result was compacted to a [mem:compacted tool result] marker. " +
-            "When truncated is true more content remains: call again with offset (and max_chars or full) to page through the rest.",
+            "When truncated is true more content remains: call again with offset (and max_chars or full) to page through the rest. " +
+            "`source` says what the returned output actually is: `managed_output_file` means the full output lives in a managed tool-output file; `bounded_stored_output` means only the stored preview remains.",
           input: Input,
           output: Output,
           toModelOutput: ({ output }) => [{ type: "text", text: toModelOutput(output) }],
@@ -158,7 +215,7 @@ const layer = Layer.effectDiscard(
                   Effect.catch(() => Effect.succeed(undefined)),
                 )
                 if (!message) continue
-                const found = extract(message, input.call_id, maxChars, offset)
+                const found = yield* extract(fs, message, input.call_id, maxChars, offset)
                 if (found) return found
               }
               const shells = yield* db
@@ -173,10 +230,10 @@ const layer = Layer.effectDiscard(
                   Effect.catch(() => Effect.succeed(undefined)),
                 )
                 if (!message) continue
-                const found = extract(message, input.call_id, maxChars, offset)
+                const found = yield* extract(fs, message, input.call_id, maxChars, offset)
                 if (found) return found
               }
-              return { found: false, call_id: input.call_id }
+              return { found: false, call_id: input.call_id, source: "unavailable" }
             }).pipe(
               Effect.mapError(() => new ToolFailure({ message: `Unable to retrieve tool call ${input.call_id}` })),
             ),
@@ -189,5 +246,5 @@ const layer = Layer.effectDiscard(
 export const node = makeLocationNode({
   name: "tool/get-tool-call-details",
   layer,
-  deps: [ToolRegistry.node, PermissionV2.node, Database.node],
+  deps: [ToolRegistry.node, PermissionV2.node, Database.node, FSUtil.node],
 })
