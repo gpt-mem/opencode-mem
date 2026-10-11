@@ -46,14 +46,22 @@ const model = { id: ModelV2.ID.make("model"), providerID: ProviderV2.ID.make("pr
 const encodeMessage = Schema.encodeSync(SessionMessage.Message)
 
 const assistantRow = (id: SessionMessage.ID, seq: number, content: SessionMessage.Assistant["content"]) => {
-  const { id: _id, type, ...data } = encodeMessage(
+  const {
+    id: _id,
+    type,
+    ...data
+  } = encodeMessage(
     SessionMessage.Assistant.make({ id, type: "assistant", agent: "build", model, content, time: { created } }),
   )
   return { id, session_id: sessionID, type, seq, time_created: DateTime.toEpochMillis(created), data }
 }
 
 const shellRow = (id: SessionMessage.ID, seq: number, callID: string, command: string, output: string) => {
-  const { id: _id, type, ...data } = encodeMessage(
+  const {
+    id: _id,
+    type,
+    ...data
+  } = encodeMessage(
     SessionMessage.Shell.make({
       id,
       type: "shell",
@@ -137,6 +145,44 @@ const setup = Effect.gen(function* () {
     .pipe(Effect.orDie)
 })
 
+const seedMemoryCalls = Effect.gen(function* () {
+  const { db } = yield* Database.Service
+  yield* db
+    .insert(SessionMessageTable)
+    .values([
+      assistantRow(SessionMessage.ID.make("msg_mem_1"), 5, [
+        SessionMessage.AssistantTool.make({
+          type: "tool",
+          id: "call_find_1",
+          name: "find_tool_calls",
+          state: SessionMessage.ToolStateCompleted.make({
+            status: "completed",
+            input: { query: "secret-pattern" },
+            content: [{ type: "text", text: "[]" }],
+            structured: {},
+          }),
+          time: { created },
+        }),
+      ]),
+      assistantRow(SessionMessage.ID.make("msg_mem_2"), 6, [
+        SessionMessage.AssistantTool.make({
+          type: "tool",
+          id: "call_overview_1",
+          name: "get_tool_call_overview",
+          state: SessionMessage.ToolStateCompleted.make({
+            status: "completed",
+            input: {},
+            content: [{ type: "text", text: "{}" }],
+            structured: {},
+          }),
+          time: { created },
+        }),
+      ]),
+    ])
+    .run()
+    .pipe(Effect.orDie)
+})
+
 const call = (input: Record<string, unknown>) => ({
   sessionID,
   ...toolIdentity,
@@ -145,14 +191,41 @@ const call = (input: Record<string, unknown>) => ({
 
 const parsed = (result: { type: string; value: unknown }) => {
   if (result.type !== "text" && result.type !== "json") throw new Error(`unexpected result type: ${result.type}`)
-  return typeof result.value === "string" ? (JSON.parse(result.value) as Record<string, unknown>) : (result.value as Record<string, unknown>)
+  return typeof result.value === "string"
+    ? (JSON.parse(result.value) as Record<string, unknown>)
+    : (result.value as Record<string, unknown>)
 }
 
-type Group = { tool: string; count: number; statuses: { status: string; count: number }[]; examples: Record<string, unknown>[] }
+type Group = {
+  tool: string
+  count: number
+  statuses: { status: string; count: number }[]
+  examples: Record<string, unknown>[]
+}
 
 const groupsOf = (output: Record<string, unknown>) => output["groups"] as Group[]
 
 describe("GetToolCallOverviewTool", () => {
+  it.effect("counts memory-tool calls in total but never groups them (issue #48)", () =>
+    Effect.gen(function* () {
+      yield* setup
+      yield* seedMemoryCalls
+      const registry = yield* ToolRegistry.Service
+      const output = parsed(yield* executeTool(registry, call({})))
+      expect(output["total"]).toBe(6)
+      expect(output["groups_total"]).toBe(2)
+      expect(groupsOf(output).map((group) => group.tool)).toEqual(["bash", "read"])
+      expect(output["memory_tools"]).toEqual([
+        { tool: "find_tool_calls", count: 1 },
+        { tool: "get_tool_call_overview", count: 1 },
+      ])
+      const byMemory = parsed(yield* executeTool(registry, call({ tool: "find_tool_calls" })))
+      expect(byMemory["total"]).toBe(1)
+      expect(groupsOf(byMemory).length).toBe(0)
+      expect(byMemory["memory_tools"]).toEqual([{ tool: "find_tool_calls", count: 1 }])
+    }),
+  )
+
   it.effect("groups calls by tool with status counts, busiest first", () =>
     Effect.gen(function* () {
       yield* setup

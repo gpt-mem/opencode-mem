@@ -60,7 +60,7 @@ export type Candidate = {
   seq: string
 }
 
-const candidate = (data: unknown, id: string): Candidate | undefined => {
+const candidate = (data: unknown, id: string, includeMemoryTools = false): Candidate | undefined => {
   if (typeof data !== "object" || data === null) return undefined
   const part = data as {
     type?: string
@@ -71,7 +71,9 @@ const candidate = (data: unknown, id: string): Candidate | undefined => {
   if (part.type !== "tool" || typeof part.callID !== "string") return undefined
   // Self-indexing guard: memory tools are how this index is queried, so
   // indexing them back would make every search a new match (issue #34).
-  if (part.tool !== undefined && MemoryTools.names.has(part.tool)) return undefined
+  // get_tool_call_overview opts in (includeMemoryTools) to still count them,
+  // so an inventory never looks like the calls were deleted (issue #48).
+  if (!includeMemoryTools && part.tool !== undefined && MemoryTools.names.has(part.tool)) return undefined
   const state = part.state
   const input = inputSummary(state?.input)
   const output = typeof state?.output === "string" ? state.output : undefined
@@ -92,7 +94,11 @@ const candidate = (data: unknown, id: string): Candidate | undefined => {
   }
 }
 
-export const collectCandidates = (db: Database.Interface["db"], sessionID: SessionID) =>
+export const collectCandidates = (
+  db: Database.Interface["db"],
+  sessionID: SessionID,
+  options?: { readonly includeMemoryTools?: boolean },
+) =>
   Effect.gen(function* () {
     const rows = yield* db
       .select({ id: PartTable.id, data: PartTable.data })
@@ -102,7 +108,7 @@ export const collectCandidates = (db: Database.Interface["db"], sessionID: Sessi
       .all()
       .pipe(Effect.orDie)
     return rows.flatMap((row) => {
-      const item = candidate(row.data, row.id)
+      const item = candidate(row.data, row.id, options?.includeMemoryTools ?? false)
       return item === undefined ? [] : [item]
     })
   })
@@ -118,7 +124,9 @@ export const FindToolCallsTool = Tool.define<typeof Parameters, Metadata, Databa
         "Search tool calls in this session by tool name, status or pattern. " +
         "Returns compact entries (call_id, status, input, preview) so you can locate a call and then load its full " +
         "output with get_tool_call_details(call_id). Compacted [mem:compacted] results are searchable here because " +
-        "the originals live in session history.",
+        "the originals live in session history. Memory-tool calls are never returned here " +
+        "(a query would match its own earlier searches, issue #34); they are counted in " +
+        "get_tool_call_overview and load by call_id (issue #48).",
       parameters: Parameters,
       execute: (params: Schema.Schema.Type<typeof Parameters>, ctx: Tool.Context<Metadata>) =>
         Effect.gen(function* () {

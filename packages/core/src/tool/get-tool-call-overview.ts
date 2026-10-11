@@ -5,6 +5,7 @@ import { Effect, Layer, Schema } from "effect"
 import { Database } from "../database/database"
 import { makeLocationNode } from "../effect/app-node"
 import { PermissionV2 } from "../permission"
+import { MemoryTools } from "./memory-tools"
 import { collectCandidates, type Candidate } from "./find-tool-calls"
 import { ToolRegistry } from "./registry"
 import { Tool } from "./tool"
@@ -56,12 +57,21 @@ export const Output = Schema.Struct({
   total: Schema.Number,
   groups_total: Schema.Number,
   groups: Schema.Array(Group),
+  // Counts only for memory-tool calls: they are part of the inventory (issue
+  // #48) but never grouped, so no query text is echoed back (issue #34).
+  memory_tools: Schema.optional(Schema.Array(Schema.Struct({ tool: Schema.String, count: Schema.Number }))),
 })
 export type Output = typeof Output.Type
 
 export const toModelOutput = (output: Output) => JSON.stringify(output, null, 2)
 
 const bound = (text: string, max: number) => (text.length <= max ? text : text.slice(0, max))
+
+const countByTool = (items: readonly Candidate[]) => {
+  const counts = new Map<string, number>()
+  for (const item of items) counts.set(item.tool, (counts.get(item.tool) ?? 0) + 1)
+  return [...counts.entries()].sort(([a], [b]) => a.localeCompare(b))
+}
 
 const groupOf = (tool: string, items: readonly Candidate[], examples: number) => {
   const counts = new Map<string, number>()
@@ -97,7 +107,10 @@ const layer = Layer.effectDiscard(
             "Summarize tool usage in this session: one group per tool name with call counts by status and a few " +
             "recent example calls (call_id, status, input). Use it first to see what ran, then find_tool_calls to " +
             "locate individual calls and get_tool_call_details(call_id) to load a full original output. Compacted " +
-            "[mem:compacted] results are counted here because the originals live in session history.",
+            "[mem:compacted] results are counted here because the originals live in session history. Memory-tool " +
+            "calls (find_tool_calls / get_tool_call_overview / get_tool_call_details) are counted in total and " +
+            "listed as counts in memory_tools, never as groups: they are excluded from find_tool_calls so a query " +
+            "cannot match itself (issue #34), and their originals stay reachable by call_id (issue #48).",
           input: Input,
           output: Output,
           toModelOutput: ({ output }) => [{ type: "text", text: toModelOutput(output) }],
@@ -111,11 +124,17 @@ const layer = Layer.effectDiscard(
                 agent: context.agent,
                 source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
               })
-              const matched = (yield* collectCandidates(db, context.sessionID)).filter((candidate) => {
+              const all = yield* collectCandidates(db, context.sessionID, { includeMemoryTools: true })
+              const passes = (candidate: Candidate) => {
                 if (input.tool !== undefined && candidate.tool !== input.tool) return false
                 if (input.status !== undefined && candidate.status !== input.status) return false
                 return true
-              })
+              }
+              // Memory-tool calls are counted but never grouped: an inventory
+              // that drops them reads as silent data loss (issue #48), while
+              // grouping would echo query text back into context (issue #34).
+              const memory = all.filter((candidate) => MemoryTools.names.has(candidate.tool)).filter(passes)
+              const matched = all.filter((candidate) => !MemoryTools.names.has(candidate.tool)).filter(passes)
               const grouped = new Map<string, Candidate[]>()
               for (const candidate of matched) {
                 const items = grouped.get(candidate.tool)
@@ -127,7 +146,13 @@ const layer = Layer.effectDiscard(
               const groups = [...grouped.entries()]
                 .map(([tool, items]) => groupOf(tool, items, examples))
                 .sort((a, b) => b.count - a.count || a.tool.localeCompare(b.tool))
-              return { total: matched.length, groups_total: groups.length, groups: groups.slice(0, limit) }
+              const memoryCounts = [...countByTool(memory)].map(([tool, count]) => ({ tool, count }))
+              return {
+                total: matched.length + memory.length,
+                groups_total: groups.length,
+                groups: groups.slice(0, limit),
+                ...(memoryCounts.length === 0 ? {} : { memory_tools: memoryCounts }),
+              }
             }).pipe(
               Effect.mapError((error) =>
                 error instanceof ToolFailure
