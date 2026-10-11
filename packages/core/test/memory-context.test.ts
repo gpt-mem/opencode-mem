@@ -782,3 +782,91 @@ describe("MemoryContext cache-stable boundary", () => {
     expect(v1toolText(stable[1]!)).toContain("retrieve=get_tool_call_details")
   })
 })
+
+// Issue #25 B3 (cache-breaking, opt-in): a confirmed intent switch finalizes
+// the closed intent's segment — the switch user message becomes the boundary,
+// so tool outputs the keep-window would protect turn into retrieval markers.
+describe("MemoryContext intent cut", () => {
+  const cutSession = () => [
+    v1user("u1"),
+    v1assistant("a1", [v1tool({ id: "call_1", tool: "bash", output: big(), input: { command: "step 1" } })]),
+    v1user("u2"),
+    v1assistant("a2", [v1tool({ id: "call_2", tool: "bash", output: big(), input: { command: "step 2" } })]),
+    v1user("u3"),
+    v1assistant("a3", [v1tool({ id: "call_3", tool: "bash", output: big(), input: { command: "step 3" } })]),
+  ]
+
+  test("finalizes the closed intent segment that boundary mode protects", () => {
+    const messages = cutSession()
+    const boundary = compactV1(messages, { keepRecentUserTurns: 2 })
+    expect(v1toolText(boundary[3]!)).toBe(big())
+    const cut = compactV1(messages, { keepRecentUserTurns: 2, intentSwitchMessageID: "msg_u3" })
+    expect(v1toolText(cut[1]!)).toContain("[mem:compacted tool result]")
+    expect(v1toolText(cut[3]!)).toContain("[mem:compacted tool result]")
+    expect(v1toolText(cut[3]!)).toContain("call_id=call_2")
+    expect(v1toolText(cut[3]!)).toContain("retrieve=get_tool_call_details")
+    expect(v1toolText(cut[5]!)).toBe(big())
+    expect(v1toolText(messages[3]!)).toBe(big())
+  })
+
+  test("unknown switch message falls back to the normal boundary", () => {
+    const messages = cutSession()
+    const normal = compactV1(messages, { keepRecentUserTurns: 2 })
+    const fallback = compactV1(messages, { keepRecentUserTurns: 2, intentSwitchMessageID: "msg_missing" })
+    expect(JSON.stringify(fallback)).toBe(JSON.stringify(normal))
+  })
+
+  test("projected prefix stays byte-identical as the new intent grows", () => {
+    const build = (extra: number) => {
+      const messages = cutSession()
+      for (let i = 1; i <= extra; i++)
+        messages.push(
+          v1assistant(`b${i}`, [v1tool({ id: `call_b${i}`, tool: "bash", output: big(), input: { command: `b ${i}` } })]),
+        )
+      return messages
+    }
+    const options = { enabled: true, minOutputChars: 100, keepRecentUserTurns: 2, intentSwitchMessageID: "msg_u3" }
+    const stable = MemoryContext.projectV1(build(1), options)
+    expect(JSON.stringify(MemoryContext.projectV1(build(2), options).slice(0, stable.length))).toBe(
+      JSON.stringify(stable),
+    )
+    expect(v1toolText(stable[3]!)).toContain("[mem:compacted tool result]")
+    expect(v1toolText(stable[5]!)).toBe(big())
+  })
+
+  test("subsumed once the sliding window moves past the switch", () => {
+    const messages = [
+      ...cutSession(),
+      v1user("u4"),
+      v1assistant("a4", [v1tool({ id: "call_4", tool: "bash", output: big(), input: { command: "step 4" } })]),
+      v1user("u5"),
+    ]
+    const cut = compactV1(messages, { keepRecentUserTurns: 2, intentSwitchMessageID: "msg_u3" })
+    const normal = compactV1(messages, { keepRecentUserTurns: 2 })
+    expect(v1toolText(cut[3]!)).toContain("[mem:compacted tool result]")
+    expect(v1toolText(cut[5]!)).toContain("[mem:compacted tool result]")
+    expect(JSON.stringify(cut)).toBe(JSON.stringify(normal))
+  })
+
+  test("V2 projection honors the same switch boundary", () => {
+    const messages = [
+      user("u1"),
+      assistant("a1", [
+        completedTool({ id: "call_1", name: "bash", content: [{ type: "text", text: big() }], input: { command: "step 1" } }),
+      ]),
+      user("u2"),
+      assistant("a2", [
+        completedTool({ id: "call_2", name: "bash", content: [{ type: "text", text: big() }], input: { command: "step 2" } }),
+      ]),
+      user("u3"),
+      assistant("a3", [
+        completedTool({ id: "call_3", name: "bash", content: [{ type: "text", text: big() }], input: { command: "step 3" } }),
+      ]),
+    ]
+    const cut = compact(messages, { keepRecentUserTurns: 2, intentSwitchMessageID: "msg_u3" })
+    expect(toolText(cut[1]!)).toContain("[mem:compacted tool result]")
+    expect(toolText(cut[3]!)).toContain("[mem:compacted tool result]")
+    expect(toolText(cut[3]!)).toContain("call_id=call_2")
+    expect(toolText(cut[5]!)).toBe(big())
+  })
+})

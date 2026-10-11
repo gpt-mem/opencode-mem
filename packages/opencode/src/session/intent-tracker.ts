@@ -109,7 +109,15 @@ const userText = (parts: readonly SessionV1.Part[]) =>
     .join("\n")
 
 export interface Interface {
-  readonly track: (input: { sessionID: SessionID; parts: readonly SessionV1.Part[] }) => Effect.Effect<void>
+  readonly track: (input: {
+    sessionID: SessionID
+    parts: readonly SessionV1.Part[]
+    messageID?: string
+  }) => Effect.Effect<void>
+  // Issue #25 B3: user message ID that opened the active intent via a confirmed
+  // switch, or undefined (no switch, act off, or cut flag off). The projection
+  // uses it as the compaction boundary for the closed intent's segment.
+  readonly activeSwitchMessage: (input: { sessionID: SessionID }) => Effect.Effect<string | undefined>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/IntentTracker") {}
@@ -123,6 +131,7 @@ const layer = Layer.effect(
     const track = Effect.fn("IntentTracker.track")(function* (input: {
       sessionID: SessionID
       parts: readonly SessionV1.Part[]
+      messageID?: string
     }) {
       if (!Flag.OPENCODE_MEMORY_INTENT) return
       const raw = userText(input.parts)
@@ -217,7 +226,13 @@ const layer = Layer.effect(
               last_active_at: now2,
               turn_count: 1,
               token_count: estimateTokens(text),
-              meta: { embedding_model: EMBEDDING_MODEL, recent_texts: [text.slice(0, SUMMARY_TEXT_CHARS)] },
+              meta: {
+                embedding_model: EMBEDDING_MODEL,
+                recent_texts: [text.slice(0, SUMMARY_TEXT_CHARS)],
+                // Issue #25 B3: the user message that opened this intent marks
+                // the cut boundary for the closed intent's segment.
+                ...(input.messageID === undefined ? {} : { switch_message_id: input.messageID }),
+              },
             })
             .run()
             .pipe(Effect.orDie)
@@ -270,7 +285,23 @@ const layer = Layer.effect(
         })
     })
 
-    return Service.of({ track })
+    const activeSwitchMessage = Effect.fn("IntentTracker.activeSwitchMessage")(function* (input: {
+      sessionID: SessionID
+    }) {
+      if (!Flag.OPENCODE_MEMORY_INTENT_CUT) return undefined
+      const active = yield* db
+        .select()
+        .from(IntentTable)
+        .where(and(eq(IntentTable.session_id, input.sessionID), eq(IntentTable.status, "active")))
+        .orderBy(desc(IntentTable.started_at))
+        .limit(1)
+        .get()
+        .pipe(Effect.orDie)
+      const meta = (active?.meta ?? {}) as { switch_message_id?: string }
+      return meta.switch_message_id
+    })
+
+    return Service.of({ track, activeSwitchMessage })
   }),
 )
 

@@ -89,6 +89,7 @@ afterEach(() => {
   delete process.env["OPENCODE_MEMORY_INTENT_REFRESH_EVERY"]
   delete process.env["OPENCODE_MEMORY_INTENT_ACT"]
   delete process.env["OPENCODE_MEMORY_INTENT_SWITCH_THRESHOLD"]
+  delete process.env["OPENCODE_MEMORY_INTENT_CUT"]
 })
 
 describe("IntentTracker", () => {
@@ -366,6 +367,66 @@ describe("IntentTracker", () => {
       const blocked = yield* intents
       expect(blocked.length).toBe(1)
       expect(blocked[0].status).toBe("active")
+    }),
+  )
+
+  it.live("cut off: activeSwitchMessage returns undefined even after a confirmed switch", () =>
+    Effect.gen(function* () {
+      process.env["OPENCODE_MEMORY_INTENT_ACT"] = "1"
+      const tracker = yield* IntentTracker.Service
+      yield* seed
+      yield* reset
+      yield* tracker.track({
+        sessionID,
+        parts: [textPart("fix the login bug in the authentication module")] as never,
+        messageID: "msg_t1",
+      })
+      yield* tracker.track({
+        sessionID,
+        parts: [textPart("the login bug in authentication happens on token refresh")] as never,
+        messageID: "msg_t2",
+      })
+      yield* tracker.track({
+        sessionID,
+        parts: [textPart("now write a python script that scrapes weather data from public APIs")] as never,
+        messageID: "msg_t3",
+      })
+      const rows = yield* intents
+      expect(rows.length).toBe(2)
+      const boundary = yield* tracker.activeSwitchMessage({ sessionID })
+      expect(boundary).toBeUndefined()
+    }),
+  )
+
+  it.live("cut on: activeSwitchMessage returns the user message that opened the active intent", () =>
+    Effect.gen(function* () {
+      process.env["OPENCODE_MEMORY_INTENT_ACT"] = "1"
+      process.env["OPENCODE_MEMORY_INTENT_CUT"] = "1"
+      const tracker = yield* IntentTracker.Service
+      yield* seed
+      yield* reset
+      yield* tracker.track({
+        sessionID,
+        parts: [textPart("fix the login bug in the authentication module")] as never,
+        messageID: "msg_t1",
+      })
+      // Before any switch there is no boundary.
+      expect(yield* tracker.activeSwitchMessage({ sessionID })).toBeUndefined()
+      yield* tracker.track({
+        sessionID,
+        parts: [textPart("the login bug in authentication happens on token refresh")] as never,
+        messageID: "msg_t2",
+      })
+      yield* tracker.track({
+        sessionID,
+        parts: [textPart("now write a python script that scrapes weather data from public APIs")] as never,
+        messageID: "msg_t3",
+      })
+      expect(yield* tracker.activeSwitchMessage({ sessionID })).toBe("msg_t3")
+      const rows = yield* intents
+      const active = rows.find((row) => row.status === "active")
+      const meta = active?.meta as { switch_message_id?: string }
+      expect(meta.switch_message_id).toBe("msg_t3")
     }),
   )
 })
