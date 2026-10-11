@@ -361,7 +361,10 @@ const layer = Layer.effect(
               }),
             )
             // Issue #29: confirm the cache mark post-factum from the response
-            // usage; ledger failures never break the turn.
+            // usage; ledger failures never break the turn. sentCount is the
+            // verbatim prefix of what we actually sent — compacted messages
+            // were cached as marker bytes and must stay compacted, only raw
+            // originals may be floored below the mark.
             if (cacheMarkOn)
               yield* CacheMark.recordUsage(
                 db,
@@ -371,7 +374,7 @@ const layer = Layer.effect(
                   output: stepSettlement.tokens.output,
                   cacheRead: stepSettlement.tokens.cache.read,
                   cacheWrite: stepSettlement.tokens.cache.write,
-                  sentCount: context.length,
+                  sentCount: CacheMark.verbatimPrefixLength(context, rawMessages),
                 },
                 rawMessages,
               ).pipe(Effect.catchDefect(() => Effect.void))
