@@ -825,6 +825,141 @@ it.instance("failed provider request collapses the cache-mark ledger (issue #39)
   }),
 )
 
+it.instance(
+  "killed mid-stream provider request recovers in place (issue #39 kill scenario)",
+  () =>
+    Effect.gen(function* () {
+      const prevContext = process.env["OPENCODE_MEMORY_CONTEXT"]
+      const prevCacheMark = process.env["OPENCODE_MEMORY_CACHE_MARK"]
+      process.env["OPENCODE_MEMORY_CONTEXT"] = "1"
+      process.env["OPENCODE_MEMORY_CACHE_MARK"] = "1"
+      const restore = () => {
+        if (prevContext === undefined) delete process.env["OPENCODE_MEMORY_CONTEXT"]
+        else process.env["OPENCODE_MEMORY_CONTEXT"] = prevContext
+        if (prevCacheMark === undefined) delete process.env["OPENCODE_MEMORY_CACHE_MARK"]
+        else process.env["OPENCODE_MEMORY_CACHE_MARK"] = prevCacheMark
+      }
+      try {
+        const { llm } = yield* useServerConfig(providerCfg)
+        const prompt = yield* SessionPrompt.Service
+        const sessions = yield* Session.Service
+        const database = yield* Database.Service
+        const provider = `${ref.providerID}/${ref.modelID}`
+        const chat = yield* sessions.create({ title: "Pinned" })
+        const seeded = yield* seed(chat.id, { finish: "stop" })
+        const bulk = `BULK-${"a".repeat(600)}${"f".repeat(1000)}MIDMARKER-${"q".repeat(50)}${"z".repeat(400)}`
+        yield* sessions.updatePart({
+          id: PartID.ascending(),
+          messageID: seeded.assistant.id,
+          sessionID: chat.id,
+          type: "tool",
+          callID: "call-kill-recovery",
+          tool: "bash",
+          state: {
+            status: "completed",
+            input: {},
+            output: bulk,
+            title: "done",
+            metadata: {},
+            time: { start: 1, end: 2 },
+          },
+        })
+        // Warm ledger: the seeded user+assistant prefix is provider-confirmed.
+        yield* database.db
+          .insert(ProviderCacheMarkTable)
+          .values({
+            provider_id: provider,
+            mark_tokens: 5000,
+            mark_index: 2,
+            prefix_hash: null,
+            last_used_at: Date.now(),
+          })
+          .run()
+
+        // Kill scenario: the first request dies mid-stream after partial text
+        // (socket destroy). SessionRetry re-sends inside the same
+        // handle.process (~2s backoff) and the second attempt completes — the
+        // session recovers without any user participation.
+        yield* llm.push(reply().text("partial").reset())
+        yield* llm.text("recovered")
+        yield* prompt.prompt({
+          sessionID: chat.id,
+          agent: "build",
+          noReply: true,
+          parts: [{ type: "text", text: "hello" }],
+        })
+        const result = yield* prompt.loop({ sessionID: chat.id })
+        const hits = yield* llm.hits
+        const toolResult = (input: { body: unknown }[], index: number) => {
+          const body = input[index]?.body as
+            | { messages?: Array<{ role: string; tool_call_id?: string; content?: unknown }> }
+            | undefined
+          const message = body?.messages?.find((item) => item.tool_call_id === "call-kill-recovery")
+          const content = message?.content
+          return typeof content === "string" ? content : JSON.stringify(content ?? "")
+        }
+
+        expect(yield* llm.calls).toBe(2)
+        expect(result.info.role).toBe("assistant")
+        if (result.info.role === "assistant") {
+          expect(result.info.error).toBeUndefined()
+          expect(result.info.finish).toBe("stop")
+        }
+        // The killed partial stream must not leak into the recovered answer.
+        const text = result.parts.find((p) => p.type === "text")
+        expect(text?.type === "text" && text.text).toBe("recovered")
+
+        // Recovery happened in-request: no synthetic ladder prompt, no
+        // user-visible failure — the failed attempt never reached the loop.
+        const messages = yield* sessions.messages({ sessionID: chat.id })
+        const autos = messages.filter(
+          (m) =>
+            m.info.role === "user" &&
+            m.parts.some((p) => p.type === "text" && p.metadata?.ladder_auto_continue === true),
+        )
+        expect(autos.length).toBe(0)
+
+        // The warm ledger floor held on both sends of the turn: the in-place
+        // retry resent the same verbatim prefix, and no loop-level error
+        // fired the collapse reset.
+        expect(toolResult(hits, 0)).toBe(bulk)
+        expect(toolResult(hits, 1)).toBe(bulk)
+        const row = yield* database.db
+          .select()
+          .from(ProviderCacheMarkTable)
+          .where(eq(ProviderCacheMarkTable.provider_id, provider))
+          .get()
+        expect(row).toMatchObject({ mark_tokens: 5000, mark_index: 2 })
+
+        // Successor turn still floors below the warm mark — the compact
+        // projection never mutates the confirmed prefix, kill or not.
+        yield* llm.text("next")
+        yield* prompt.prompt({
+          sessionID: chat.id,
+          agent: "build",
+          noReply: true,
+          parts: [{ type: "text", text: "again" }],
+        })
+        const ok = yield* prompt.loop({ sessionID: chat.id })
+        const hits2 = yield* llm.hits
+        expect(ok.info.role).toBe("assistant")
+        expect(hits2).toHaveLength(3)
+        expect(toolResult(hits2, 2)).toBe(bulk)
+        // Originals stay in SQLite untouched.
+        const stored = yield* sessions.messages({ sessionID: chat.id })
+        const storedTool = stored
+          .flatMap((message) => message.parts)
+          .find((part) => part.type === "tool" && part.callID === "call-kill-recovery")
+        expect(storedTool?.type === "tool" && storedTool.state.status === "completed" && storedTool.state.output).toBe(
+          bulk,
+        )
+      } finally {
+        restore()
+      }
+    }),
+  20000,
+)
+
 it.instance("ladder total failure auto-continues and recovers (issue #39)", () =>
   Effect.gen(function* () {
     const { llm } = yield* useServerConfig((url) => ({
