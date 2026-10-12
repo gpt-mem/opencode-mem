@@ -20,6 +20,7 @@ cliIt.concurrent(
       })
       expect(result.exitCode).toBe(0)
       expect(result.stdout).toContain("audit-recovered")
+      expect(result.stderr).not.toContain("every rung failed")
     }),
   45_000,
 )

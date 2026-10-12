@@ -698,6 +698,7 @@ export const RunCommand = effectCmd({
           const toggles = new Map<string, boolean>()
           const sessions = new Set([sessionID])
           let error: string | undefined
+          let errorRaw: unknown
           let messageError: { name: string; message: string; raw: unknown } | undefined
 
           for await (const event of events.stream) {
@@ -808,8 +809,7 @@ export const RunCommand = effectCmd({
                 err = String(props.error.data.message)
               }
               error = error ? error + EOL + err : err
-              if (emit("error", { error: props.error })) continue
-              UI.error(err)
+              errorRaw = props.error
             }
 
             // A failed ladder attempt can be followed by a successful continuation.
@@ -820,6 +820,7 @@ export const RunCommand = effectCmd({
               event.properties.status.type === "retry"
             ) {
               error = undefined
+              errorRaw = undefined
               messageError = undefined
             }
 
@@ -858,6 +859,7 @@ export const RunCommand = effectCmd({
           const finalAssistant = await lastAssistantResult(client, sessionID)
           if (finalAssistant === null) {
             error = undefined
+            errorRaw = undefined
             messageError = undefined
           }
           // Issue #38: surface message-level errors that never produced a
@@ -867,7 +869,7 @@ export const RunCommand = effectCmd({
             const label =
               messageError.name === "MessageAbortedError" ? "Response interrupted (Aborted)" : messageError.message
             error = label
-            if (!emit("error", { error: messageError.raw })) UI.error(label)
+            errorRaw = messageError.raw
           }
           // Issue #38 (event race belt-and-suspenders): a mid-stream abort can
           // publish session.status idle before session.error reaches the
@@ -881,9 +883,10 @@ export const RunCommand = effectCmd({
                   ? "Response interrupted (Aborted)"
                   : messageOf(finalAssistant)
               error = label
-              if (!emit("error", { error: finalAssistant })) UI.error(label)
+              errorRaw = finalAssistant
             }
           }
+          if (error && !emit("error", { error: errorRaw ?? { message: error } })) UI.error(error)
           return error
         }
 
