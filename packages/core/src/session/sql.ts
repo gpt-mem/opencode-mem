@@ -227,3 +227,37 @@ export const SessionContextEpochTable = sqliteTable("session_context_epoch", {
   snapshot: text({ mode: "json" }).notNull().$type<SystemContext.Snapshot>(),
   baseline_seq: integer().notNull(),
 })
+
+// Issue #13: typed operational memory (decisions, constraints, …). Project-scoped
+// so decisions survive across sessions in the same project. Content is stored
+// PII-redacted; the original utterance stays in session history and is reachable
+// through source_ref → get_tool_call_details / message parts.
+export const MemRecordTable = sqliteTable(
+  "mem_record",
+  {
+    id: text().primaryKey(),
+    project_id: text()
+      .$type<ProjectV2.ID>()
+      .notNull()
+      .references(() => ProjectTable.id, { onDelete: "cascade" }),
+    session_id: text().$type<SessionSchema.ID>(),
+    type: text().$type<"decision" | "constraint" | "failed_approach" | "user_signal">().notNull(),
+    subject: text().notNull(),
+    content: text().notNull(),
+    reason: text(),
+    status: text().$type<"active" | "superseded" | "rejected">().notNull().default("active"),
+    authority: text().$type<"user" | "agent">().notNull(),
+    decided_by: text(),
+    recorded_by: text().notNull(),
+    source_ref: text(),
+    scope: text(),
+    supersedes: text(),
+    version: integer().notNull().default(1),
+    ...Timestamps,
+  },
+  (table) => [
+    index("mem_record_project_type_status_idx").on(table.project_id, table.type, table.status),
+    index("mem_record_project_subject_idx").on(table.project_id, table.subject),
+    index("mem_record_session_idx").on(table.session_id),
+  ],
+)

@@ -35,7 +35,7 @@ jobs:
       - name: Run memory-context tests
         working-directory: packages/core
         timeout-minutes: 10
-        run: bun test test/memory-context.test.ts test/memory-context-savings.test.ts test/cache-mark.test.ts test/tool-get-call-details.test.ts test/tool-find-tool-calls.test.ts test/tool-find-pii.test.ts test/tool-get-tool-call-overview.test.ts test/pii.test.ts 2>&1 | tee "$GITHUB_WORKSPACE/mem-context-test.log"
+        run: bun test test/memory-context.test.ts test/memory-context-savings.test.ts test/cache-mark.test.ts test/tool-get-call-details.test.ts test/tool-find-tool-calls.test.ts test/tool-find-pii.test.ts test/tool-get-tool-call-overview.test.ts test/pii.test.ts test/mem-record.test.ts 2>&1 | tee "$GITHUB_WORKSPACE/mem-context-test.log"
 
       - name: Report savings
         if: always()
@@ -88,7 +88,7 @@ jobs:
         # and are not part of the core suite above.
         working-directory: packages/opencode
         timeout-minutes: 10
-        run: bun test test/tool/memory-retrieval-v1.test.ts 2>&1 | tee "$GITHUB_WORKSPACE/v1-retrieval-test.log"
+        run: bun test test/tool/memory-retrieval-v1.test.ts test/tool/operational-memory-v1.test.ts 2>&1 | tee "$GITHUB_WORKSPACE/v1-retrieval-test.log"
 
       - name: Typecheck opencode
         working-directory: packages/opencode
