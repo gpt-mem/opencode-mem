@@ -20,6 +20,7 @@ cliIt.concurrent(
       })
       expect(result.exitCode, result.stderr).toBe(0)
       expect(result.stdout).toContain("audit-recovered")
+      expect(result.stderr).toContain("Retrying provider ladder (attempt 1, in 0s)")
       expect(result.stderr).not.toContain("every rung failed")
     }),
   45_000,
@@ -45,7 +46,38 @@ cliIt.live(
       })
       expect(result.exitCode, result.stderr).toBe(0)
       expect(result.stdout).toContain("attach-recovered")
+      expect(result.stderr).toContain("Retrying provider ladder (attempt 1, in 0s)")
       expect(result.stderr).not.toContain("every rung failed")
+    }),
+  45_000,
+)
+
+cliIt.concurrent(
+  "reports retry state as JSON before the recovered answer",
+  ({ llm, opencode }) =>
+    Effect.gen(function* () {
+      yield* llm.error(400, { error: { message: "every rung failed" } })
+      yield* llm.text("json-recovered")
+      const result = yield* opencode.run("synthetic JSON recovery check", {
+        format: "json",
+        timeoutMs: 30_000,
+        env: {
+          OPENCODE_CONFIG_CONTENT: JSON.stringify({
+            ...testProviderConfig(llm.url),
+            experimental: { ladder_retry_delay: 0 },
+          }),
+        },
+      })
+      const events = opencode.parseJsonEvents(result.stdout)
+      expect(result.exitCode).toBe(0)
+      expect(events.filter((event) => event.type === "retry")).toEqual([
+        expect.objectContaining({
+          status: expect.objectContaining({ type: "retry", attempt: 1, next: expect.any(Number) }),
+        }),
+      ])
+      expect(events.some((event) => event.type === "text" && JSON.stringify(event).includes("json-recovered"))).toBe(
+        true,
+      )
     }),
   45_000,
 )

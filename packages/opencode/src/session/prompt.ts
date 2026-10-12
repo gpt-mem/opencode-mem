@@ -88,7 +88,6 @@ const STRUCTURED_OUTPUT_SYSTEM_PROMPT = `IMPORTANT: The user has requested struc
 // Issue #39: the provider ladder gateway reports total failure when every
 // rung in its model ladder is down (typically HTTP 502; wording varies
 // across gateway versions, so match both spellings).
-const LADDER_ERROR_PATTERN = /every rung failed|ladder_error/i
 // SessionRetry already spent its fast in-request retries (2s→30s backoff)
 // against a failing gateway; burning more immediate attempts only delays
 // the inevitable. Re-prompt the same user turn after a longer backoff
@@ -1433,12 +1432,7 @@ const layer = Layer.effect(
             // error attached — an explicit failure, not silence. Attempts
             // are counted from durable synthetic continue messages, so a
             // resumed session finishes the budget instead of restarting it.
-            if (
-              result === "stop" &&
-              handle.message.error &&
-              SessionV1.APIError.isInstance(handle.message.error) &&
-              LADDER_ERROR_PATTERN.test(handle.message.error.data.message)
-            ) {
+            if (result === "stop" && handle.message.error && SessionProcessor.isLadderError(handle.message.error)) {
               const cfg = yield* config.get()
               if (cfg.experimental?.ladder_retry !== false) {
                 const isLadderAuto = (m: (typeof msgs)[number]) =>
@@ -1486,6 +1480,7 @@ const layer = Layer.effect(
                   attempts,
                 })
               }
+              yield* events.publish(Session.Event.Error, { sessionID, error: handle.message.error })
             }
 
             if (result === "stop") return "break" as const
