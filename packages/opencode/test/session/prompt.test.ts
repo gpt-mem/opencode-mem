@@ -530,6 +530,57 @@ it.instance("loop exits without an LLM request for interrupted orphan tool calls
   }),
 )
 
+it.instance("restart blocks an uncertain tool action while preserving completed actions (issue #83)", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const chat = yield* sessions.create({ title: "Pinned" })
+    const seeded = yield* seed(chat.id)
+    yield* sessions.updatePart({
+      id: PartID.ascending(),
+      messageID: seeded.assistant.id,
+      sessionID: chat.id,
+      type: "tool",
+      callID: "completed-action",
+      tool: "edit",
+      state: {
+        status: "completed",
+        input: {},
+        output: "saved",
+        title: "saved",
+        metadata: {},
+        time: { start: 1, end: 2 },
+      },
+    })
+    yield* sessions.updatePart({
+      id: PartID.ascending(),
+      messageID: seeded.assistant.id,
+      sessionID: chat.id,
+      type: "tool",
+      callID: "uncertain-action",
+      tool: "bash",
+      state: { status: "running", input: { command: "touch marker" }, time: { start: 3 } },
+    })
+
+    const result = yield* prompt.loop({ sessionID: chat.id })
+    expect(yield* llm.calls).toBe(0)
+    expect(result.info.role).toBe("assistant")
+    if (result.info.role === "assistant") {
+      expect(result.info.finish).toBe("error")
+      expect(result.info.error?.name).toBe("UnknownError")
+    }
+    const stored = yield* sessions.messages({ sessionID: chat.id })
+    const parts = stored.flatMap((m) => m.parts)
+    expect(parts.find((p) => p.type === "tool" && p.callID === "completed-action")).toMatchObject({
+      state: { status: "completed", output: "saved" },
+    })
+    expect(parts.find((p) => p.type === "tool" && p.callID === "uncertain-action")).toMatchObject({
+      state: { status: "error", metadata: { interrupted: true } },
+    })
+  }),
+)
+
 it.instance("loop calls LLM and returns assistant message", () =>
   Effect.gen(function* () {
     const { llm } = yield* useServerConfig(providerCfg)

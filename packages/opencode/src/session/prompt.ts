@@ -1126,6 +1126,41 @@ const layer = Layer.effect(
           const lastAssistantMsg = msgs.findLast(
             (msg) => msg.info.role === "assistant" && msg.info.id === lastAssistant?.id,
           )
+          // A fresh runner cannot know whether an unfinished tool action had
+          // side effects before the previous process died. Preserve its call
+          // record and stop instead of sending it to the model again.
+          const uncertain = lastAssistantMsg?.parts.find(
+            (part): part is SessionV1.ToolPart =>
+              part.type === "tool" && (part.state.status === "pending" || part.state.status === "running"),
+          )
+          if (uncertain && lastAssistant?.role === "assistant") {
+            const message = `The previous ${uncertain.tool} action was interrupted. Check its effects before sending a new instruction.`
+            for (const part of lastAssistantMsg?.parts ?? []) {
+              if (part.type !== "tool" || (part.state.status !== "pending" && part.state.status !== "running")) continue
+              yield* sessions.updatePart({
+                ...part,
+                state: {
+                  status: "error",
+                  input: part.state.input,
+                  error: message,
+                  metadata: { ...(part.state.status === "running" ? part.state.metadata : {}), interrupted: true },
+                  time: {
+                    start: part.state.status === "running" ? part.state.time.start : Date.now(),
+                    end: Date.now(),
+                  },
+                },
+              })
+            }
+            const error = new NamedError.Unknown({ message }).toObject()
+            yield* sessions.updateMessage({
+              ...lastAssistant,
+              error,
+              finish: "error",
+              time: { ...lastAssistant.time, completed: Date.now() },
+            })
+            yield* events.publish(Session.Event.Error, { sessionID, error })
+            break
+          }
           // Some providers return "stop" even when the assistant message contains
           // tool calls. Keep the loop running so tool results can be sent back to
           // the model, but ignore cleanup-marked interrupted orphans.
