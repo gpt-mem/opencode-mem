@@ -24,6 +24,7 @@ if not FILES:
     raise SystemExit("no OpenCode tests discovered")
 
 CHUNKS = 16
+failed = []
 for index in range(CHUNKS):
     group = FILES[index * len(FILES) // CHUNKS:(index + 1) * len(FILES) // CHUNKS]
     print(f"OpenCode chunk {index + 1}/{CHUNKS}: {len(group)} files; starting", flush=True)
@@ -54,7 +55,12 @@ for index in range(CHUNKS):
         summary = next((line for line in output.splitlines() if re.search(r"Ran \d+ tests across", line)), None)
         if code != 0 or summary is None:
             print("\n".join(output.splitlines()[-100:]), flush=True)
-            sys.exit(1)
+            failed.append(index + 1)
+            continue
         for line in output.splitlines():
             if re.search(r"\b\d+ (pass|fail|skip)\b|Ran \d+ tests across", line):
                 print(line[:300], flush=True)
+
+if failed:
+    print(f"Failed OpenCode chunks: {failed}", flush=True)
+    sys.exit(1)
