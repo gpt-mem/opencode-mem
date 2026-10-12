@@ -20,6 +20,7 @@ cliIt.concurrent(
       })
       expect(result.exitCode, result.stderr).toBe(0)
       expect(result.stdout).toContain("audit-recovered")
+      expect(result.stdout).not.toContain("The model provider ladder is exhausted")
       expect(result.stderr).toContain("Retrying provider ladder (attempt 1, in 0s)")
       expect(result.stderr).not.toContain("every rung failed")
     }),
@@ -46,6 +47,7 @@ cliIt.live(
       })
       expect(result.exitCode, result.stderr).toBe(0)
       expect(result.stdout).toContain("attach-recovered")
+      expect(result.stdout).not.toContain("The model provider ladder is exhausted")
       expect(result.stderr).toContain("Retrying provider ladder (attempt 1, in 0s)")
       expect(result.stderr).not.toContain("every rung failed")
     }),
