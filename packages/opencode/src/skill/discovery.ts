@@ -1,7 +1,7 @@
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { httpClient, path } from "@opencode-ai/core/effect/app-node-platform"
 import { NodePath } from "@effect/platform-node"
-import { Effect, Layer, Path, Schema, Context } from "effect"
+import { Effect, Layer, Path, Schema, Context, Schedule } from "effect"
 import { FetchHttpClient, HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import { withTransientReadRetry } from "@/util/effect-http-client"
 import { FSUtil } from "@opencode-ai/core/fs-util"
@@ -33,6 +33,19 @@ const layer: Layer.Layer<Service, never, FSUtil.Service | Path.Path | HttpClient
     const path = yield* Path.Path
     const http = HttpClient.filterStatusOk(withTransientReadRetry(yield* HttpClient.HttpClient))
     const cache = path.join(Global.Path.cache, "skills")
+
+    // On Windows a just-read SKILL.md can briefly keep the directory handle
+    // open. Retry only sharing violations during the atomic cache swap; a
+    // missing path or another permanent error still fails immediately.
+    const rename = (from: string, to: string) =>
+      fs.rename(from, to).pipe(
+        Effect.retry({
+          while: (error) =>
+            process.platform === "win32" &&
+            (error.reason._tag === "Busy" || error.reason._tag === "PermissionDenied"),
+          schedule: Schedule.spaced("100 millis").pipe(Schedule.both(Schedule.recurs(30))),
+        }),
+      )
 
     const download = Effect.fn("Discovery.download")(function* (url: string, dest: string) {
       if (yield* fs.exists(dest).pipe(Effect.orDie)) return true
@@ -106,11 +119,11 @@ const layer: Layer.Layer<Service, never, FSUtil.Service | Path.Path | HttpClient
                 yield* Effect.uninterruptible(
                   Effect.gen(function* () {
                     const cached = yield* fs.exists(root).pipe(Effect.orDie)
-                    if (cached) yield* fs.rename(root, backup)
-                    yield* fs.rename(staging, root).pipe(
+                    if (cached) yield* rename(root, backup)
+                    yield* rename(staging, root).pipe(
                       Effect.catch((error) =>
                         Effect.gen(function* () {
-                          if (cached) yield* fs.rename(backup, root).pipe(Effect.ignore)
+                          if (cached) yield* rename(backup, root).pipe(Effect.ignore)
                           return yield* Effect.fail(error)
                         }),
                       ),
