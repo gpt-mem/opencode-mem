@@ -21,6 +21,7 @@ const DEFAULT_LIMIT = 20
 const MAX_LIMIT = 100
 const PREVIEW_CHARS = 240
 const INPUT_SUMMARY_CHARS = 200
+const SNIPPET_CONTEXT = 180
 
 export const Input = Schema.Struct({
   tool: Schema.optional(Schema.String.annotate({ description: "Exact tool name to filter by (e.g. bash, read)" })),
@@ -32,7 +33,9 @@ export const Input = Schema.Struct({
   query: Schema.optional(
     Schema.String.annotate({
       description:
-        "Regular expression matched against tool input (command/url/path), output text and error message, case-insensitive",
+        "Regular expression matched against tool input (command/url/path), output text and error message, case-insensitive. " +
+        "When it matches the output text, each result includes match_offset and match_snippet so you can answer from the " +
+        "snippet or page get_tool_call_details with a small window instead of full=true",
     }),
   ),
   limit: Schema.optional(
@@ -51,6 +54,15 @@ export const Call = Schema.Struct({
   input: Schema.optional(Schema.String),
   preview: Schema.optional(Schema.String),
   error: Schema.optional(Schema.String),
+  match_offset: Schema.optional(
+    Schema.Number.annotate({
+      description:
+        "Character offset of the first query match within the tool output; pass as get_tool_call_details offset",
+    }),
+  ),
+  match_snippet: Schema.optional(
+    Schema.String.annotate({ description: "Redacted window around the first query match in the tool output" }),
+  ),
 })
 
 export const Output = Schema.Struct({
@@ -64,6 +76,24 @@ export const toModelOutput = (output: Output) => JSON.stringify(output, null, 2)
 const decodeMessage = Schema.decodeUnknownEffect(SessionMessage.Message)
 
 const bound = (text: string, max: number) => (text.length <= max ? text : text.slice(0, max))
+
+// When a query hits the stored tool output, surface a window around the first
+// match so the model can answer a needle question (or page get_tool_call_details
+// with a small offset window) without re-injecting the full original via
+// full=true. match_offset is an index into the same output text that details
+// pages over. Input-only matches (command/url) do not set these fields — the
+// offset would not line up with the output document.
+const matchWindow = (raw: string | undefined, regex: RegExp | undefined) => {
+  if (raw === undefined || regex === undefined) return undefined
+  const hit = regex.exec(raw)
+  if (hit === null) return undefined
+  const start = Math.max(0, hit.index - SNIPPET_CONTEXT)
+  const end = Math.min(raw.length, hit.index + hit[0].length + SNIPPET_CONTEXT)
+  return {
+    match_offset: hit.index,
+    match_snippet: PII.redact(raw.slice(start, end)).text,
+  }
+}
 
 const inputSummary = (input: unknown) => {
   if (typeof input === "string") return input === "" ? undefined : bound(PII.redact(input).text, INPUT_SUMMARY_CHARS)
@@ -95,6 +125,7 @@ export type Candidate = {
   readonly preview?: string
   readonly error?: string
   readonly haystack: string
+  readonly raw?: string
 }
 
 const toolCandidates = (
@@ -130,6 +161,7 @@ const toolCandidates = (
         haystack: [input, raw, state.status === "error" ? state.error.message : undefined]
           .filter((part): part is string => part !== undefined)
           .join("\n"),
+        ...(raw === undefined ? {} : { raw }),
       },
     ]
   })
@@ -145,6 +177,7 @@ const shellCandidate = (message: SessionMessage.Shell, seq: number): Candidate =
     input: bound(PII.redact(message.command).text, INPUT_SUMMARY_CHARS),
     preview,
     haystack: `${message.command}\n${message.output}`,
+    raw: message.output,
   }
 }
 
@@ -186,8 +219,9 @@ const layer = Layer.effectDiscard(
           description:
             "Search tool calls in this session by tool name, status or pattern. " +
             "Returns compact entries (call_id, status, input, preview) so you can locate a call and then load its full " +
-            "output with get_tool_call_details(call_id). Compacted [mem:compacted] results are searchable here because " +
-            "the originals live in session history. Memory-tool calls are never returned here " +
+            "output with get_tool_call_details(call_id). A query that matches tool output also returns match_snippet and " +
+            "match_offset — prefer that over full=true when hunting a needle. Compacted [mem:compacted] results are " +
+            "searchable here because the originals live in session history. Memory-tool calls are never returned here " +
             "(a query would match its own earlier searches, issue #34); they are counted in " +
             "get_tool_call_overview and load by call_id (issue #48).",
           input: Input,
@@ -218,16 +252,20 @@ const layer = Layer.effectDiscard(
               const calls = matched
                 .slice(-limit)
                 .reverse()
-                .map((candidate) => ({
-                  call_id: candidate.call_id,
-                  tool: candidate.tool,
-                  status: candidate.status,
-                  message_id: candidate.message_id,
-                  seq: candidate.seq,
-                  ...(candidate.input === undefined ? {} : { input: candidate.input }),
-                  ...(candidate.preview === undefined ? {} : { preview: candidate.preview }),
-                  ...(candidate.error === undefined ? {} : { error: candidate.error }),
-                }))
+                .map((candidate) => {
+                  const window = matchWindow(candidate.raw, regex)
+                  return {
+                    call_id: candidate.call_id,
+                    tool: candidate.tool,
+                    status: candidate.status,
+                    message_id: candidate.message_id,
+                    seq: candidate.seq,
+                    ...(candidate.input === undefined ? {} : { input: candidate.input }),
+                    ...(candidate.preview === undefined ? {} : { preview: candidate.preview }),
+                    ...(candidate.error === undefined ? {} : { error: candidate.error }),
+                    ...(window === undefined ? {} : window),
+                  }
+                })
               return { calls, matched: matched.length }
             }).pipe(
               Effect.mapError((error) =>

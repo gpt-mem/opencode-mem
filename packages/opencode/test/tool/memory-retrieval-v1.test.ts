@@ -131,6 +131,66 @@ const seedMemoryParts = Effect.gen(function* () {
 // count the shared session, so these parts must not land there.
 const evidenceSessionID = SessionID.make("ses_v1_evidence_test")
 
+// Needle-match fixtures live in their own session so find/overview counts on
+// the shared session stay stable while match_snippet/match_offset are asserted.
+const needleSessionID = SessionID.make("ses_v1_needle_test")
+
+const seedNeedle = Effect.gen(function* () {
+  const { db } = yield* Database.Service
+  yield* db
+    .insert(ProjectTable)
+    .values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] })
+    .onConflictDoNothing()
+    .run()
+    .pipe(Effect.orDie)
+  yield* db
+    .insert(SessionTable)
+    .values({
+      id: needleSessionID,
+      project_id: Project.ID.global,
+      slug: "v1-needle",
+      directory: AbsolutePath.make("/project"),
+      title: "test",
+      version: "0.0.0",
+    })
+    .onConflictDoNothing()
+    .run()
+    .pipe(Effect.orDie)
+  yield* db
+    .insert(MessageTable)
+    .values(
+      ["call_needle_log", "call_needle_cmd"].map((id) => ({
+        id: MessageID.make(`msg_${id}`),
+        session_id: needleSessionID,
+        time_created: 0,
+        data: { role: "assistant" as const, agent: "build", time: { created: 0 } },
+      })),
+    )
+    .onConflictDoNothing()
+    .run()
+    .pipe(Effect.orDie)
+  yield* db
+    .insert(PartTable)
+    .values([
+      toolPart({
+        id: "call_needle_log",
+        tool: "bash",
+        output: `${"heartbeat\n".repeat(80)}DEPLOY-CODE-NEEDLE = X7Q9-M3KT\n${"ok\n".repeat(40)}`,
+        input: { command: "cat app.log" },
+        sessionID: needleSessionID,
+      }),
+      toolPart({
+        id: "call_needle_cmd",
+        tool: "bash",
+        output: "done",
+        input: { command: "grep NEEDLE app.log" },
+        sessionID: needleSessionID,
+      }),
+    ])
+    .run()
+    .pipe(Effect.orDie)
+})
+
 const seedEvidence = Effect.gen(function* () {
   const { db } = yield* Database.Service
   yield* db
@@ -387,6 +447,26 @@ describe("tool.find-tool-calls (V1)", () => {
       const result = yield* def.execute({ tool: "bash", status: "completed" }, ctx(sessionID))
       const parsed = JSON.parse(result.output)
       expect(parsed.calls[0].preview.length).toBeLessThanOrEqual(240)
+    }),
+  )
+
+  it.instance("query that matches mid-output returns match_snippet and match_offset", () =>
+    Effect.gen(function* () {
+      yield* seedNeedle
+      const def = yield* Tool.init(yield* FindToolCallsTool)
+      const result = yield* def.execute({ query: "DEPLOY-CODE-NEEDLE" }, ctx(needleSessionID))
+      const parsed = JSON.parse(result.output)
+      expect(parsed.matched).toBe(1)
+      const entry = parsed.calls[0]
+      expect(entry.call_id).toBe("call_needle_log")
+      expect(typeof entry.match_offset).toBe("number")
+      expect(entry.match_offset).toBeGreaterThan(200)
+      expect(entry.match_snippet).toContain("DEPLOY-CODE-NEEDLE = X7Q9-M3KT")
+      expect(entry.match_snippet.length).toBeLessThanOrEqual(400)
+      expect(entry.preview).not.toContain("X7Q9-M3KT")
+      const byCommand = JSON.parse((yield* def.execute({ query: "cat app\\.log" }, ctx(needleSessionID))).output)
+      expect(byCommand.matched).toBe(1)
+      expect(byCommand.calls[0].match_offset).toBeUndefined()
     }),
   )
 
