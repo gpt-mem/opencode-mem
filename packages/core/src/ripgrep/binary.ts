@@ -55,9 +55,16 @@ export namespace RipgrepBinary {
       ) {
         const dir = yield* fs.makeTempDirectoryScoped({ directory: Global.Path.bin, prefix: "ripgrep-" })
 
-        const result = yield* run("tar", [config.extension === "zip" ? "-xf" : "-xzf", archive, "-C", dir])
+        // Git for Windows may put GNU tar first on PATH; it treats C: as a remote archive host.
+        const tar =
+          process.platform === "win32"
+            ? path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe")
+            : "tar"
+        const result = yield* run(tar, [config.extension === "zip" ? "-xf" : "-xzf", archive, "-C", dir])
         if (result.code !== 0)
-          throw new Error(result.stderr.trim() || result.stdout.trim() || `ripgrep extraction failed with code ${result.code}`)
+          throw new Error(
+            result.stderr.trim() || result.stdout.trim() || `ripgrep extraction failed with code ${result.code}`,
+          )
 
         const extracted = path.join(
           dir,
