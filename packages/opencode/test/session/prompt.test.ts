@@ -969,6 +969,14 @@ it.instance("ladder total failure auto-continues and recovers (issue #39)", () =
     const prompt = yield* SessionPrompt.Service
     const sessions = yield* Session.Service
     const chat = yield* sessions.create({ title: "Pinned" })
+    const events = yield* EventV2Bridge.Service
+    const states: string[] = []
+    const off = yield* events.listen((event) => {
+      if (event.type !== SessionStatus.Event.Status.type) return Effect.void
+      const data = event.data as typeof SessionStatus.Event.Status.data.Type
+      if (data.sessionID === chat.id) states.push(data.status.type)
+      return Effect.void
+    })
 
     // 400 + ladder wording: SessionRetry leaves it alone (non-retryable,
     // no5xx, message patterns don't match), so the loop-level auto-continue
@@ -983,8 +991,11 @@ it.instance("ladder total failure auto-continues and recovers (issue #39)", () =
     })
     const result = yield* prompt.loop({ sessionID: chat.id })
     const messages = yield* sessions.messages({ sessionID: chat.id })
+    yield* off
 
     expect(yield* llm.calls).toBe(2)
+    expect(states).toContain("retry")
+    expect(states.filter((state) => state === "idle")).toHaveLength(1)
     expect(result.info.role).toBe("assistant")
     if (result.info.role === "assistant") {
       expect(result.info.error).toBeUndefined()

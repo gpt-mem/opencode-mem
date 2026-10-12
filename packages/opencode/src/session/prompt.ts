@@ -1454,6 +1454,12 @@ const layer = Layer.effect(
                     backoffMs,
                     message: handle.message.error.data.message,
                   })
+                  yield* status.set(sessionID, {
+                    type: "retry",
+                    attempt: attempts + 1,
+                    message: "Provider ladder exhausted; retrying",
+                    next: Date.now() + backoffMs,
+                  })
                   yield* Effect.sleep(Duration.millis(backoffMs))
                   const continueMsg = yield* sessions.updateMessage({
                     id: MessageID.ascending(),
