@@ -382,6 +382,35 @@ describe("tool.search_operational_memory (V1)", () => {
     }),
   )
 
+  // Regression for the live selftest 20261012-055635: type=decision + query="decision"
+  // returned a bare zero and read as "the memory is empty".
+  it.instance("explains a query that erased filter-matched records", () =>
+    Effect.gen(function* () {
+      yield* seed
+      const put = yield* Tool.init(yield* PutInOperationalMemoryTool)
+      yield* put.execute(
+        {
+          entries: [
+            { type: "decision", subject: "fork OpenCode", decision: "принято решение форкать опенкод" },
+            { type: "decision", subject: "cache strategy", decision: "use provider cache-mark ledger" },
+          ],
+        },
+        ctx(),
+      )
+      const search = yield* Tool.init(yield* SearchOperationalMemoryTool)
+      const result = yield* search.execute({ type: "decision", query: "decision" }, ctx())
+      const parsed = JSON.parse(result.output)
+      expect(parsed.matched).toBe(0)
+      expect(parsed.filter_matched).toBe(2)
+      expect(parsed.hint).toContain("retry without query")
+
+      const withoutQuery = yield* search.execute({ type: "decision" }, ctx())
+      const listed = JSON.parse(withoutQuery.output)
+      expect(listed.matched).toBe(2)
+      expect(listed.hint).toBeUndefined()
+    }),
+  )
+
   it.instance("most recent first when multiple match", () =>
     Effect.gen(function* () {
       yield* seed

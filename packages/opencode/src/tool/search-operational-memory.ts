@@ -10,7 +10,9 @@ const MAX_LIMIT = 100
 export const Parameters = Schema.Struct({
   query: Schema.optional(
     Schema.String.annotate({
-      description: "Case-insensitive regular expression matched against subject, content and reason",
+      description:
+        "Case-insensitive regular expression matched against subject, content and reason. " +
+        "It matches record TEXT, not the type label — to list every record of a kind use type= without query",
     }),
   ),
   type: Schema.optional(MemRecord.Type.annotate({ description: "Only return this record type" })),
@@ -38,7 +40,8 @@ export const SearchOperationalMemoryTool = Tool.define<typeof Parameters, Metada
         "Search typed operational memories (decisions, constraints, failed approaches, user signals) " +
         "stored for this project via put_in_operational_memory. Project-scoped: finds records from earlier " +
         "sessions too. Each hit includes authority (user vs agent), decided_by, reason and source_ref so " +
-        "provenance is visible. Use this to recover 'what did we decide and why' without re-reading history.",
+        "provenance is visible. Use this to recover 'what did we decide and why' without re-reading history. " +
+        "To list every record of a kind pass type= alone; query is a text regex and usually misses the type label.",
       parameters: Parameters,
       execute: (params: Schema.Schema.Type<typeof Parameters>, ctx: Tool.Context<Metadata>) =>
         Effect.gen(function* () {
@@ -64,8 +67,20 @@ export const SearchOperationalMemoryTool = Tool.define<typeof Parameters, Metada
             }
           }
           return {
-            title: `${result.matched} matching memories`,
-            output: JSON.stringify({ records: result.records, matched: result.matched }, null, 2),
+            title:
+              result.hint === undefined
+                ? `${result.matched} matching memories`
+                : `${result.matched} matching memories (${result.filter_matched} match the filters)`,
+            output: JSON.stringify(
+              {
+                records: result.records,
+                matched: result.matched,
+                filter_matched: result.filter_matched,
+                hint: result.hint,
+              },
+              null,
+              2,
+            ),
             metadata: { matched: result.matched },
           }
         }),

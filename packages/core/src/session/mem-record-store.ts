@@ -143,7 +143,17 @@ export const writeBatch = (
     return { ok: true as const, records: inserted }
   })
 
-export type SearchResult = { readonly records: MemRecord.Record[]; readonly matched: number }
+export type SearchResult = {
+  readonly records: MemRecord.Record[]
+  readonly matched: number
+  /** Rows matching every non-query filter, before the query regex is applied. */
+  readonly filter_matched: number
+  /**
+   * Set when a query regex erased records the other filters had matched. A bare
+   * `0` reads as "memory is empty" and the caller stops looking, so surface why.
+   */
+  readonly hint?: string
+}
 
 export const search = (
   db: Db,
@@ -189,7 +199,19 @@ export const search = (
     })
 
     const limit = Math.max(1, Math.min(input.limit ?? 20, 100))
-    return { records: matched.slice(-limit).reverse().map(toRecord), matched: matched.length }
+    // A type name like "decision" is a label, not text that appears in the
+    // records themselves, so `type=decision&query=decision` empties a non-empty
+    // store. Say so instead of returning a bare zero.
+    const hint =
+      input.query !== undefined && matched.length === 0 && rows.length > 0
+        ? `query matched 0 of ${rows.length} record(s) that match the other filters — query is a regex over subject/content/reason, so a type name like "${input.query}" usually matches nothing; retry without query to list them`
+        : undefined
+    return {
+      records: matched.slice(-limit).reverse().map(toRecord),
+      matched: matched.length,
+      filter_matched: rows.length,
+      hint,
+    }
   })
 
 export type GetResult = {
