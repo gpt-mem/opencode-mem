@@ -597,17 +597,18 @@ it.instance("restart answers a newly submitted user prompt with the uncertain-ac
       tool: "bash",
       state: { status: "running", input: { command: "touch marker" }, time: { start: 3 } },
     })
-    const next = yield* prompt.prompt({
+    const result = yield* prompt.prompt({
       sessionID: chat.id,
       agent: "build",
-      noReply: true,
       parts: [{ type: "text", text: "continue after crash" }],
     })
-    const result = yield* prompt.loop({ sessionID: chat.id })
     expect(yield* llm.calls).toBe(0)
     expect(result.info.role).toBe("assistant")
     if (result.info.role === "assistant") {
-      expect(result.info.parentID).toBe(next.info.id)
+      const messages = yield* sessions.messages({ sessionID: chat.id })
+      const latestUser = messages.findLast((m) => m.info.role === "user")
+      if (!latestUser) throw new Error("Expected a resumed user message")
+      expect(result.info.parentID).toBe(latestUser.info.id)
       expect(result.info.error?.name).toBe("UnknownError")
     }
   }),
