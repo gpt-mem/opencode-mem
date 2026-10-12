@@ -9,6 +9,7 @@ import { Project } from "@opencode-ai/core/project"
 import { ProjectTable } from "@opencode-ai/core/project/sql"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { AbsolutePath } from "@opencode-ai/core/schema"
+import { Global } from "@opencode-ai/core/global"
 import { SessionV2 } from "@opencode-ai/core/session"
 import { SessionMessage } from "@opencode-ai/core/session/message"
 import { SessionMessageTable, SessionTable } from "@opencode-ai/core/session/sql"
@@ -245,6 +246,23 @@ describe("FindToolCallsTool", () => {
     }),
   )
 
+  it.effect("offset pages past the most-recent limit window", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const registry = yield* ToolRegistry.Service
+      const page1 = parsed(yield* executeTool(registry, call({ tool: "bash", limit: 2 })))
+      expect(callsOf(page1).map((candidate) => candidate["call_id"])).toEqual(["call_long_log", "call_secret"])
+      const page2 = parsed(yield* executeTool(registry, call({ tool: "bash", limit: 2, offset: 2 })))
+      expect(page2["matched"]).toBe(5)
+      expect(callsOf(page2).map((candidate) => candidate["call_id"])).toEqual(["call_shell_1", "call_bash_fail"])
+      const page3 = parsed(yield* executeTool(registry, call({ tool: "bash", limit: 2, offset: 4 })))
+      expect(callsOf(page3).map((candidate) => candidate["call_id"])).toEqual(["call_bash_ok"])
+      const past = parsed(yield* executeTool(registry, call({ tool: "bash", offset: 10 })))
+      expect(past["matched"]).toBe(5)
+      expect(callsOf(past).length).toBe(0)
+    }),
+  )
+
   it.effect("bounds long previews", () =>
     Effect.gen(function* () {
       yield* setup
@@ -380,6 +398,44 @@ describe("FindToolCallsTool", () => {
       expect(calls.map((candidate) => candidate["call_id"])).toContain("call_bash_fail")
       expect(calls.every((candidate) => candidate["call_id"] !== "call_bash_ok")).toBe(true)
       expect(calls.every((candidate) => candidate["call_id"] !== "call_secret")).toBe(true)
+    }),
+  )
+
+  it.effect("truncation-notice output matches but never sets match_offset (details pages the managed file)", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const { db } = yield* Database.Service
+      yield* db
+        .insert(SessionMessageTable)
+        .values([
+          assistantRow(SessionMessage.ID.make("msg_call_notice"), 8, [
+            SessionMessage.AssistantTool.make({
+              type: "tool",
+              id: "call_managed_notice",
+              name: "bash",
+              state: SessionMessage.ToolStateCompleted.make({
+                status: "completed",
+                input: { command: "cat huge.bin" },
+                content: [
+                  {
+                    type: "text",
+                    text: `...output truncated...\n\nFull output saved to: ${Global.Path.data}/tool-output/tool_find_test_managed\n\npreview`,
+                  },
+                ],
+                structured: {},
+              }),
+              time: { created },
+            }),
+          ]),
+        ])
+        .run()
+        .pipe(Effect.orDie)
+      const registry = yield* ToolRegistry.Service
+      const output = parsed(yield* executeTool(registry, call({ query: "truncated" })))
+      const entry = callsOf(output).find((candidate) => candidate["call_id"] === "call_managed_notice")
+      expect(entry).toBeDefined()
+      expect(entry?.["match_offset"]).toBeUndefined()
+      expect(entry?.["match_snippet"]).toBeUndefined()
     }),
   )
 })
