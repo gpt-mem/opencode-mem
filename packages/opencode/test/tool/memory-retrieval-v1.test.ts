@@ -33,6 +33,7 @@ const toolPart = (args: {
   output?: string
   error?: string
   input?: Record<string, unknown>
+  exit?: number
   sessionID?: typeof sessionID
 }) => ({
   id: PartID.make(`prt_${args.id}`),
@@ -50,7 +51,7 @@ const toolPart = (args: {
             input: args.input ?? {},
             output: args.output ?? "",
             title: args.tool,
-            metadata: {},
+            metadata: args.exit === undefined ? {} : { exit: args.exit },
             time: { start: 0, end: 1 },
           }
         : { status: "error", input: args.input ?? {}, error: args.error, time: { start: 0, end: 1 } },
@@ -94,7 +95,7 @@ const seed = Effect.gen(function* () {
   yield* db
     .insert(PartTable)
     .values([
-      toolPart({ id: "call_big", tool: "bash", output: "x".repeat(5000), input: { command: "cat big.txt" } }),
+      toolPart({ id: "call_big", tool: "bash", output: "x".repeat(5000), input: { command: "cat big.txt" }, exit: 0 }),
       toolPart({ id: "call_err", tool: "bash", error: "exit code 1", input: { command: "npm test" } }),
       toolPart({ id: "call_small", tool: "read", output: "ok", input: { path: "a.ts" } }),
     ])
@@ -185,6 +186,74 @@ const seedNeedle = Effect.gen(function* () {
         output: "done",
         input: { command: "grep NEEDLE app.log" },
         sessionID: needleSessionID,
+      }),
+    ])
+    .run()
+    .pipe(Effect.orDie)
+})
+
+// Exit-code fixtures live in their own session so shared-session counts stay stable.
+const exitSessionID = SessionID.make("ses_v1_exit_test")
+
+const seedExit = Effect.gen(function* () {
+  const { db } = yield* Database.Service
+  yield* db
+    .insert(ProjectTable)
+    .values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] })
+    .onConflictDoNothing()
+    .run()
+    .pipe(Effect.orDie)
+  yield* db
+    .insert(SessionTable)
+    .values({
+      id: exitSessionID,
+      project_id: Project.ID.global,
+      slug: "v1-exit",
+      directory: AbsolutePath.make("/project"),
+      title: "test",
+      version: "0.0.0",
+    })
+    .onConflictDoNothing()
+    .run()
+    .pipe(Effect.orDie)
+  yield* db
+    .insert(MessageTable)
+    .values(
+      ["call_exit_ok", "call_exit_fail", "call_exit_err"].map((id) => ({
+        id: MessageID.make(`msg_${id}`),
+        session_id: exitSessionID,
+        time_created: 0,
+        data: { role: "assistant" as const, agent: "build", time: { created: 0 } },
+      })),
+    )
+    .onConflictDoNothing()
+    .run()
+    .pipe(Effect.orDie)
+  yield* db
+    .insert(PartTable)
+    .values([
+      toolPart({
+        id: "call_exit_ok",
+        tool: "bash",
+        output: "ok",
+        input: { command: "true" },
+        exit: 0,
+        sessionID: exitSessionID,
+      }),
+      toolPart({
+        id: "call_exit_fail",
+        tool: "bash",
+        output: "boom",
+        input: { command: "false" },
+        exit: 1,
+        sessionID: exitSessionID,
+      }),
+      toolPart({
+        id: "call_exit_err",
+        tool: "bash",
+        error: "spawn failed",
+        input: { command: "missing-binary" },
+        sessionID: exitSessionID,
       }),
     ])
     .run()
@@ -559,6 +628,26 @@ describe("tool.find-tool-calls (V1)", () => {
       expect(byQuery.matched).toBe(0)
       const unfiltered = JSON.parse((yield* find.execute({}, ctx(sessionID))).output)
       expect(unfiltered.matched).toBe(3)
+    }),
+  )
+
+  it.instance("surfaces exit_code from shell metadata and failed=true selects non-zero/error", () =>
+    Effect.gen(function* () {
+      yield* seedExit
+      const def = yield* Tool.init(yield* FindToolCallsTool)
+      const all = JSON.parse((yield* def.execute({}, ctx(exitSessionID))).output)
+      const byId = new Map(
+        all.calls.map((call: { call_id: string; exit_code?: number }) => [call.call_id, call.exit_code]),
+      )
+      expect(byId.get("call_exit_ok")).toBe(0)
+      expect(byId.get("call_exit_fail")).toBe(1)
+      expect(byId.get("call_exit_err")).toBeUndefined()
+
+      const failed = JSON.parse((yield* def.execute({ failed: true }, ctx(exitSessionID))).output)
+      expect(failed.calls.map((call: { call_id: string }) => call.call_id).sort()).toEqual([
+        "call_exit_err",
+        "call_exit_fail",
+      ])
     }),
   )
 })

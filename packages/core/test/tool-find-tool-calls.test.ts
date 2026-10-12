@@ -105,7 +105,7 @@ const setup = Effect.gen(function* () {
             status: "completed",
             input: { command: "npm test" },
             content: [{ type: "text", text: "all tests passed" }],
-            structured: {},
+            structured: { exit: 0 },
           }),
           time: { created },
         }),
@@ -165,7 +165,7 @@ const setup = Effect.gen(function* () {
             content: [
               { type: "text", text: `${"heartbeat\n".repeat(80)}DEPLOY-CODE-NEEDLE = X7Q9-M3KT\n${"ok\n".repeat(40)}` },
             ],
-            structured: {},
+            structured: { exit: 1 },
           }),
           time: { created },
         }),
@@ -348,6 +348,38 @@ describe("FindToolCallsTool", () => {
         expect(entry["match_offset"]).toBeUndefined()
         expect(entry["match_snippet"]).toBeUndefined()
       }
+    }),
+  )
+
+  it.effect("surfaces exit_code from structured bash output and failed=true selects non-zero/error", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const registry = yield* ToolRegistry.Service
+      const byExit = parsed(yield* executeTool(registry, call({ query: "exit_code=" })))
+      const exitById = new Map(callsOf(byExit).map((candidate) => [candidate["call_id"], candidate["exit_code"]]))
+      expect(exitById.get("call_bash_ok")).toBe(0)
+      expect(exitById.get("call_long_log")).toBe(1)
+      expect(exitById.has("call_bash_fail")).toBe(false)
+      expect(exitById.has("call_shell_1")).toBe(false)
+
+      const failed = parsed(yield* executeTool(registry, call({ failed: true })))
+      expect(
+        callsOf(failed)
+          .map((candidate) => candidate["call_id"])
+          .sort(),
+      ).toEqual(["call_bash_fail", "call_long_log"])
+    }),
+  )
+
+  it.effect("failed=true keeps error-status calls even without an exit_code", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const registry = yield* ToolRegistry.Service
+      const failed = parsed(yield* executeTool(registry, call({ tool: "bash", failed: true })))
+      const calls = callsOf(failed)
+      expect(calls.map((candidate) => candidate["call_id"])).toContain("call_bash_fail")
+      expect(calls.every((candidate) => candidate["call_id"] !== "call_bash_ok")).toBe(true)
+      expect(calls.every((candidate) => candidate["call_id"] !== "call_secret")).toBe(true)
     }),
   )
 })

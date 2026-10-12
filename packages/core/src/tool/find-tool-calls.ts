@@ -43,6 +43,13 @@ export const Input = Schema.Struct({
       description: `Maximum results to return, most recent first (default ${DEFAULT_LIMIT}, max ${MAX_LIMIT})`,
     }),
   ),
+  failed: Schema.optional(
+    Schema.Boolean.annotate({
+      description:
+        "When true, only return calls that failed: status=error or a non-zero exit_code (failed Bash with a " +
+        "completed status). Default false.",
+    }),
+  ),
 })
 
 export const Call = Schema.Struct({
@@ -54,6 +61,11 @@ export const Call = Schema.Struct({
   input: Schema.optional(Schema.String),
   preview: Schema.optional(Schema.String),
   error: Schema.optional(Schema.String),
+  exit_code: Schema.optional(
+    Schema.Number.annotate({
+      description: "Process exit code when the tool recorded one (e.g. bash); absent otherwise",
+    }),
+  ),
   match_offset: Schema.optional(
     Schema.Number.annotate({
       description:
@@ -124,8 +136,17 @@ export type Candidate = {
   readonly input?: string
   readonly preview?: string
   readonly error?: string
+  readonly exit_code?: number
   readonly haystack: string
   readonly raw?: string
+}
+
+// bash records its process exit code in structured output ({ exit, output, ... });
+// only surface a real number so a missing field stays distinct from exit 0.
+const structuredExit = (structured: unknown) => {
+  if (typeof structured !== "object" || structured === null) return undefined
+  const exit = (structured as { exit?: unknown }).exit
+  return typeof exit === "number" ? exit : undefined
 }
 
 const toolCandidates = (
@@ -148,6 +169,9 @@ const toolCandidates = (
     const raw = state.status === "completed" || state.status === "error" ? contentText(state.content) : undefined
     const preview = raw === undefined ? undefined : bound(PII.redact(raw).text, PREVIEW_CHARS)
     const error = state.status === "error" ? bound(PII.redact(state.error.message).text, PREVIEW_CHARS) : undefined
+    const exitCode =
+      state.status === "completed" || state.status === "error" ? structuredExit(state.structured) : undefined
+    const exitTag = exitCode === undefined ? undefined : `exit_code=${exitCode}`
     return [
       {
         call_id: item.id,
@@ -158,7 +182,8 @@ const toolCandidates = (
         ...(input === undefined ? {} : { input }),
         ...(preview === undefined ? {} : { preview }),
         ...(error === undefined ? {} : { error }),
-        haystack: [input, raw, state.status === "error" ? state.error.message : undefined]
+        ...(exitCode === undefined ? {} : { exit_code: exitCode }),
+        haystack: [input, raw, state.status === "error" ? state.error.message : undefined, exitTag]
           .filter((part): part is string => part !== undefined)
           .join("\n"),
         ...(raw === undefined ? {} : { raw }),
@@ -171,6 +196,8 @@ const shellCandidate = (message: SessionMessage.Shell, seq: number): Candidate =
   return {
     call_id: message.callID,
     tool: "bash",
+    // Session-level shell events have no stored exit code; keep the status
+    // completed so a missing exit stays distinct from a recorded non-zero.
     status: "completed",
     message_id: message.id,
     seq,
@@ -218,8 +245,9 @@ const layer = Layer.effectDiscard(
         [name]: Tool.make({
           description:
             "Search tool calls in this session by tool name, status or pattern. " +
-            "Returns compact entries (call_id, status, input, preview) so you can locate a call and then load its full " +
-            "output with get_tool_call_details(call_id). A query that matches tool output also returns match_snippet and " +
+            "Returns compact entries (call_id, status, exit_code, input, preview) so you can locate a call and then load " +
+            "its full output with get_tool_call_details(call_id). failed=true returns only error-status calls and " +
+            "non-zero-exit Bash. A query that matches tool output also returns match_snippet and " +
             "match_offset — prefer that over full=true when hunting a needle. Compacted [mem:compacted] results are " +
             "searchable here because the originals live in session history. Memory-tool calls are never returned here " +
             "(a query would match its own earlier searches, issue #34); they are counted in " +
@@ -246,6 +274,12 @@ const layer = Layer.effectDiscard(
               const matched = candidates.filter((candidate) => {
                 if (input.tool !== undefined && candidate.tool !== input.tool) return false
                 if (input.status !== undefined && candidate.status !== input.status) return false
+                if (
+                  input.failed === true &&
+                  candidate.status !== "error" &&
+                  (candidate.exit_code === undefined || candidate.exit_code === 0)
+                )
+                  return false
                 if (regex !== undefined && !regex.test(candidate.haystack)) return false
                 return true
               })
@@ -263,6 +297,7 @@ const layer = Layer.effectDiscard(
                     ...(candidate.input === undefined ? {} : { input: candidate.input }),
                     ...(candidate.preview === undefined ? {} : { preview: candidate.preview }),
                     ...(candidate.error === undefined ? {} : { error: candidate.error }),
+                    ...(candidate.exit_code === undefined ? {} : { exit_code: candidate.exit_code }),
                     ...(window === undefined ? {} : window),
                   }
                 })
