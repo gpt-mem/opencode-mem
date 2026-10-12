@@ -112,3 +112,10 @@ jobs:
         working-directory: packages/core
         timeout-minutes: 8
         run: bun test test/ripgrep.test.ts test/filesystem/search.test.ts
+
+      - name: Probe location layer cleanup
+        working-directory: packages/core
+        timeout-minutes: 4
+        run: bun test test/effect/layer-node/node-build.test.ts
+        env:
+          OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER: "true"
