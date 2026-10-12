@@ -82,6 +82,24 @@ cliIt.concurrent(
   45_000,
 )
 
+cliIt.live(
+  "run --attach exits when its server dies during an active response",
+  ({ llm, opencode }) =>
+    Effect.gen(function* () {
+      yield* llm.hang
+      const server = yield* opencode.serve()
+      const run = yield* opencode.startRun("wait for the provider", {
+        extraArgs: ["--attach", server.url],
+      })
+      yield* llm.wait(1)
+      server.kill()
+      const result = yield* run.result
+      expect(result.exitCode).not.toBe(0)
+      expect(result.durationMs).toBeLessThan(15_000)
+    }),
+  30_000,
+)
+
 cliIt.concurrent(
   "exits nonzero when every ladder continuation fails",
   ({ llm, opencode }) =>
