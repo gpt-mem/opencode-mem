@@ -851,7 +851,47 @@ export const RunCommand = effectCmd({
             error = label
             if (!emit("error", { error: messageError.raw })) UI.error(label)
           }
+          // Issue #38 (event race belt-and-suspenders): a mid-stream abort can
+          // publish session.status idle before session.error reaches the
+          // subscriber, so the loop exits with no error captured. The durable
+          // assistant message still carries the error — fetch it and fail the
+          // run instead of exiting 0 with silence.
+          if (!error) {
+            const lastError = await lastAssistantError(client, sessionID)
+            if (lastError) {
+              const label =
+                lastError.name === "MessageAbortedError" ? "Response interrupted (Aborted)" : messageOf(lastError)
+              error = label
+              if (!emit("error", { error: lastError })) UI.error(label)
+            }
+          }
           return error
+        }
+
+        function messageOf(err: { name?: string; data?: { message?: string } }): string {
+          if (err.data && typeof err.data.message === "string") return err.data.message
+          return String(err.name ?? "Error")
+        }
+
+        async function lastAssistantError(
+          client: OpencodeClient,
+          id: string,
+        ): Promise<{ name?: string; data?: { message?: string } } | undefined> {
+          try {
+            const msgs = await client.session.messages({ sessionID: id })
+            const list = (msgs.data ?? []) as Array<{
+              info?: { role?: string; error?: { name?: string; data?: { message?: string } } }
+              role?: string
+              error?: { name?: string; data?: { message?: string } }
+            }>
+            for (let i = list.length - 1; i >= 0; i--) {
+              const info = list[i].info ?? list[i]
+              if (info.role === "assistant" && info.error) return info.error
+            }
+          } catch {
+            // messages fetch is best-effort; keep the prior error/exit state
+          }
+          return undefined
         }
         const cwd = args.attach ? (directory ?? sess.directory ?? (await current(sdk))) : (directory ?? root)
         const client = args.attach ? attachSDK(cwd) : sdk
@@ -868,7 +908,8 @@ export const RunCommand = effectCmd({
             process.exitCode = 1
           })
           async function finish() {
-            if (args.attach) return
+            // Issue #38: attach mode must honor the same exit-code contract as
+            // local mode — a failed/aborted response exits nonzero, not 0.
             const error = await completed
             if (error) process.exitCode = 1
           }
