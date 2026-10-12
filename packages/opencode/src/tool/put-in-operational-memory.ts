@@ -1,9 +1,7 @@
 import { Effect, Schema } from "effect"
-import { and, eq } from "drizzle-orm"
 import { Database } from "@opencode-ai/core/database/database"
 import { MemRecord } from "@opencode-ai/core/session/mem-record"
-import { MemRecordTable, SessionTable } from "@opencode-ai/core/session/sql"
-import { Identifier } from "@/id/id"
+import { MemRecordStore } from "@opencode-ai/core/session/mem-record-store"
 import * as Tool from "./tool"
 
 const MAX_ENTRIES = 10
@@ -43,152 +41,42 @@ export const PutInOperationalMemoryTool = Tool.define<typeof Parameters, Metadat
             metadata: {},
           })
           const entries = params.entries.slice(0, MAX_ENTRIES)
-          const session = yield* db
-            .select({ project_id: SessionTable.project_id })
-            .from(SessionTable)
-            .where(eq(SessionTable.id, ctx.sessionID))
-            .get()
-            .pipe(Effect.orDie)
-          if (session === undefined) {
+          const result = yield* MemRecordStore.writeBatch(db, { sessionID: ctx.sessionID, agent: ctx.agent, entries })
+          if (result.ok) {
             return {
-              title: "No project for session",
-              output: JSON.stringify({ written: 0, error: `Session ${ctx.sessionID} not found` }, null, 2),
-              metadata: { written: 0 },
+              title: `${result.records.length} memories written`,
+              output: JSON.stringify({ written: result.records.length, records: result.records }, null, 2),
+              metadata: { written: result.records.length },
             }
           }
-          const projectID = session.project_id
-
-          // Validate the whole batch before writing anything so a bad entry
-          // cannot leave a partially applied batch behind (all-or-nothing).
-          const validated: Array<{ readonly entry: MemRecord.Entry; readonly raw: string }> = []
-          for (const entry of entries) {
-            const raw = entry.decision
-            if (raw === undefined || raw.trim() === "") {
-              return {
-                title: "Rejected: empty decision",
-                output: JSON.stringify(
-                  { written: 0, error: `Entry type=${entry.type} subject="${entry.subject}" has empty decision` },
-                  null,
-                  2,
-                ),
-                metadata: { written: 0 },
-              }
-            }
-            if (entry.supersedes !== undefined) {
-              const target = yield* db
-                .select({ id: MemRecordTable.id, status: MemRecordTable.status })
-                .from(MemRecordTable)
-                .where(and(eq(MemRecordTable.id, entry.supersedes), eq(MemRecordTable.project_id, projectID)))
-                .get()
-                .pipe(Effect.orDie)
-              if (target === undefined) {
-                return {
-                  title: "Rejected: supersedes target not found",
-                  output: JSON.stringify(
-                    {
-                      written: 0,
-                      error: `Entry subject="${entry.subject}" supersedes unknown record ${entry.supersedes} in this project`,
-                    },
-                    null,
-                    2,
-                  ),
-                  metadata: { written: 0 },
-                }
-              }
-              if (target.status !== "active") {
-                return {
-                  title: "Rejected: supersedes target not active",
-                  output: JSON.stringify(
-                    {
-                      written: 0,
-                      error:
-                        `Entry subject="${entry.subject}" supersedes ${entry.supersedes} with status=${target.status}; ` +
-                        `only active records can be superseded — supersede the latest active version instead`,
-                    },
-                    null,
-                    2,
-                  ),
-                  metadata: { written: 0 },
-                }
-              }
-            }
-            validated.push({ entry, raw })
-          }
-
-          const now = Date.now()
-          const inserted: MemRecord.Record[] = []
-
-          for (const { entry, raw } of validated) {
-            const authority = MemRecord.resolveAuthority({
-              decided_by: entry.decided_by,
-              recorded_by: ctx.agent,
-            })
-            let version = 1
-            if (entry.supersedes !== undefined) {
-              const old = yield* db
-                .select({ version: MemRecordTable.version })
-                .from(MemRecordTable)
-                .where(eq(MemRecordTable.id, entry.supersedes))
-                .get()
-                .pipe(Effect.orDie)
-              version = (old?.version ?? 0) + 1
-              yield* db
-                .update(MemRecordTable)
-                .set({ status: "superseded", time_updated: now })
-                .where(eq(MemRecordTable.id, entry.supersedes))
-                .run()
-                .pipe(Effect.orDie)
-            }
-            const id = Identifier.create("mem", "ascending")
-            const row = {
-              id,
-              project_id: projectID,
-              session_id: ctx.sessionID,
-              type: entry.type,
-              subject: MemRecord.normalizeSubject(entry.subject),
-              content: MemRecord.redactContent(raw),
-              reason: entry.reason === undefined ? null : MemRecord.redactReason(entry.reason),
-              status: "active" as const,
-              authority,
-              decided_by: entry.decided_by ?? null,
-              recorded_by: ctx.agent,
-              source_ref: entry.source_ref ?? null,
-              scope: entry.scope ?? null,
-              supersedes: entry.supersedes ?? null,
-              version,
-              time_created: now,
-              time_updated: now,
-            }
-            yield* db.insert(MemRecordTable).values(row).pipe(Effect.orDie)
-            inserted.push(toRecord(row))
-          }
-
+          const error = writeErrorMessage(result.error)
           return {
-            title: `${inserted.length} memories written`,
-            output: JSON.stringify({ written: inserted.length, records: inserted }, null, 2),
-            metadata: { written: inserted.length },
+            title: error.title,
+            output: JSON.stringify({ written: 0, error: error.detail }, null, 2),
+            metadata: { written: 0 },
           }
         }),
     } satisfies Tool.DefWithoutID<typeof Parameters, Metadata>
   }),
 )
 
-function toRecord(row: typeof MemRecordTable.$inferSelect): MemRecord.Record {
-  return {
-    id: row.id,
-    type: row.type,
-    subject: row.subject,
-    content: row.content,
-    reason: row.reason ?? undefined,
-    status: row.status,
-    authority: row.authority,
-    decided_by: row.decided_by ?? undefined,
-    recorded_by: row.recorded_by,
-    source_ref: row.source_ref ?? undefined,
-    scope: row.scope ?? undefined,
-    supersedes: row.supersedes ?? undefined,
-    version: row.version,
-    time_created: row.time_created,
-    time_updated: row.time_updated,
+const writeErrorMessage = (error: MemRecordStore.WriteError): { title: string; detail: string } => {
+  switch (error.kind) {
+    case "no_project":
+      return { title: "No project for session", detail: `Session ${error.sessionID} not found` }
+    case "empty_decision":
+      return { title: "Rejected: empty decision", detail: `Entry subject="${error.subject}" has empty decision` }
+    case "supersedes_not_found":
+      return {
+        title: "Rejected: supersedes target not found",
+        detail: `Entry subject="${error.subject}" supersedes unknown record ${error.id} in this project`,
+      }
+    case "supersedes_not_active":
+      return {
+        title: "Rejected: supersedes target not active",
+        detail:
+          `Entry subject="${error.subject}" supersedes ${error.id} with status=${error.status}; ` +
+          `only active records can be superseded — supersede the latest active version instead`,
+      }
   }
 }
