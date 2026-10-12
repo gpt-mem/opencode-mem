@@ -1,9 +1,9 @@
-"""Run every OpenCode test in four bounded Windows Bun processes.
+"""Run every OpenCode test in small bounded Windows Bun processes.
 
-The complete 262-file suite can finish its assertions but keep Bun alive after
-the summary. Splitting keeps every test and its 30-second timeout while making
-the CI process exit observable. A missing summary, test failure, or a chunk
-that does not exit is a hard failure.
+Large Windows Bun suites can retain handles after the assertions finish and
+cause unrelated CLI tests to miss their readiness deadline under accumulated
+load. Each file is assigned to exactly one chunk. A missing summary, test
+failure, or a chunk that does not exit is a hard failure.
 """
 
 from pathlib import Path
@@ -23,10 +23,11 @@ FILES = sorted(str(path.relative_to(ROOT)) for path in TEST_DIR.rglob("*")
 if not FILES:
     raise SystemExit("no OpenCode tests discovered")
 
-failed = False
-for index in range(4):
-    group = FILES[index * len(FILES) // 4:(index + 1) * len(FILES) // 4]
-    print(f"OpenCode chunk {index + 1}/4: {len(group)} files; starting", flush=True)
+CHUNKS = 16
+for index in range(CHUNKS):
+    group = FILES[index * len(FILES) // CHUNKS:(index + 1) * len(FILES) // CHUNKS]
+    print(f"OpenCode chunk {index + 1}/{CHUNKS}: {len(group)} files; starting", flush=True)
+    print("\n".join(group), flush=True)
     with tempfile.TemporaryFile(mode="w+t", encoding="utf8", errors="replace") as log:
         process = subprocess.Popen(
             ["bun", "test", "--timeout", "30000", "--only-failures", *group],
@@ -39,8 +40,8 @@ for index in range(4):
                 break
             except subprocess.TimeoutExpired:
                 elapsed = time.monotonic() - started
-                print(f"OpenCode chunk {index + 1}/4: still running after {elapsed:.0f}s", flush=True)
-                if elapsed < 600:
+                print(f"OpenCode chunk {index + 1}/{CHUNKS}: still running after {elapsed:.0f}s", flush=True)
+                if elapsed < 300:
                     continue
                 process.kill()
                 process.wait()
@@ -49,14 +50,11 @@ for index in range(4):
 
         log.seek(0)
         output = log.read()
-        print(f"OpenCode chunk {index + 1}/4: exit={code}, elapsed={time.monotonic() - started:.0f}s", flush=True)
+        print(f"OpenCode chunk {index + 1}/{CHUNKS}: exit={code}, elapsed={time.monotonic() - started:.0f}s", flush=True)
         summary = next((line for line in output.splitlines() if re.search(r"Ran \d+ tests across", line)), None)
         if code != 0 or summary is None:
-            failed = True
             print("\n".join(output.splitlines()[-100:]), flush=True)
-        else:
-            for line in output.splitlines():
-                if re.search(r"\b\d+ (pass|fail|skip)\b|Ran \d+ tests across", line):
-                    print(line[:300], flush=True)
-
-sys.exit(1 if failed else 0)
+            sys.exit(1)
+        for line in output.splitlines():
+            if re.search(r"\b\d+ (pass|fail|skip)\b|Ran \d+ tests across", line):
+                print(line[:300], flush=True)
