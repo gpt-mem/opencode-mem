@@ -85,6 +85,24 @@ cliIt.concurrent(
 )
 
 cliIt.live(
+  "reports the age of a silent provider without claiming completion",
+  ({ llm, opencode }) =>
+    Effect.gen(function* () {
+      const gate = Promise.withResolvers<void>()
+      yield* llm.hold("slow-finished", gate.promise)
+      const run = yield* opencode.startRun("check wait status")
+      yield* llm.wait(1)
+      yield* Effect.sleep("20 seconds")
+      gate.resolve()
+      const result = yield* run.result
+      expect(result.exitCode, result.stderr).toBe(0)
+      expect(result.stderr).toContain("Waiting for provider; last session update")
+      expect(result.stdout).toContain("slow-finished")
+    }),
+  45_000,
+)
+
+cliIt.live(
   "run --attach exits when its server dies during an active response",
   ({ llm, opencode }) =>
     Effect.gen(function* () {
@@ -98,6 +116,32 @@ cliIt.live(
       const result = yield* run.result
       expect(result.exitCode).not.toBe(0)
       expect(result.durationMs).toBeLessThan(15_000)
+      expect(result.stderr).toContain("Reconnect and check the session before retrying")
+    }),
+  30_000,
+)
+
+cliIt.live(
+  "run --attach reports a closed event stream before terminal idle",
+  ({ llm, opencode }) =>
+    Effect.gen(function* () {
+      yield* llm.text("provider-finished")
+      const server = yield* opencode.serve()
+      const proxy = Bun.serve({
+        port: 0,
+        fetch(request) {
+          const url = new URL(request.url)
+          if (url.pathname.endsWith("/event"))
+            return new Response("", { headers: { "content-type": "text/event-stream" } })
+          return fetch(new Request(new URL(url.pathname + url.search, server.url), request))
+        },
+      })
+      yield* Effect.addFinalizer(() => Effect.sync(() => proxy.stop(true)))
+      const result = yield* opencode.run("check closed events", {
+        extraArgs: ["--attach", proxy.url.toString()],
+      })
+      expect(result.exitCode).not.toBe(0)
+      expect(result.stderr).toContain("event stream ended before this session reported completion")
     }),
   30_000,
 )

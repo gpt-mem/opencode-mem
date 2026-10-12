@@ -775,6 +775,11 @@ export const dict = {
   "session.messages.loadEarlier": "Загрузить предыдущие сообщения",
   "session.messages.loading": "Загрузка сообщений...",
   "session.messages.jumpToLatest": "Перейти к последнему",
+  "session.activity.connecting": "Подключение к серверу OpenCode…",
+  "session.activity.disconnected": "Соединение потеряно. Подключитесь снова и проверьте сессию перед повтором.",
+  "session.activity.waiting": "Ожидание провайдера; последнее обновление сессии {{seconds}} с назад.",
+  "session.activity.stalled":
+    "Нет обновлений сессии {{seconds}} с. Проверьте провайдера или подключение перед повтором.",
 
   "session.context.addToContext": "Добавить {{selection}} в контекст",
   "session.todo.title": "Задачи",

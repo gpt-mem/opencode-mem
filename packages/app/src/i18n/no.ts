@@ -656,6 +656,10 @@ export const dict = {
   "session.messages.loadEarlier": "Last inn tidligere meldinger",
   "session.messages.loading": "Laster meldinger...",
   "session.messages.jumpToLatest": "Hopp til nyeste",
+  "session.activity.connecting": "Connecting to the OpenCode server…",
+  "session.activity.disconnected": "Connection lost. Reconnect and check this session before retrying.",
+  "session.activity.waiting": "Waiting for the provider; last session update {{seconds}}s ago.",
+  "session.activity.stalled": "No session update for {{seconds}}s. Check the provider or reconnect before retrying.",
 
   "session.context.addToContext": "Legg til {{selection}} i kontekst",
   "session.todo.title": "Oppgaver",

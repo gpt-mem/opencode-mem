@@ -764,6 +764,10 @@ export const dict = {
   "session.messages.loading": "正在載入訊息...",
 
   "session.messages.jumpToLatest": "跳到最新",
+  "session.activity.connecting": "Connecting to the OpenCode server…",
+  "session.activity.disconnected": "Connection lost. Reconnect and check this session before retrying.",
+  "session.activity.waiting": "Waiting for the provider; last session update {{seconds}}s ago.",
+  "session.activity.stalled": "No session update for {{seconds}}s. Check the provider or reconnect before retrying.",
   "session.context.addToContext": "將 {{selection}} 新增到上下文",
   "session.todo.title": "待辦事項",
   "session.todo.collapse": "收合",

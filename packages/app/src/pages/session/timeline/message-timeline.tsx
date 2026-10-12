@@ -280,6 +280,53 @@ export function MessageTimeline(props: {
     if (!id) return idle
     return sync().data.session_status[id] ?? idle
   })
+  const [lastProgressAt, setLastProgressAt] = createSignal(Date.now())
+  const [activityNow, setActivityNow] = createSignal(Date.now())
+  createEffect(on(sessionID, () => setLastProgressAt(Date.now())))
+  createEffect(
+    on(
+      () => sessionStatus().type,
+      (type) => {
+        if (type === "busy") setLastProgressAt(Date.now())
+      },
+    ),
+  )
+  createEffect(() => {
+    const id = sessionID()
+    const directory = sdk().directory
+    const unsubscribe = serverSDK().event.on(directory, (event) => {
+      if (!id) return
+      const current = event.current?.type
+      if (
+        event.type !== "session.status" &&
+        event.type !== "message.updated" &&
+        event.type !== "message.part.updated" &&
+        event.type !== "message.part.delta" &&
+        current !== "session.text.delta" &&
+        current !== "session.reasoning.delta" &&
+        current !== "session.tool.input.delta"
+      )
+        return
+      const props = event.properties as { sessionID?: string; part?: { sessionID?: string } }
+      if (props.sessionID === id || props.part?.sessionID === id) setLastProgressAt(Date.now())
+    })
+    onCleanup(unsubscribe)
+  })
+  onMount(() => {
+    const timer = setInterval(() => setActivityNow(Date.now()), 5_000)
+    onCleanup(() => clearInterval(timer))
+  })
+  const activity = createMemo(() => {
+    if (sessionStatus().type !== "busy") return
+    const connection = serverSDK().event.connection()
+    if (connection === "disconnected")
+      return { type: "disconnected", text: language.t("session.activity.disconnected") }
+    if (connection === "connecting") return { type: "connecting", text: language.t("session.activity.connecting") }
+    const seconds = Math.max(0, Math.floor((activityNow() - lastProgressAt()) / 1000))
+    if (seconds < 15) return
+    if (seconds < 60) return { type: "waiting", text: language.t("session.activity.waiting", { seconds }) }
+    return { type: "stalled", text: language.t("session.activity.stalled", { seconds }) }
+  })
   const sessionMessages = createMemo(() => (sessionID() ? (sync().data.message[sessionID()!] ?? []) : []))
   const projectedMessages = createMemo(() => {
     const id = sessionID()
@@ -1842,6 +1889,17 @@ export function MessageTimeline(props: {
           </Show>
         </div>
       </ScrollView>
+      <Show when={activity()}>
+        {(current) => (
+          <div
+            data-slot="session-activity-status"
+            data-state={current().type}
+            class="absolute bottom-2 left-1/2 z-40 -translate-x-1/2 max-w-[min(90%,700px)] rounded-lg border border-border-weak-base bg-background-stronger px-3 py-2 text-12-regular text-text-strong shadow-lg"
+          >
+            {current().text}
+          </div>
+        )}
+      </Show>
     </div>
   )
 }

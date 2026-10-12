@@ -46,8 +46,10 @@ export function SessionRetry(props: { status: SessionStatus; show?: boolean }) {
     const delay = count > 0 ? i18n.t("ui.sessionTurn.retry.inSeconds", { seconds: count }) : ""
     const retrying = i18n.t("ui.sessionTurn.retry.retrying")
     const line = [retrying, delay].filter(Boolean).join(" ")
-    if (!line) return i18n.t("ui.sessionTurn.retry.attempt", { attempt: current.attempt })
-    return i18n.t("ui.sessionTurn.retry.attemptLine", { line, attempt: current.attempt })
+    const label = line
+      ? i18n.t("ui.sessionTurn.retry.attemptLine", { line, attempt: current.attempt })
+      : i18n.t("ui.sessionTurn.retry.attempt", { attempt: current.attempt })
+    return `${label} · ${new Date(current.next).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}`
   })
 
   return (
