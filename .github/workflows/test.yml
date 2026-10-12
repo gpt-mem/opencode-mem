@@ -24,8 +24,7 @@ jobs:
   unit:
     name: unit (${{ matrix.settings.name }})
     # Upstream Blacksmith runners are fast and cached; github-hosted runners
-    # are slower (timing-sensitive subprocess tests flake, e.g. the 15s
-    # unknown-model budget) and the Windows ripgrep download times out. On the
+    # are slower (timing-sensitive subprocess tests can exceed their budgets). On the
     # fork this job is informational — mem-context.yml's "core full suite" is
     # the blocking regression gate.
     continue-on-error: ${{ github.repository != 'anomalyco/opencode' }}
@@ -56,6 +55,12 @@ jobs:
 
       - name: Setup Bun
         uses: ./.github/actions/setup-bun
+
+      - name: Install ripgrep for Windows tests
+        if: runner.os == 'Windows'
+        run: |
+          choco install ripgrep --version=15.2.0 -y --no-progress
+          rg --version
 
       - name: Configure git identity
         run: |
