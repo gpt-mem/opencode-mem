@@ -241,6 +241,8 @@ function createServerNotificationState(input: {
   const [index, setIndex] = createStore<NotificationIndex>(buildNotificationIndex(store.list))
 
   const meta = { pruned: false, disposed: false }
+  const pendingErrors = new Map<string, { directory: string; event: EventSessionError; time: number }>()
+  const pendingKey = (directory: string, sessionID: string) => `${directory}\u0000${sessionID}`
 
   const updateUnseen = (scope: "session" | "project", key: string, unseen: Notification[]) => {
     setIndex(scope, "unseen", key, unseen)
@@ -398,18 +400,37 @@ function createServerNotificationState(input: {
 
   const unsub = serverSDK().event.listen((e) => {
     const event = e.details
-    if (event.type !== "session.idle" && event.type !== "session.error") return
-
     const directory = e.name
     const time = Date.now()
-    if (event.type === "session.idle") {
-      handleSessionIdle(directory, event, time)
+    if (event.type === "session.status" && event.properties.status.type === "retry") {
+      pendingErrors.delete(pendingKey(directory, event.properties.sessionID))
       return
     }
-    handleSessionError(directory, event, time)
+    if (event.type === "session.error") {
+      const sessionID = event.properties.sessionID
+      if (!sessionID) {
+        handleSessionError(directory, event, time)
+        return
+      }
+      // A failed ladder rung can publish session.error before the retry status.
+      // Only a terminal idle confirms that this error should notify the user.
+      pendingErrors.set(pendingKey(directory, sessionID), { directory, event, time })
+      return
+    }
+    if (event.type !== "session.idle") return
+    const sessionID = event.properties.sessionID
+    const key = pendingKey(directory, sessionID)
+    const pending = pendingErrors.get(key)
+    pendingErrors.delete(key)
+    if (pending) {
+      handleSessionError(pending.directory, pending.event, pending.time)
+      return
+    }
+    handleSessionIdle(directory, event, time)
   })
   onCleanup(() => {
     meta.disposed = true
+    pendingErrors.clear()
     unsub()
   })
 
