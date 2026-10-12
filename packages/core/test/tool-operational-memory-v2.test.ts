@@ -221,4 +221,23 @@ describe("V2 operational-memory tools", () => {
       expect(String(result["error"])).toContain("try search_operational_memory")
     }),
   )
+
+  it.effect("search explains a query that erased filter-matched records", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const registry = yield* ToolRegistry.Service
+      yield* executeTool(
+        registry,
+        put({ entries: [{ type: "decision", subject: "cache strategy", decision: "use provider cache-mark ledger" }] }),
+      )
+      const result = parsed(yield* executeTool(registry, search({ type: "decision", query: "decision" })))
+      expect(result["matched"]).toBe(0)
+      expect(result["filter_matched"]).toBe(1)
+      expect(String(result["hint"])).toContain("retry without query")
+
+      const listed = parsed(yield* executeTool(registry, search({ type: "decision" })))
+      expect(listed["matched"]).toBe(1)
+      expect(listed["hint"]).toBeUndefined()
+    }),
+  )
 })

@@ -19,7 +19,9 @@ const MAX_LIMIT = 100
 export const Input = Schema.Struct({
   query: Schema.optional(
     Schema.String.annotate({
-      description: "Case-insensitive regular expression matched against subject, content and reason",
+      description:
+        "Case-insensitive regular expression matched against subject, content and reason. " +
+        "It matches record TEXT, not the type label — to list every record of a kind use type= without query",
     }),
   ),
   type: Schema.optional(MemRecord.Type.annotate({ description: "Only return this record type" })),
@@ -37,6 +39,8 @@ export const Input = Schema.Struct({
 export const Output = Schema.Struct({
   records: Schema.Array(MemRecord.Record),
   matched: Schema.Number,
+  filter_matched: Schema.optional(Schema.Number),
+  hint: Schema.optional(Schema.String),
   error: Schema.optional(Schema.String),
 })
 export type Output = typeof Output.Type
@@ -56,7 +60,8 @@ const layer = Layer.effectDiscard(
             "Search typed operational memories (decisions, constraints, failed approaches, user signals) " +
             "stored for this project via put_in_operational_memory. Project-scoped: finds records from earlier " +
             "sessions too. Each hit includes authority (user vs agent), decided_by, reason and source_ref so " +
-            "provenance is visible. Use this to recover 'what did we decide and why' without re-reading history.",
+            "provenance is visible. Use this to recover 'what did we decide and why' without re-reading history. " +
+            "To list every record of a kind pass type= alone; query is a text regex and usually misses the type label.",
           input: Input,
           output: Output,
           toModelOutput: ({ output }) => [{ type: "text", text: toModelOutput(output) }],
@@ -81,7 +86,12 @@ const layer = Layer.effectDiscard(
               if (result === undefined) {
                 return { records: [], matched: 0, error: `Session ${context.sessionID} not found` }
               }
-              return { records: result.records, matched: result.matched }
+              return {
+                records: result.records,
+                matched: result.matched,
+                filter_matched: result.filter_matched,
+                hint: result.hint,
+              }
             }).pipe(
               Effect.mapError((error) =>
                 error instanceof ToolFailure
