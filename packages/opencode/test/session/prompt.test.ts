@@ -1649,6 +1649,84 @@ raceNoLLMServer.instance(
   3_000,
 )
 
+// Issue #38: aborted turns must surface session.error (once) so CLI consumers
+// can exit nonzero instead of going idle silently.
+it.instance("cancel mid-stream publishes a single session.error", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const events = yield* EventV2Bridge.Service
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const chat = yield* sessions.create({ title: "Cancel once" })
+    const errors: NonNullable<SessionV1.Assistant["error"]>[] = []
+    const off = yield* events.listen((event) => {
+      if (event.type !== Session.Event.Error.type) return Effect.void
+      const data = event.data as typeof Session.Event.Error.data.Type
+      if (data.sessionID === chat.id && data.error) errors.push(data.error)
+      return Effect.void
+    })
+
+    yield* llm.hang
+    yield* user(chat.id, "hello")
+    const fiber = yield* prompt.loop({ sessionID: chat.id }).pipe(Effect.forkChild)
+    yield* llm.wait(1)
+    yield* waitForBusy(chat.id)
+    yield* prompt.cancel(chat.id)
+    yield* Fiber.await(fiber)
+    yield* off
+
+    const aborted = errors.filter((error) => error.name === "MessageAbortedError")
+    expect(aborted).toHaveLength(1)
+  }),
+)
+
+raceNoLLMServer.instance(
+  "cancel before processor creation publishes session.error",
+  () =>
+    Effect.gen(function* () {
+      processorCreateStarted.length = 0
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          processorCreateStarted.length = 0
+        }),
+      )
+
+      const events = yield* EventV2Bridge.Service
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({ title: "Race error publish" })
+      const errors: NonNullable<SessionV1.Assistant["error"]>[] = []
+      const off = yield* events.listen((event) => {
+        if (event.type !== Session.Event.Error.type) return Effect.void
+        const data = event.data as typeof Session.Event.Error.data.Type
+        if (data.sessionID === chat.id && data.error) errors.push(data.error)
+        return Effect.void
+      })
+
+      yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        noReply: true,
+        parts: [{ type: "text", text: "first" }],
+      })
+
+      const create = defer<void>()
+      processorCreateStarted.push(create.resolve)
+      const fiber = yield* prompt.loop({ sessionID: chat.id }).pipe(Effect.forkChild)
+      yield* Effect.promise(() => create.promise)
+
+      yield* prompt.cancel(chat.id)
+      const exit = yield* Fiber.await(fiber)
+      yield* off
+      expect(Exit.isSuccess(exit)).toBe(true)
+
+      const aborted = errors.filter((error) => error.name === "MessageAbortedError")
+      expect(aborted).toHaveLength(1)
+    }),
+  { config: cfg },
+  3_000,
+)
+
 noLLMServer.instance(
   "cancel finalizes subtask tool state",
   () =>

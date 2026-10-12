@@ -104,6 +104,18 @@ describe("opencode run (non-interactive subprocess)", () => {
     60_000,
   )
 
+  cliIt.concurrent(
+    "exits nonzero when the provider content-filters the response (issue #38)",
+    ({ llm, opencode }) =>
+      Effect.gen(function* () {
+        yield* llm.push(reply().text("blocked partial").contentFilter())
+        const result = yield* opencode.run("trigger content filter")
+        expect(result.exitCode).not.toBe(0)
+        expect(result.stderr).toContain("content filter")
+      }),
+    60_000,
+  )
+
   // --format json puts one JSON object per line on stdout for each emitted
   // event. Consumers (CI scripts, tooling) parse this stream. Asserts the
   // shape so a future event-emit change has to update this expectation.

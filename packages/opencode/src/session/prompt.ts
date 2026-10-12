@@ -1228,10 +1228,17 @@ const layer = Layer.effect(
 
           const finalizeInterruptedAssistant = Effect.gen(function* () {
             if (msg.time.completed) return
-            msg.error ??= MessageV2.fromError(new DOMException("Aborted", "AbortError"), {
-              providerID: msg.providerID,
-              aborted: true,
-            })
+            // Issue #38: publish session.error when this finalizer is the first
+            // to attach the abort (cancel before the processor starts). When the
+            // processor halt already recorded the error, it also published —
+            // skip so consumers never see a duplicate event.
+            if (!msg.error) {
+              msg.error = MessageV2.fromError(new DOMException("Aborted", "AbortError"), {
+                providerID: msg.providerID,
+                aborted: true,
+              })
+              yield* events.publish(Session.Event.Error, { sessionID, error: msg.error })
+            }
             msg.time.completed = Date.now()
             yield* sessions.updateMessage(msg)
           })
