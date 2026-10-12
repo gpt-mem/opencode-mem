@@ -29,6 +29,8 @@ import { WebSearchTool } from "./websearch"
 import { GetToolCallDetailsTool } from "./get-tool-call-details"
 import { FindToolCallsTool } from "./find-tool-calls"
 import { FindPiiTool } from "./find-pii"
+import { PutInOperationalMemoryTool } from "./put-in-operational-memory"
+import { SearchOperationalMemoryTool } from "./search-operational-memory"
 import { GetToolCallOverviewTool } from "./get-tool-call-overview"
 import { LspTool } from "./lsp"
 import * as Truncate from "./truncate"
@@ -114,6 +116,8 @@ const layer = Layer.effect(
     const getToolCallDetails = yield* GetToolCallDetailsTool
     const findToolCalls = yield* FindToolCallsTool
     const findPii = yield* FindPiiTool
+    const putInOperationalMemory = yield* PutInOperationalMemoryTool
+    const searchOperationalMemory = yield* SearchOperationalMemoryTool
     const getToolCallOverview = yield* GetToolCallOverviewTool
     const shell = yield* ShellTool
     const globtool = yield* GlobTool
@@ -234,6 +238,8 @@ const layer = Layer.effect(
           getToolCallDetails: Tool.init(getToolCallDetails),
           findToolCalls: Tool.init(findToolCalls),
           findPii: Tool.init(findPii),
+          putInOperationalMemory: Tool.init(putInOperationalMemory),
+          searchOperationalMemory: Tool.init(searchOperationalMemory),
           getToolCallOverview: Tool.init(getToolCallOverview),
           ...(codeModeTool ? { execute: Tool.init(codeModeTool) } : {}),
         })
@@ -254,6 +260,8 @@ const layer = Layer.effect(
             tool.getToolCallDetails,
             tool.findToolCalls,
             tool.findPii,
+            tool.putInOperationalMemory,
+            tool.searchOperationalMemory,
             tool.getToolCallOverview,
             tool.todo,
             tool.search,
