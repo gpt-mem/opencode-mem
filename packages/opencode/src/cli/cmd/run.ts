@@ -935,15 +935,40 @@ export const RunCommand = effectCmd({
         await share(client, sessionID)
 
         if (!interactive) {
-          const events = await client.event.subscribe()
+          const streamController = new AbortController()
+          const events = await client.event.subscribe(undefined, { signal: streamController.signal })
+          let timedOut = false
           const completed = loop(client, events).catch((e) => {
+            if (timedOut) return undefined
             console.error(e)
             process.exitCode = 1
           })
           async function finish() {
             // Issue #38: attach mode must honor the same exit-code contract as
             // local mode — a failed/aborted response exits nonzero, not 0.
-            const error = await completed
+            // The prompt request can finish while a directory-scoped SSE
+            // subscription misses its idle event. Bound this wait and report
+            // the durable outcome instead of leaving `run` alive forever.
+            const missing = Symbol("missing completion event")
+            let timer: ReturnType<typeof setTimeout> | undefined
+            const error = await Promise.race([
+              completed,
+              new Promise<typeof missing>((resolve) => {
+                timer = setTimeout(() => resolve(missing), 5_000)
+              }),
+            ])
+            if (timer) clearTimeout(timer)
+            if (error === missing) {
+              timedOut = true
+              streamController.abort()
+              const final = await lastAssistantResult(client, sessionID)
+              const message = final
+                ? messageOf(final)
+                : "Session request completed, but the event stream did not confirm completion. Check the session before retrying."
+              if (!emit("error", { error: final ?? { message } })) UI.error(message)
+              process.exitCode = 1
+              return
+            }
             if (error) process.exitCode = 1
           }
 
