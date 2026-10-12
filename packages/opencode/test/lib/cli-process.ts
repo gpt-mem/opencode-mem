@@ -531,7 +531,9 @@ export const cliIt = {
     body: (input: CliFixture) => Effect.Effect<A, E, Scope.Scope | HttpClient.HttpClient>,
     opts?: number | TestOptions,
   ) =>
-    (process.platform === "win32" ? test : test.concurrent)(
+    // Each fixture starts a real CLI and LLM server. Running many of them at
+    // once saturates CI and turns bounded subprocess checks into false timeouts.
+    test(
       name,
       () => Effect.runPromise(Effect.scoped(withCliFixture(body))),
       opts,
