@@ -682,6 +682,7 @@ export const RunCommand = effectCmd({
         let currentStatus: "busy" | "retry" | "idle" = "busy"
         let retryAttempt: number | undefined
         let retryNext: number | undefined
+        let errorReported = false
 
         function emit(type: string, data: Record<string, unknown>) {
           if (args.format === "json") {
@@ -696,6 +697,12 @@ export const RunCommand = effectCmd({
             return true
           }
           return false
+        }
+
+        function reportError(error: unknown, message: string) {
+          if (errorReported) return
+          errorReported = true
+          if (!emit("error", { error })) UI.error(message)
         }
 
         // Consume one subscribed event stream for the active session and mirror it
@@ -930,7 +937,7 @@ export const RunCommand = effectCmd({
               "The event stream ended before this session reported completion. Reconnect and check the session before retrying."
             errorRaw = { message: error }
           }
-          if (error && !emit("error", { error: errorRaw ?? { message: error } })) UI.error(error)
+          if (error) reportError(errorRaw ?? { message: error }, error)
           return error
         }
 
@@ -981,7 +988,7 @@ export const RunCommand = effectCmd({
               if (timedOut) return undefined
               const message =
                 "Connection to the OpenCode server was lost. Reconnect and check the session before retrying."
-              if (!emit("error", { error: { message } })) UI.error(message)
+              reportError({ message }, message)
               process.exitCode = 1
               return message
             })
@@ -1034,7 +1041,7 @@ export const RunCommand = effectCmd({
               const message = final
                 ? messageOf(final)
                 : "Session request completed, but the event stream did not confirm completion. Check the session before retrying."
-              if (!emit("error", { error: final ?? { message } })) UI.error(message)
+              reportError(final ?? { message }, message)
               process.exitCode = 1
               return
             }
@@ -1054,7 +1061,7 @@ export const RunCommand = effectCmd({
               timedOut = true
               streamController.abort()
               if (heartbeat) clearInterval(heartbeat)
-              if (!emit("error", { error: result.error })) UI.error(formatRunError(result.error))
+              reportError(result.error, formatRunError(result.error))
               process.exitCode = 1
               return
             }
@@ -1074,7 +1081,7 @@ export const RunCommand = effectCmd({
             timedOut = true
             streamController.abort()
             if (heartbeat) clearInterval(heartbeat)
-            if (!emit("error", { error: result.error })) UI.error(formatRunError(result.error))
+            reportError(result.error, formatRunError(result.error))
             process.exitCode = 1
             return
           }
