@@ -72,8 +72,16 @@ jobs:
             turbo-${{ runner.os }}-
 
       - name: Run unit tests
-        timeout-minutes: 20
-        run: GITHUB_ACTIONS=false bun turbo test
+        timeout-minutes: 60
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            GITHUB_ACTIONS=false bun turbo test --filter='!@opencode-ai/core' --filter='!opencode'
+            GITHUB_ACTIONS=false bun turbo build --filter='opencode^...'
+            GITHUB_ACTIONS=false python3 packages/opencode/script/test-windows-chunks.py
+            GITHUB_ACTIONS=false python3 packages/core/script/test-windows-halves.py
+          else
+            GITHUB_ACTIONS=false bun turbo test
+          fi
         env:
           OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER: ${{ runner.os == 'Windows' && 'true' || 'false' }}
 

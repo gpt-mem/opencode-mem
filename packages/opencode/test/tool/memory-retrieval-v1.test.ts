@@ -1,5 +1,6 @@
 import { afterEach, describe, expect } from "bun:test"
 import { mkdir, rm, writeFile } from "fs/promises"
+import path from "path"
 import { Global } from "@opencode-ai/core/global"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { Database } from "@opencode-ai/core/database/database"
@@ -421,9 +422,9 @@ describe("tool.get-tool-call-details (V1)", () => {
   it.instance("reads the full output from the managed tool-output file", () =>
     Effect.gen(function* () {
       yield* seedEvidence
-      const file = `${Global.Path.data}/tool-output/tool_v1_test_managed`
+      const file = path.join(Global.Path.data, "tool-output", "tool_v1_test_managed")
       const content = "Y".repeat(20000)
-      yield* Effect.promise(() => mkdir(`${Global.Path.data}/tool-output`, { recursive: true }))
+      yield* Effect.promise(() => mkdir(path.dirname(file), { recursive: true }))
       yield* Effect.promise(() => writeFile(file, content))
       try {
         const def = yield* Tool.init(yield* GetToolCallDetailsTool)
@@ -450,7 +451,7 @@ describe("tool.get-tool-call-details (V1)", () => {
   it.instance("degrades to bounded_stored_output when the managed file is missing", () =>
     Effect.gen(function* () {
       yield* seedEvidence
-      const file = `${Global.Path.data}/tool-output/tool_v1_test_missing`
+      const file = path.join(Global.Path.data, "tool-output", "tool_v1_test_missing")
       yield* Effect.promise(() => rm(file, { force: true }))
       const def = yield* Tool.init(yield* GetToolCallDetailsTool)
       const result = yield* def.execute({ call_id: "call_missing_file" }, ctx(evidenceSessionID))

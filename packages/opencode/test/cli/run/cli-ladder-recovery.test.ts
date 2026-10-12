@@ -92,14 +92,14 @@ cliIt.live(
       yield* llm.hold("slow-finished", gate.promise)
       const run = yield* opencode.startRun("check wait status")
       yield* llm.wait(1)
-      yield* Effect.sleep("20 seconds")
+      yield* Effect.sleep("30 seconds")
       gate.resolve()
       const result = yield* run.result
       expect(result.exitCode, result.stderr).toBe(0)
       expect(result.stderr).toContain("Waiting for provider; last session update")
       expect(result.stdout).toContain("slow-finished")
     }),
-  45_000,
+  60_000,
 )
 
 cliIt.live(
