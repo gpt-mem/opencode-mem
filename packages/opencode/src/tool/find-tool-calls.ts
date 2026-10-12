@@ -1,6 +1,7 @@
 import { Effect, Schema } from "effect"
 import { and, eq, sql } from "drizzle-orm"
 import { Database } from "@opencode-ai/core/database/database"
+import { Evidence } from "@opencode-ai/core/session/evidence"
 import { PII } from "@opencode-ai/core/session/pii"
 import { PartTable } from "@opencode-ai/core/session/sql"
 import { MemoryTools } from "@opencode-ai/core/tool/memory-tools"
@@ -30,7 +31,16 @@ export const Parameters = Schema.Struct({
   ),
   limit: Schema.optional(
     Schema.Number.annotate({
-      description: `Maximum results to return, most recent first (default ${DEFAULT_LIMIT}, max ${MAX_LIMIT})`,
+      description:
+        `Maximum results to return, most recent first (default ${DEFAULT_LIMIT}, max ${MAX_LIMIT}). ` +
+        "matched is the total before paging; use offset to reach older pages",
+    }),
+  ),
+  offset: Schema.optional(
+    Schema.Number.annotate({
+      description:
+        "Skip this many of the most-recent matches before taking limit results (default 0). " +
+        "Page 2 of a limit=N page = offset=N",
     }),
   ),
   failed: Schema.optional(
@@ -51,9 +61,12 @@ const bound = (text: string, max: number) => (text.length <= max ? text : text.s
 // with a small offset window) without re-injecting the full original via
 // full=true. match_offset is an index into the same output text that details
 // pages over. Input-only matches (command/url) do not set these fields — the
-// offset would not line up with the output document.
+// offset would not line up with the output document. A stored truncation
+// notice (managed_output_file) is likewise excluded: details pages the managed
+// file, so an offset into the notice would be a lie (issue #10 source refs).
 const matchWindow = (raw: string | undefined, regex: RegExp | undefined) => {
   if (raw === undefined || regex === undefined) return undefined
+  if (Evidence.classify(raw).kind === "managed_output_file") return undefined
   const hit = regex.exec(raw)
   if (hit === null) return undefined
   const start = Math.max(0, hit.index - SNIPPET_CONTEXT)
@@ -169,7 +182,8 @@ export const FindToolCallsTool = Tool.define<typeof Parameters, Metadata, Databa
         "Returns compact entries (call_id, status, exit_code, input, preview) so you can locate a call and then load " +
         "its full output with get_tool_call_details(call_id). failed=true returns only error-status calls and " +
         "non-zero-exit Bash. A query that matches tool output also returns match_snippet and " +
-        "match_offset — prefer that over full=true when hunting a needle. Compacted [mem:compacted] results are searchable here because " +
+        "match_offset — prefer that over full=true when hunting a needle. Results page most-recent-first: " +
+        "matched is the total, limit/offset select one page. Compacted [mem:compacted] results are searchable here because " +
         "the originals live in session history. Memory-tool calls are never returned here " +
         "(a query would match its own earlier searches, issue #34); they are counted in " +
         "get_tool_call_overview and load by call_id (issue #48).",
@@ -182,8 +196,27 @@ export const FindToolCallsTool = Tool.define<typeof Parameters, Metadata, Databa
             always: ["*"],
             metadata: {},
           })
-          const regex = params.query === undefined ? undefined : new RegExp(params.query, "i")
+          const query = params.query
+          // DefWithoutID pins the error channel to never, so a bad regex is a
+          // soft error in the result payload (same pattern as put-in-operational-memory).
+          let regex: RegExp | undefined
+          if (query !== undefined) {
+            try {
+              regex = new RegExp(query, "i")
+            } catch {
+              return {
+                title: "Invalid query regular expression",
+                output: JSON.stringify(
+                  { calls: [], matched: 0, error: `Invalid query regular expression: ${query}` },
+                  null,
+                  2,
+                ),
+                metadata: { matched: 0 },
+              }
+            }
+          }
           const limit = Math.max(1, Math.min(params.limit ?? DEFAULT_LIMIT, MAX_LIMIT))
+          const offset = Math.max(0, Math.floor(params.offset ?? 0))
           const matched = (yield* collectCandidates(db, ctx.sessionID)).filter((item) => {
             if (params.tool !== undefined && item.tool !== params.tool) return false
             if (params.status !== undefined && item.status !== params.status) return false
@@ -197,7 +230,7 @@ export const FindToolCallsTool = Tool.define<typeof Parameters, Metadata, Databa
             return true
           })
           const calls = matched
-            .slice(-limit)
+            .slice(Math.max(0, matched.length - offset - limit), Math.max(0, matched.length - offset))
             .reverse()
             .map(({ haystack: _haystack, seq: _seq, raw, ...item }) => {
               const window = matchWindow(raw, regex)
