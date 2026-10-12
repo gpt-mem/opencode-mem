@@ -76,7 +76,7 @@ jobs:
         run: |
           if [ "$RUNNER_OS" = "Windows" ]; then
             GITHUB_ACTIONS=false bun turbo test --filter='!@opencode-ai/core'
-            python3 packages/core/script/test-windows-halves.py
+            GITHUB_ACTIONS=false python3 packages/core/script/test-windows-halves.py
           else
             GITHUB_ACTIONS=false bun turbo test
           fi
