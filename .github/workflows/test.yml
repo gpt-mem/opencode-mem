@@ -90,10 +90,23 @@ jobs:
         working-directory: packages/client
         run: bun run check:generated
 
-      - name: Run HttpApi exerciser gates
+      - name: Check HttpApi route coverage
         if: runner.os == 'Linux'
         working-directory: packages/opencode
-        run: bun run test:httpapi
+        timeout-minutes: 5
+        run: bun run script/httpapi-exercise.ts --mode coverage --fail-on-missing --fail-on-skip
+
+      - name: Check HttpApi authentication
+        if: runner.os == 'Linux'
+        working-directory: packages/opencode
+        timeout-minutes: 15
+        run: bun run script/httpapi-exercise.ts --mode auth --progress --fail-on-missing --fail-on-skip
+
+      - name: Check HttpApi route effects
+        if: runner.os == 'Linux'
+        working-directory: packages/opencode
+        timeout-minutes: 25
+        run: bun run script/httpapi-exercise.ts --mode effect --progress --fail-on-missing --fail-on-skip
 
   e2e:
     name: e2e (${{ matrix.settings.name }})
