@@ -14,7 +14,10 @@ afterAll(async () => {
   await AppRuntime.dispose()
 
   const busy = (error: unknown) =>
-    typeof error === "object" && error !== null && "code" in error && error.code === "EBUSY"
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error.code === "EBUSY" || (process.platform === "win32" && (error.code === "EPERM" || error.code === "EACCES")))
   const rm = async (left: number): Promise<void> => {
     Bun.gc(true)
     await sleep(100)
@@ -27,7 +30,7 @@ afterAll(async () => {
   }
 
   // Windows can keep SQLite WAL handles alive until GC finalizers run, so we
-  // force GC and retry teardown to avoid flaky EBUSY in test cleanup.
+  // force GC and retry teardown for sharing violations (EBUSY/EPERM/EACCES).
   await rm(30)
 })
 

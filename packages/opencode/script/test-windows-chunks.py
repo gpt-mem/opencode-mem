@@ -60,7 +60,7 @@ for index in range(CHUNKS):
         print(f"OpenCode chunk {index + 1}/{CHUNKS}: exit={code}, elapsed={time.monotonic() - started:.0f}s", flush=True)
         summary = next((line for line in output.splitlines() if re.search(r"Ran \d+ tests across", line)), None)
         if code != 0 or summary is None:
-            print("\n".join(output.splitlines()[-100:]), flush=True)
+            print("\n".join(output.splitlines()[-500:]), flush=True)
             failed.append(index + 1)
             continue
         for line in output.splitlines():
