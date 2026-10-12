@@ -18,7 +18,15 @@ export interface JsonRequestParts<Body = unknown> {
 
 export interface HttpPrepared<Frame> {
   readonly request: HttpClientRequest.HttpClientRequest
+  readonly fallbackRequest?: HttpClientRequest.HttpClientRequest
   readonly framing: FramingDef<Frame>
+}
+
+const responseObservers = new Map<string, (headers: Record<string, string>) => void>()
+
+export const observeResponse = (requestID: string, callback: (headers: Record<string, string>) => void) => {
+  responseObservers.set(requestID, callback)
+  return () => responseObservers.delete(requestID)
 }
 
 const applyQuery = (url: string, query: Record<string, string> | undefined) => {
@@ -124,28 +132,51 @@ export const httpJson = <Body, Frame>(input: HttpJsonInput<Body, Frame>): HttpJs
     }).pipe(
       Effect.map((parts) => ({
         request: ProviderShared.jsonPost({ url: parts.url, body: parts.bodyText, headers: parts.headers }),
+        ...(prepareInput.request.model.provider === "ladder" && prepareInput.request.http?.body?.ladder_cache_variant
+          ? {
+              fallbackRequest: ProviderShared.jsonPost({
+                url: parts.url,
+                body: ProviderShared.encodeJson({
+                  ...(parts.jsonBody as Record<string, unknown>),
+                  ladder_cache_variant: undefined,
+                }),
+                headers: parts.headers,
+              }),
+            }
+          : {}),
         framing: input.framing,
       })),
     ),
   frames: (prepared, request, runtime) =>
     Stream.unwrap(
-      runtime.http
-        .execute(prepared.request)
-        .pipe(
-          Effect.map((response) =>
-            prepared.framing.frame(
-              response.stream.pipe(
-                Stream.mapError((error) =>
-                  ProviderShared.eventError(
-                    `${request.model.provider}/${request.model.route.id}`,
-                    `Failed to read ${request.model.provider}/${request.model.route.id} stream`,
-                    ProviderShared.errorText(error),
-                  ),
+      runtime.http.execute(prepared.request).pipe(
+        Effect.catchIf(
+          (error) =>
+            !!prepared.fallbackRequest &&
+            error.reason._tag === "InvalidRequest" &&
+            error.reason.message.includes("invalid ladder_cache_variant"),
+          () => runtime.http.execute(prepared.fallbackRequest!),
+        ),
+        Effect.map((response) => {
+          if (request.id)
+            responseObservers.get(request.id)?.(
+              Object.fromEntries(
+                Object.entries(response.headers).map(([key, value]) => [key.toLowerCase(), String(value)]),
+              ),
+            )
+          return prepared.framing.frame(
+            response.stream.pipe(
+              Stream.mapError((error) =>
+                ProviderShared.eventError(
+                  `${request.model.provider}/${request.model.route.id}`,
+                  `Failed to read ${request.model.provider}/${request.model.route.id} stream`,
+                  ProviderShared.errorText(error),
                 ),
               ),
             ),
-          ),
-        ),
+          )
+        }),
+      ),
     ),
 })
 

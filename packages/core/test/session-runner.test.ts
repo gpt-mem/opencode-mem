@@ -3453,6 +3453,48 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
+  it.effect("V2 sends a rung-scoped Ladder mask alongside the compact request (issue #80)", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const prevContext = process.env["OPENCODE_MEMORY_CONTEXT"]
+      const prevCacheMark = process.env["OPENCODE_MEMORY_CACHE_MARK"]
+      process.env["OPENCODE_MEMORY_CONTEXT"] = "1"
+      process.env["OPENCODE_MEMORY_CACHE_MARK"] = "1"
+      currentModel = Model.make({ id: "service", provider: "ladder", route: OpenAIChat.route })
+      const { db } = yield* Database.Service
+      const scope = `v1_${"a".repeat(32)}`
+      yield* db
+        .insert(ProviderCacheMarkTable)
+        .values({
+          provider_id: `ladder/service::opencode-go/mimo-v2.6-flash::${scope}`,
+          mark_tokens: 1000,
+          mark_index: 1,
+          prefix_hash: null,
+          last_used_at: Date.now(),
+        })
+        .run()
+      requests.length = 0
+      response = fragmentFixture("text", "text-mask", ["Done"]).completeEvents
+      const session = yield* SessionV2.Service
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Check the mask" }), resume: false })
+      yield* session.resume(sessionID)
+      if (prevContext === undefined) delete process.env["OPENCODE_MEMORY_CONTEXT"]
+      else process.env["OPENCODE_MEMORY_CONTEXT"] = prevContext
+      if (prevCacheMark === undefined) delete process.env["OPENCODE_MEMORY_CACHE_MARK"]
+      else process.env["OPENCODE_MEMORY_CACHE_MARK"] = prevCacheMark
+      const request = requests.at(-1)
+      expect(request?.http?.headers?.["x-session-affinity"]).toBe(sessionID)
+      expect(request?.http?.body).toMatchObject({
+        ladder_conversation: sessionID,
+        ladder_cache_variant: {
+          rung: "opencode-go/mimo-v2.6-flash",
+          cache_scope: scope,
+          messages: expect.arrayContaining([{ role: "user", content: "Check the mask" }]),
+        },
+      })
+    }),
+  )
+
   it.effect("rejects duplicate streamed text starts", () =>
     Effect.gen(function* () {
       yield* setup

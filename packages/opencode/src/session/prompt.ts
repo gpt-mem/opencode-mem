@@ -7,6 +7,7 @@ import { SessionID, MessageID, PartID } from "./schema"
 import { MessageV2 } from "./message-v2"
 import { MemoryContext } from "@opencode-ai/core/session/memory-context"
 import { CacheMark } from "@opencode-ai/core/session/cache-mark"
+import { LadderTransport } from "@/provider/ladder-transport"
 import { Flag } from "@opencode-ai/core/flag/flag"
 import { SessionRevert } from "./revert"
 import { Session } from "./session"
@@ -1344,29 +1345,53 @@ const layer = Layer.effect(
             // Any ledger failure (no row, prefix hash mismatch) fails safe to
             // a verbatim send — never a broken projection.
             const cacheMarkOn = Flag.OPENCODE_MEMORY_CONTEXT && Flag.OPENCODE_MEMORY_CACHE_MARK
-            const projectedMsgs = cacheMarkOn
-              ? yield* Effect.gen(function* () {
-                  const mark = yield* CacheMark.markIndexFor(
-                    database.db,
-                    `${model.providerID}/${model.id}`,
-                    msgs,
-                    // Issue #39 (idle mask reset): only the first request of
-                    // the turn may treat a stale ledger as cold; mid-turn an
-                    // in-flight task owns the cache and time alone never
-                    // resets the mark.
-                    { idleMs: step === 1 ? Flag.OPENCODE_MEMORY_MARK_IDLE_MS : 0 },
-                  ).pipe(Effect.catchDefect(() => Effect.succeed(undefined)))
-                  if (mark === undefined) return msgs
-                  return MemoryContext.projectV1(msgs, {
-                    sessionID,
-                    markIndex: mark,
-                    ...(intentSwitch === undefined ? {} : { intentSwitchMessageID: intentSwitch }),
-                  })
-                }).pipe(Effect.catchDefect(() => Effect.succeed(msgs)))
-              : MemoryContext.projectV1(msgs, {
+            const ladderCacheOn = cacheMarkOn && model.providerID === "ladder"
+            const ladderMark = ladderCacheOn
+              ? yield* CacheMark.latestScoped(database.db, `${model.providerID}/${model.id}`, msgs, {
+                  idleMs: step === 1 ? Flag.OPENCODE_MEMORY_MARK_IDLE_MS : 0,
+                }).pipe(Effect.catchDefect(() => Effect.succeed(undefined)))
+              : undefined
+            if (ladderCacheOn) yield* Effect.logInfo("ladder cache projection", { markIndex: ladderMark?.index ?? 0 })
+            const projectedMsgs = ladderCacheOn
+              ? MemoryContext.projectV1(msgs, {
                   sessionID,
                   ...(intentSwitch === undefined ? {} : { intentSwitchMessageID: intentSwitch }),
                 })
+              : cacheMarkOn
+                ? yield* Effect.gen(function* () {
+                    const mark = yield* CacheMark.markIndexFor(
+                      database.db,
+                      `${model.providerID}/${model.id}`,
+                      msgs,
+                      // Issue #39 (idle mask reset): only the first request of
+                      // the turn may treat a stale ledger as cold; mid-turn an
+                      // in-flight task owns the cache and time alone never
+                      // resets the mark.
+                      { idleMs: step === 1 ? Flag.OPENCODE_MEMORY_MARK_IDLE_MS : 0 },
+                    ).pipe(Effect.catchDefect(() => Effect.succeed(undefined)))
+                    if (mark === undefined) return msgs
+                    return MemoryContext.projectV1(msgs, {
+                      sessionID,
+                      markIndex: mark,
+                      ...(intentSwitch === undefined ? {} : { intentSwitchMessageID: intentSwitch }),
+                    })
+                  }).pipe(Effect.catchDefect(() => Effect.succeed(msgs)))
+                : MemoryContext.projectV1(msgs, {
+                    sessionID,
+                    ...(intentSwitch === undefined ? {} : { intentSwitchMessageID: intentSwitch }),
+                  })
+
+            const maskedMsgs = ladderMark
+              ? MemoryContext.projectV1(msgs, {
+                  sessionID,
+                  markIndex: ladderMark.index,
+                  ...(intentSwitch === undefined ? {} : { intentSwitchMessageID: intentSwitch }),
+                })
+              : undefined
+            const maskedModelMsgs = maskedMsgs
+              ? yield* MessageV2.toModelMessagesEffect([...maskedMsgs], model)
+              : undefined
+            let ladderResponse: LadderTransport.Response | undefined
 
             const [skills, env, instructions, mcpInstructions, modelMsgs] = yield* Effect.all([
               sys.skills(agent),
@@ -1396,6 +1421,25 @@ const layer = Layer.effect(
               ],
               tools,
               model,
+              ...(ladderMark && maskedModelMsgs
+                ? {
+                    ladderVariant: {
+                      rung: ladderMark.rung,
+                      scope: ladderMark.scope,
+                      messages: [
+                        ...maskedModelMsgs,
+                        ...(isLastStep ? [{ role: "assistant" as const, content: MAX_STEPS_PROMPT }] : []),
+                      ],
+                    },
+                  }
+                : {}),
+              ...(ladderCacheOn
+                ? {
+                    ladderResponse: (value: LadderTransport.Response) => {
+                      ladderResponse = value
+                    },
+                  }
+                : {}),
               toolChoice: format.type === "json_schema" ? "required" : undefined,
             })
 
@@ -1407,18 +1451,33 @@ const layer = Layer.effect(
             // were cached as marker bytes and must stay compacted.
             if (cacheMarkOn) {
               const tokens = handle.message.tokens
-              yield* CacheMark.recordUsage(
-                database.db,
-                `${model.providerID}/${model.id}`,
-                {
-                  input: tokens.input,
-                  output: tokens.output,
-                  cacheRead: tokens.cache.read,
-                  cacheWrite: tokens.cache.write,
-                  sentCount: CacheMark.verbatimPrefixLength(projectedMsgs, msgs),
-                },
-                msgs,
-              ).pipe(Effect.catchDefect(() => Effect.void))
+              const servedKey = ladderCacheOn
+                ? ladderResponse?.rung && ladderResponse.scope
+                  ? `${model.providerID}/${model.id}::${ladderResponse.rung}::${ladderResponse.scope}`
+                  : undefined
+                : `${model.providerID}/${model.id}`
+              if (servedKey && !handle.message.error)
+                yield* CacheMark.recordUsage(
+                  database.db,
+                  servedKey,
+                  {
+                    input: tokens.input,
+                    output: tokens.output,
+                    cacheRead: tokens.cache.read,
+                    cacheWrite: tokens.cache.write,
+                    sentCount: CacheMark.verbatimPrefixLength(
+                      ladderCacheOn &&
+                        ladderResponse?.variant === "masked" &&
+                        ladderMark?.rung === ladderResponse.rung &&
+                        ladderMark?.scope === ladderResponse.scope &&
+                        maskedMsgs
+                        ? maskedMsgs
+                        : projectedMsgs,
+                      msgs,
+                    ),
+                  },
+                  msgs,
+                ).pipe(Effect.catchDefect(() => Effect.void))
             }
 
             // Issue #39 (failure ≈ cache death): recordUsage ignores turns
@@ -1434,9 +1493,12 @@ const layer = Layer.effect(
               handle.message.error &&
               !SessionV1.ContextOverflowError.isInstance(handle.message.error)
             ) {
-              yield* CacheMark.reset(database.db, `${model.providerID}/${model.id}`).pipe(
-                Effect.catchDefect(() => Effect.void),
-              )
+              const failedKey = ladderCacheOn
+                ? ladderResponse?.rung && ladderResponse.scope
+                  ? `${model.providerID}/${model.id}::${ladderResponse.rung}::${ladderResponse.scope}`
+                  : undefined
+                : `${model.providerID}/${model.id}`
+              if (failedKey) yield* CacheMark.reset(database.db, failedKey).pipe(Effect.catchDefect(() => Effect.void))
             }
 
             if (structured !== undefined) {

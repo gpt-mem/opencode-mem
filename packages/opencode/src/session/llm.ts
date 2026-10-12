@@ -29,6 +29,7 @@ import * as OtelTracer from "@effect/opentelemetry/Tracer"
 import { LLMAISDK } from "./llm/ai-sdk"
 import { LLMNativeRuntime } from "./llm/native-runtime"
 import { LLMRequestPrep } from "./llm/request"
+import { LadderTransport } from "@/provider/ladder-transport"
 
 export const OUTPUT_TOKEN_MAX = ProviderTransform.OUTPUT_TOKEN_MAX
 
@@ -45,6 +46,8 @@ export type StreamInput = {
   tools: Record<string, Tool>
   retries?: number
   toolChoice?: "auto" | "required" | "none"
+  ladderVariant?: { rung: string; scope: string; messages: ModelMessage[] }
+  ladderResponse?: (response: LadderTransport.Response) => void
 }
 
 export type StreamRequest = StreamInput & {
@@ -223,7 +226,7 @@ const live: Layer.Layer<
 
       // Runtime seam: native is an opt-in adapter over @opencode-ai/llm. It
       // either returns a ready LLMEvent stream or a concrete fallback reason.
-      if (flags.experimentalNativeLlm) {
+      if (flags.experimentalNativeLlm && input.model.providerID !== "ladder") {
         const native = LLMNativeRuntime.stream({
           model: input.model,
           provider: item,
@@ -273,10 +276,51 @@ const live: Layer.Layer<
         "llm.provider": input.model.providerID,
         "llm.model": input.model.id,
       })
+      const ladderVariant = input.ladderVariant
+        ? yield* Effect.tryPromise({
+            try: async () => {
+              const { standardizePrompt, convertToLanguageModelPrompt } = await import("ai/internal")
+              const { convertToOpenAICompatibleChatMessages } = await import("@ai-sdk/openai-compatible/internal")
+              const messages: ModelMessage[] = [
+                ...prepared.system.map((content): ModelMessage => ({ role: "system", content })),
+                ...input.ladderVariant!.messages,
+              ]
+              const prompt = await convertToLanguageModelPrompt({
+                prompt: await standardizePrompt({ messages }),
+                supportedUrls: (await language.supportedUrls) ?? {},
+                download: undefined,
+              })
+              const transformed = ProviderTransform.message(
+                prompt as unknown as ModelMessage[],
+                input.model,
+                prepared.messageTransformOptions,
+              )
+              return {
+                rung: input.ladderVariant!.rung,
+                scope: input.ladderVariant!.scope,
+                messages: convertToOpenAICompatibleChatMessages(transformed as typeof prompt),
+              }
+            },
+            catch: () => new Error("Ladder cache variant conversion failed"),
+          }).pipe(
+            Effect.tapError(() => Effect.logWarning("ladder cache variant conversion failed")),
+            Effect.catch(() => Effect.succeed(undefined)),
+          )
+        : undefined
+      const ladderRequest =
+        input.model.providerID === "ladder"
+          ? LadderTransport.register({
+              ...(ladderVariant ? { variant: ladderVariant } : {}),
+              onResponse: input.ladderResponse ?? (() => {}),
+            })
+          : undefined
+      if (input.model.providerID === "ladder")
+        yield* Effect.logInfo("ladder cache transport", { variantAvailable: !!ladderVariant })
       // Default runtime path: AI SDK owns provider execution and tool dispatch;
       // LLMAISDK.toLLMEvents below normalizes fullStream parts for the processor.
       return {
         type: "ai-sdk" as const,
+        close: ladderRequest?.close,
         result: streamText({
           onError(error) {
             bridge.fork(
@@ -319,7 +363,7 @@ const live: Layer.Layer<
           toolChoice: input.toolChoice,
           maxOutputTokens: prepared.params.maxOutputTokens,
           abortSignal: input.abort,
-          headers: prepared.headers,
+          headers: { ...prepared.headers, ...(ladderRequest ? LadderTransport.header(ladderRequest.id) : {}) },
           maxRetries: input.retries ?? 0,
           messages: prepared.messages,
           model: wrapLanguageModel({
@@ -375,6 +419,7 @@ const live: Layer.Layer<
             ).pipe(
               Stream.mapEffect((event) => LLMAISDK.toLLMEvents(state, event)),
               Stream.flatMap((events) => Stream.fromIterable(events)),
+              Stream.ensuring(Effect.sync(() => result.close?.())),
             )
           }),
         ),

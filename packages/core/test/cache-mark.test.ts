@@ -37,28 +37,34 @@ const usage = (input: Partial<CacheMark.Usage> & { sentCount: number }): CacheMa
 
 describe("CacheMark.applyUsage", () => {
   test("no cache activity collapses the mark to zero (free provider)", () => {
-    expect(CacheMark.applyUsage({ tokens: 5000, index: 9 }, usage({ sentCount: 12, cacheRead: 0, cacheWrite: 0 })))
-      .toEqual({ tokens: 0, index: 0 })
+    expect(
+      CacheMark.applyUsage({ tokens: 5000, index: 9 }, usage({ sentCount: 12, cacheRead: 0, cacheWrite: 0 })),
+    ).toEqual({ tokens: 0, index: 0 })
   })
 
   test("first observation with cache activity marks the whole sent request", () => {
-    expect(CacheMark.applyUsage(undefined, usage({ sentCount: 7, cacheRead: 4000, cacheWrite: 0 })))
-      .toEqual({ tokens: 4000, index: 7 })
+    expect(CacheMark.applyUsage(undefined, usage({ sentCount: 7, cacheRead: 4000, cacheWrite: 0 }))).toEqual({
+      tokens: 4000,
+      index: 7,
+    })
   })
 
   test("growing cache_read advances the mark to the latest sent request", () => {
-    expect(CacheMark.applyUsage({ tokens: 4000, index: 7 }, usage({ sentCount: 11, cacheRead: 9000, cacheWrite: 2000 })))
-      .toEqual({ tokens: 11000, index: 11 })
+    expect(
+      CacheMark.applyUsage({ tokens: 4000, index: 7 }, usage({ sentCount: 11, cacheRead: 9000, cacheWrite: 2000 })),
+    ).toEqual({ tokens: 11000, index: 11 })
   })
 
   test("cache_read equal to the confirmed mark keeps growing through cache_write", () => {
-    expect(CacheMark.applyUsage({ tokens: 4000, index: 7 }, usage({ sentCount: 9, cacheRead: 4000, cacheWrite: 1500 })))
-      .toEqual({ tokens: 5500, index: 9 })
+    expect(
+      CacheMark.applyUsage({ tokens: 4000, index: 7 }, usage({ sentCount: 9, cacheRead: 4000, cacheWrite: 1500 })),
+    ).toEqual({ tokens: 5500, index: 9 })
   })
 
   test("eviction (cache_read below the mark) shrinks mark proportionally", () => {
-    expect(CacheMark.applyUsage({ tokens: 10000, index: 10 }, usage({ sentCount: 15, cacheRead: 4000, cacheWrite: 1000 })))
-      .toEqual({ tokens: 4000, index: 4 })
+    expect(
+      CacheMark.applyUsage({ tokens: 10000, index: 10 }, usage({ sentCount: 15, cacheRead: 4000, cacheWrite: 1000 })),
+    ).toEqual({ tokens: 4000, index: 4 })
   })
 })
 
@@ -69,6 +75,15 @@ describe("CacheMark.prefixHash", () => {
 
   test("differs for different inputs", () => {
     expect(CacheMark.prefixHash('{"a":1}')).not.toBe(CacheMark.prefixHash('{"a":2}'))
+  })
+
+  test("background user summary does not invalidate a provider prefix", () => {
+    const before = [{ info: { role: "user", id: "u1" }, parts: [{ type: "text", text: "same" }] }]
+    const after = [{ info: { role: "user", id: "u1", summary: { title: "new title" } }, parts: before[0].parts }]
+    expect(CacheMark.messagePrefixHash(before)).toBe(CacheMark.messagePrefixHash(after))
+    expect(CacheMark.messagePrefixHash(after)).not.toBe(
+      CacheMark.messagePrefixHash([{ info: after[0].info, parts: [{ type: "text", text: "changed" }] }]),
+    )
   })
 })
 
@@ -114,6 +129,42 @@ describe("CacheMark ledger", () => {
       }),
     ))
 
+  test("Ladder selects only a confirmed rung and scope with a matching prefix", () =>
+    run(
+      Effect.gen(function* () {
+        const db = yield* migratedDb
+        const alias = "ladder/service"
+        const first = `v1_${"a".repeat(32)}`
+        const rotated = `v1_${"b".repeat(32)}`
+        const messages = ["m0", "m1", "m2"]
+        yield* CacheMark.recordUsage(
+          db,
+          `${alias}::opencode-go/mimo-v2.6-flash::${first}`,
+          usage({ sentCount: 2, cacheRead: 2000 }),
+          messages,
+        )
+        expect(yield* CacheMark.latestScoped(db, alias, messages)).toEqual({
+          rung: "opencode-go/mimo-v2.6-flash",
+          scope: first,
+          index: 2,
+        })
+        yield* CacheMark.recordUsage(
+          db,
+          `${alias}::opencode-go/mimo-v2.6-flash::${rotated}`,
+          usage({ sentCount: 3, cacheRead: 0, cacheWrite: 0 }),
+          messages,
+        )
+        yield* db
+          .update(ProviderCacheMarkTable)
+          .set({ last_used_at: Date.now() + 1000 })
+          .where(eq(ProviderCacheMarkTable.provider_id, `${alias}::opencode-go/mimo-v2.6-flash::${rotated}`))
+          .run()
+        expect(yield* CacheMark.latestScoped(db, alias, messages)).toBeUndefined()
+        expect(yield* CacheMark.latestScoped(db, alias, ["changed", "m1", "m2"])).toBeUndefined()
+        expect(yield* CacheMark.latestScoped(db, "ladder/free", messages)).toBeUndefined()
+      }),
+    ))
+
   test("hash mismatch below the mark fails safe to undefined", () =>
     run(
       Effect.gen(function* () {
@@ -154,12 +205,11 @@ describe("CacheMark ledger", () => {
       Effect.gen(function* () {
         const db = yield* migratedDb
         yield* CacheMark.recordUsage(db, provider, usage({ sentCount: 3, cacheRead: 3000 }), ["m0", "m1", "m2"])
-        yield* CacheMark.recordUsage(
-          db,
-          provider,
-          { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, sentCount: 3 },
-          ["m0", "m1", "m2"],
-        )
+        yield* CacheMark.recordUsage(db, provider, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, sentCount: 3 }, [
+          "m0",
+          "m1",
+          "m2",
+        ])
         expect(yield* row(db)).toMatchObject({ mark_tokens: 3000, mark_index: 3 })
       }),
     ))
@@ -209,7 +259,10 @@ describe("CacheMark ledger", () => {
           "d",
           "e",
         ])
-        yield* CacheMark.recordUsage(db, "prov/model-b", usage({ sentCount: 2, cacheRead: 0, cacheWrite: 0 }), ["a", "b"])
+        yield* CacheMark.recordUsage(db, "prov/model-b", usage({ sentCount: 2, cacheRead: 0, cacheWrite: 0 }), [
+          "a",
+          "b",
+        ])
         expect(yield* row(db, "prov/model-a")).toMatchObject({ mark_tokens: 5000, mark_index: 5 })
         expect(yield* row(db, "prov/model-b")).toMatchObject({ mark_tokens: 0, mark_index: 0 })
       }),

@@ -70,6 +70,22 @@ export const prefixHash = (serialized: string) => {
   return `${(h1 >>> 0).toString(16).padStart(8, "0")}${(h2 >>> 0).toString(16).padStart(8, "0")}`
 }
 
+// A background title/summary job may add info.summary to a user message after
+// it has been sent. That metadata is not part of the provider-visible prompt.
+// Keep the integrity check over the original message parts while ignoring it.
+export const messagePrefixHash = (messages: readonly unknown[]) =>
+  prefixHash(
+    JSON.stringify(
+      messages.map((item) => {
+        if (!item || typeof item !== "object" || !("info" in item)) return item
+        const message = item as { info?: Record<string, unknown> }
+        if (!message.info || message.info.role !== "user" || !("summary" in message.info)) return item
+        const { summary: _summary, ...info } = message.info
+        return { ...item, info }
+      }),
+    ),
+  )
+
 // Mark floor for the next projection.
 // - undefined = integrity failure (prefix hash mismatch, or the history shrank
 //   below the stored mark): the raw bytes the provider cached no longer match
@@ -107,9 +123,35 @@ export const markIndexFor = Effect.fn("CacheMark.markIndexFor")(function* (
   const idleMs = options?.idleMs ?? 0
   if (idleMs > 0 && Date.now() - row.last_used_at >= idleMs) return 0
   if (row.mark_index > messages.length) return undefined
-  if (row.prefix_hash !== null && row.prefix_hash !== prefixHash(JSON.stringify(messages.slice(0, row.mark_index))))
+  if (row.prefix_hash !== null && row.prefix_hash !== messagePrefixHash(messages.slice(0, row.mark_index)))
     return undefined
   return row.mark_index
+})
+
+// Ladder serves different providers and credential pools behind one alias. A
+// confirmed prefix belongs only to the exact rung and opaque cache scope.
+export const latestScoped = Effect.fn("CacheMark.latestScoped")(function* (
+  db: DatabaseService,
+  alias: string,
+  messages: readonly unknown[],
+  options?: MarkForOptions,
+) {
+  const prefix = `${alias}::`
+  const rows = yield* db.select().from(ProviderCacheMarkTable).all().pipe(Effect.orDie)
+  const seenRungs = new Set<string>()
+  for (const row of rows
+    .filter((item) => item.provider_id.startsWith(prefix))
+    .sort((a, b) => b.last_used_at - a.last_used_at)) {
+    const [rung, scope] = row.provider_id.slice(prefix.length).split("::")
+    if (!rung || !scope || !/^v1_[a-f0-9]{32}$/.test(scope)) continue
+    if (seenRungs.has(rung)) continue
+    seenRungs.add(rung)
+    if (row.mark_index <= 0 || row.mark_tokens <= 0) continue
+    const index = yield* markIndexFor(db, row.provider_id, messages, options)
+    if (index === undefined || index <= 0) continue
+    return { rung, scope, index }
+  }
+  return undefined
 })
 
 // Record the provider's post-response confirmation. No-op when the response
@@ -121,7 +163,13 @@ export const recordUsage = Effect.fn("CacheMark.recordUsage")(function* (
   usage: Usage,
   messages: readonly unknown[],
 ) {
-  if (Math.max(0, usage.input) + Math.max(0, usage.output) + Math.max(0, usage.cacheRead) + Math.max(0, usage.cacheWrite) <= 0)
+  if (
+    Math.max(0, usage.input) +
+      Math.max(0, usage.output) +
+      Math.max(0, usage.cacheRead) +
+      Math.max(0, usage.cacheWrite) <=
+    0
+  )
     return
   const existing = yield* db
     .select()
@@ -132,7 +180,7 @@ export const recordUsage = Effect.fn("CacheMark.recordUsage")(function* (
   const prev: Mark | undefined =
     existing === undefined ? undefined : { tokens: existing.mark_tokens, index: existing.mark_index }
   const next = applyUsage(prev, usage)
-  const hash = next.index > 0 ? prefixHash(JSON.stringify(messages.slice(0, next.index))) : null
+  const hash = next.index > 0 ? messagePrefixHash(messages.slice(0, next.index)) : null
   const now = Date.now()
   yield* db
     .insert(ProviderCacheMarkTable)
@@ -157,10 +205,7 @@ export const recordUsage = Effect.fn("CacheMark.recordUsage")(function* (
 // (pending-verification) so the next attempt sends the compact projection
 // instead of resuscitating a full verbatim prefix into a cold cache. The next
 // confirmed response self-heals the mark through applyUsage (ARCHITECTURE §13).
-export const reset = Effect.fn("CacheMark.reset")(function* (
-  db: DatabaseService,
-  providerID: string,
-) {
+export const reset = Effect.fn("CacheMark.reset")(function* (db: DatabaseService, providerID: string) {
   const now = Date.now()
   yield* db
     .insert(ProviderCacheMarkTable)
