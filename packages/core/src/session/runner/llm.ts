@@ -42,6 +42,8 @@ import { MAX_STEPS_PROMPT } from "./max-steps"
 import { Snapshot } from "../../snapshot"
 import { makeLocationNode } from "../../effect/app-node"
 import { llmClient } from "../../effect/app-node-platform"
+import { OpenAIChat } from "@opencode-ai/llm/protocols/openai-chat"
+import { HttpTransport } from "@opencode-ai/llm/route"
 
 /**
  * Runs one durable coding-agent Session until it settles.
@@ -207,22 +209,34 @@ const layer = Layer.effect(
       // provider-confirmed cache boundary; any ledger failure fails safe to a
       // verbatim send.
       const cacheMarkOn = Flag.OPENCODE_MEMORY_CONTEXT && Flag.OPENCODE_MEMORY_CACHE_MARK
-      const context = cacheMarkOn
-        ? yield* Effect.gen(function* () {
-            const mark = yield* CacheMark.markIndexFor(db, cacheMarkKey, rawMessages, {
-              // Issue #39 (idle mask reset): only a fresh turn may treat a
-              // stale ledger as cold; mid-turn an in-flight task owns the
-              // cache and time alone never resets the mark.
-              idleMs: currentStep === 1 ? Flag.OPENCODE_MEMORY_MARK_IDLE_MS : 0,
-            }).pipe(Effect.catchDefect(() => Effect.succeed(undefined)))
-            if (mark === undefined) return rawMessages
-            return MemoryContext.project(rawMessages, { sessionID: session.id, markIndex: mark })
-          }).pipe(Effect.catchDefect(() => Effect.succeed(rawMessages)))
-        : MemoryContext.project(rawMessages, { sessionID: session.id })
+      const ladderCacheOn = cacheMarkOn && model.provider === "ladder"
+      const ladderMark = ladderCacheOn
+        ? yield* CacheMark.latestScoped(db, cacheMarkKey, rawMessages, {
+            idleMs: currentStep === 1 ? Flag.OPENCODE_MEMORY_MARK_IDLE_MS : 0,
+          }).pipe(Effect.catchDefect(() => Effect.succeed(undefined)))
+        : undefined
+      const context = ladderCacheOn
+        ? MemoryContext.project(rawMessages, { sessionID: session.id })
+        : cacheMarkOn
+          ? yield* Effect.gen(function* () {
+              const mark = yield* CacheMark.markIndexFor(db, cacheMarkKey, rawMessages, {
+                // Issue #39 (idle mask reset): only a fresh turn may treat a
+                // stale ledger as cold; mid-turn an in-flight task owns the
+                // cache and time alone never resets the mark.
+                idleMs: currentStep === 1 ? Flag.OPENCODE_MEMORY_MARK_IDLE_MS : 0,
+              }).pipe(Effect.catchDefect(() => Effect.succeed(undefined)))
+              if (mark === undefined) return rawMessages
+              return MemoryContext.project(rawMessages, { sessionID: session.id, markIndex: mark })
+            }).pipe(Effect.catchDefect(() => Effect.succeed(rawMessages)))
+          : MemoryContext.project(rawMessages, { sessionID: session.id })
+      const maskedContext = ladderMark
+        ? MemoryContext.project(rawMessages, { sessionID: session.id, markIndex: ladderMark.index })
+        : undefined
       const isLastStep = agent.info?.steps !== undefined && currentStep >= agent.info.steps
       const toolMaterialization = isLastStep ? undefined : yield* tools.materialize(agent.info?.permissions)
       const promptCacheKey = /^ses_[0-9a-f]{64}$/.test(session.id) ? session.id.slice(4) : session.id
-      const request = LLM.request({
+      const baseRequest = LLM.request({
+        ...(ladderCacheOn ? { id: crypto.randomUUID() } : {}),
         model,
         http: {
           headers: {
@@ -241,8 +255,37 @@ const layer = Layer.effect(
         tools: toolMaterialization?.definitions ?? [],
         toolChoice: isLastStep ? "none" : undefined,
       })
-      if (yield* compaction.compactIfNeeded({ sessionID: session.id, entries, model, request }))
+      if (yield* compaction.compactIfNeeded({ sessionID: session.id, entries, model, request: baseRequest }))
         return yield* Effect.die(continueAfterCompaction(currentStep))
+      const maskedBody =
+        maskedContext && ladderMark
+          ? yield* OpenAIChat.protocol.body
+              .from(
+                LLM.updateRequest(baseRequest, {
+                  messages: [
+                    ...toLLMMessages(maskedContext, model),
+                    ...(isLastStep ? [Message.assistant(MAX_STEPS_PROMPT)] : []),
+                  ],
+                }),
+              )
+              .pipe(Effect.catch(() => Effect.succeed(undefined)))
+          : undefined
+      const request =
+        maskedBody && ladderMark && new TextEncoder().encode(JSON.stringify(maskedBody.messages)).length <= 2_000_000
+          ? LLM.updateRequest(baseRequest, {
+              http: {
+                headers: baseRequest.http?.headers,
+                body: {
+                  ladder_conversation: session.id,
+                  ladder_cache_variant: {
+                    rung: ladderMark.rung,
+                    cache_scope: ladderMark.scope,
+                    messages: maskedBody.messages,
+                  },
+                },
+              },
+            })
+          : baseRequest
       const startSnapshot = yield* snapshots.capture()
       const publisher = createLLMEventPublisher(events, {
         sessionID: session.id,
@@ -258,6 +301,19 @@ const layer = Layer.effect(
       const publish = (event: LLMEvent, outputPaths: ReadonlyArray<string> = []) =>
         withPublication(publisher.publish(event, outputPaths))
       let overflowFailure: ProviderErrorEvent | undefined
+      let ladderResponse: { rung?: string; scope?: string; variant: "default" | "masked" } | undefined
+      const stopObserving =
+        ladderCacheOn && request.id
+          ? HttpTransport.observeResponse(request.id, (headers) => {
+              const rung = headers["x-ladder-model"]
+              const scope = headers["x-ladder-cache-scope"]
+              ladderResponse = {
+                ...(rung ? { rung } : {}),
+                ...(scope && /^v1_[a-f0-9]{32}$/.test(scope) ? { scope } : {}),
+                variant: headers["x-ladder-cache-variant"] === "masked" ? "masked" : "default",
+              }
+            })
+          : undefined
       const providerStream = llm.stream(request).pipe(
         Stream.runForEach((event) =>
           Effect.gen(function* () {
@@ -301,6 +357,7 @@ const layer = Layer.effect(
           }),
         ),
         Effect.ensuring(withPublication(publisher.flush())),
+        Effect.ensuring(Effect.sync(() => stopObserving?.())),
       )
 
       return yield* Effect.uninterruptibleMask((restore) =>
@@ -326,8 +383,13 @@ const layer = Layer.effect(
           const attemptFailed =
             (stream._tag === "Failure" && !isContextOverflowFailure(failure)) ||
             (publisher.hasProviderError() && !isContextOverflowFailure(overflowFailure ?? failure))
-          if (cacheMarkOn && attemptFailed)
-            yield* CacheMark.reset(db, cacheMarkKey).pipe(Effect.catchDefect(() => Effect.void))
+          const servedKey = ladderCacheOn
+            ? ladderResponse?.rung && ladderResponse.scope
+              ? `${cacheMarkKey}::${ladderResponse.rung}::${ladderResponse.scope}`
+              : undefined
+            : cacheMarkKey
+          if (servedKey && attemptFailed)
+            yield* CacheMark.reset(db, servedKey).pipe(Effect.catchDefect(() => Effect.void))
           const llmFailure = failure instanceof LLMError ? failure : undefined
           if (llmFailure && !publisher.hasProviderError()) {
             yield* withPublication(publisher.failUnsettledTools("Provider did not return a tool result", true))
@@ -380,16 +442,25 @@ const layer = Layer.effect(
             // verbatim prefix of what we actually sent — compacted messages
             // were cached as marker bytes and must stay compacted, only raw
             // originals may be floored below the mark.
-            if (cacheMarkOn)
+            if (cacheMarkOn && servedKey)
               yield* CacheMark.recordUsage(
                 db,
-                cacheMarkKey,
+                servedKey,
                 {
                   input: stepSettlement.tokens.input,
                   output: stepSettlement.tokens.output,
                   cacheRead: stepSettlement.tokens.cache.read,
                   cacheWrite: stepSettlement.tokens.cache.write,
-                  sentCount: CacheMark.verbatimPrefixLength(context, rawMessages),
+                  sentCount: CacheMark.verbatimPrefixLength(
+                    ladderCacheOn &&
+                      ladderResponse?.variant === "masked" &&
+                      ladderMark?.rung === ladderResponse.rung &&
+                      ladderMark?.scope === ladderResponse.scope &&
+                      maskedContext
+                      ? maskedContext
+                      : context,
+                    rawMessages,
+                  ),
                 },
                 rawMessages,
               ).pipe(Effect.catchDefect(() => Effect.void))

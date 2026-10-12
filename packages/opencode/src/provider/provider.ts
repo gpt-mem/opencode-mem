@@ -31,6 +31,7 @@ import { ModelV2 } from "@opencode-ai/core/model"
 import { ModelStatus } from "./model-status"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ProviderError } from "./error"
+import { LadderTransport } from "./ladder-transport"
 
 const OPENAI_HEADER_TIMEOUT_DEFAULT = 300_000
 
@@ -1846,7 +1847,11 @@ const layer = Layer.effect(
         const existing = s.sdk.get(key)
         if (existing) return existing
 
-        options["fetch"] = timeoutFetch(options)
+        const timedFetch = timeoutFetch(options)
+        options["fetch"] =
+          model.providerID === "ladder" && model.api.npm === "@ai-sdk/openai-compatible"
+            ? (input: RequestInfo | URL, init?: RequestInit) => LadderTransport.fetchRequest(input, init, timedFetch)
+            : timedFetch
         delete options["chunkTimeout"]
         delete options["headerTimeout"]
 

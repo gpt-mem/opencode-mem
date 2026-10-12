@@ -2,7 +2,7 @@ import { describe, expect } from "bun:test"
 import { Effect, Schema } from "effect"
 import { HttpClientRequest } from "effect/unstable/http"
 import { LLM, Message, ToolCallPart } from "../../src"
-import { Auth, LLMClient } from "../../src/route"
+import { Auth, HttpTransport, LLMClient } from "../../src/route"
 import * as OpenAICompatible from "../../src/providers/openai-compatible"
 import * as OpenAICompatibleChat from "../../src/protocols/openai-compatible-chat"
 import { it } from "../lib/effect"
@@ -233,6 +233,117 @@ describe("OpenAI-compatible Chat route", () => {
       expect(response.text).toBe("Hello!")
       expect(response.usage).toMatchObject({ inputTokens: 5, outputTokens: 2, totalTokens: 7 })
       expect(response.events.at(-1)).toMatchObject({ type: "finish", reason: "stop" })
+    }),
+  )
+
+  it.effect("preserves Ladder body metadata and exposes response headers to a V2 observer", () =>
+    Effect.gen(function* () {
+      const seen: Record<string, string>[] = []
+      const stop = HttpTransport.observeResponse("req_ladder", (headers) => seen.push(headers))
+      const scope = `v1_${"a".repeat(32)}`
+      const routed = LLM.updateRequest(request, {
+        id: "req_ladder",
+        http: {
+          headers: { "x-session-affinity": "session-1" },
+          body: {
+            ladder_conversation: "session-1",
+            ladder_cache_variant: {
+              rung: "opencode-go/mimo-v2.6-flash",
+              cache_scope: scope,
+              messages: [{ role: "user", content: "masked" }],
+            },
+          },
+        },
+      })
+      try {
+        yield* LLMClient.generate(routed).pipe(
+          Effect.provide(
+            dynamicResponse((input) => {
+              expect(decodeJson(input.text)).toMatchObject({
+                messages: [
+                  { role: "system", content: "You are concise." },
+                  { role: "user", content: "Say hello." },
+                ],
+                ladder_cache_variant: {
+                  rung: "opencode-go/mimo-v2.6-flash",
+                  cache_scope: scope,
+                  messages: [{ role: "user", content: "masked" }],
+                },
+              })
+              return Effect.succeed(
+                input.respond(
+                  sseEvents(
+                    deltaChunk({ role: "assistant", content: "Done" }),
+                    deltaChunk({}, "stop"),
+                    usageChunk({ prompt_tokens: 5, completion_tokens: 1 }),
+                  ),
+                  {
+                    headers: {
+                      "content-type": "text/event-stream",
+                      "x-ladder-model": "opencode-go/mimo-v2.6-flash",
+                      "x-ladder-cache-scope": scope,
+                      "x-ladder-cache-variant": "masked",
+                    },
+                  },
+                ),
+              )
+            }),
+          ),
+        )
+        expect(seen).toHaveLength(1)
+        expect(seen[0]["x-ladder-model"]).toBe("opencode-go/mimo-v2.6-flash")
+        expect(seen[0]["x-ladder-cache-scope"]).toBe(scope)
+        expect(seen[0]["x-ladder-cache-variant"]).toBe("masked")
+      } finally {
+        stop()
+      }
+    }),
+  )
+
+  it.effect("retries a retired Ladder rung with the compact V2 request", () =>
+    Effect.gen(function* () {
+      const calls: boolean[] = []
+      const routed = LLM.updateRequest(request, {
+        model: OpenAICompatibleChat.route
+          .with({ provider: "ladder", endpoint: { baseURL: "https://ladder.test/v1" } })
+          .model({ id: "service" }),
+        http: {
+          body: {
+            ladder_cache_variant: {
+              rung: "opencode-go/retired",
+              cache_scope: `v1_${"a".repeat(32)}`,
+              messages: [{ role: "user", content: "masked" }],
+            },
+          },
+        },
+      })
+      const result = yield* LLMClient.generate(routed).pipe(
+        Effect.provide(
+          dynamicResponse((input) => {
+            const body = decodeJson(input.text) as Record<string, unknown>
+            calls.push(!!body.ladder_cache_variant)
+            if (calls.length === 1)
+              return Effect.succeed(
+                input.respond(JSON.stringify({ error: { message: "invalid ladder_cache_variant" } }), {
+                  status: 400,
+                  headers: { "content-type": "application/json" },
+                }),
+              )
+            return Effect.succeed(
+              input.respond(
+                sseEvents(
+                  deltaChunk({ role: "assistant", content: "Done" }),
+                  deltaChunk({}, "stop"),
+                  usageChunk({ prompt_tokens: 5, completion_tokens: 1 }),
+                ),
+                { headers: { "content-type": "text/event-stream" } },
+              ),
+            )
+          }),
+        ),
+      )
+      expect(result.text).toBe("Done")
+      expect(calls).toEqual([true, false])
     }),
   )
 })
