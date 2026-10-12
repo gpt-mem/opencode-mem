@@ -1,5 +1,5 @@
 import { Effect, Schema } from "effect"
-import { eq } from "drizzle-orm"
+import { and, eq } from "drizzle-orm"
 import { Database } from "@opencode-ai/core/database/database"
 import { MemRecord } from "@opencode-ai/core/session/mem-record"
 import { MemRecordTable, SessionTable } from "@opencode-ai/core/session/sql"
@@ -30,7 +30,9 @@ export const PutInOperationalMemoryTool = Tool.define<typeof Parameters, Metadat
         "so they survive across turns and sessions in this project. Content is PII-redacted before storage; " +
         "the original stays in session history. Agent proposals are recorded with authority=agent — only " +
         "set decided_by when a user (or named person) actually made the decision, never self-assert user " +
-        "approval. Retrieve with search_operational_memory.",
+        "approval. To replace an earlier record pass its id in supersedes — the old record is marked " +
+        "superseded and the new one carries version = old.version + 1. Retrieve with " +
+        "search_operational_memory or get_operational_memory.",
       parameters: Parameters,
       execute: (params: Schema.Schema.Type<typeof Parameters>, ctx: Tool.Context<Metadata>) =>
         Effect.gen(function* () {
@@ -55,9 +57,10 @@ export const PutInOperationalMemoryTool = Tool.define<typeof Parameters, Metadat
             }
           }
           const projectID = session.project_id
-          const now = Date.now()
-          const inserted: MemRecord.Record[] = []
 
+          // Validate the whole batch before writing anything so a bad entry
+          // cannot leave a partially applied batch behind (all-or-nothing).
+          const validated: Array<{ readonly entry: MemRecord.Entry; readonly raw: string }> = []
           for (const entry of entries) {
             const raw = entry.decision
             if (raw === undefined || raw.trim() === "") {
@@ -71,10 +74,71 @@ export const PutInOperationalMemoryTool = Tool.define<typeof Parameters, Metadat
                 metadata: { written: 0 },
               }
             }
+            if (entry.supersedes !== undefined) {
+              const target = yield* db
+                .select({ id: MemRecordTable.id, status: MemRecordTable.status })
+                .from(MemRecordTable)
+                .where(and(eq(MemRecordTable.id, entry.supersedes), eq(MemRecordTable.project_id, projectID)))
+                .get()
+                .pipe(Effect.orDie)
+              if (target === undefined) {
+                return {
+                  title: "Rejected: supersedes target not found",
+                  output: JSON.stringify(
+                    {
+                      written: 0,
+                      error: `Entry subject="${entry.subject}" supersedes unknown record ${entry.supersedes} in this project`,
+                    },
+                    null,
+                    2,
+                  ),
+                  metadata: { written: 0 },
+                }
+              }
+              if (target.status !== "active") {
+                return {
+                  title: "Rejected: supersedes target not active",
+                  output: JSON.stringify(
+                    {
+                      written: 0,
+                      error:
+                        `Entry subject="${entry.subject}" supersedes ${entry.supersedes} with status=${target.status}; ` +
+                        `only active records can be superseded — supersede the latest active version instead`,
+                    },
+                    null,
+                    2,
+                  ),
+                  metadata: { written: 0 },
+                }
+              }
+            }
+            validated.push({ entry, raw })
+          }
+
+          const now = Date.now()
+          const inserted: MemRecord.Record[] = []
+
+          for (const { entry, raw } of validated) {
             const authority = MemRecord.resolveAuthority({
               decided_by: entry.decided_by,
               recorded_by: ctx.agent,
             })
+            let version = 1
+            if (entry.supersedes !== undefined) {
+              const old = yield* db
+                .select({ version: MemRecordTable.version })
+                .from(MemRecordTable)
+                .where(eq(MemRecordTable.id, entry.supersedes))
+                .get()
+                .pipe(Effect.orDie)
+              version = (old?.version ?? 0) + 1
+              yield* db
+                .update(MemRecordTable)
+                .set({ status: "superseded", time_updated: now })
+                .where(eq(MemRecordTable.id, entry.supersedes))
+                .run()
+                .pipe(Effect.orDie)
+            }
             const id = Identifier.create("mem", "ascending")
             const row = {
               id,
@@ -90,8 +154,8 @@ export const PutInOperationalMemoryTool = Tool.define<typeof Parameters, Metadat
               recorded_by: ctx.agent,
               source_ref: entry.source_ref ?? null,
               scope: entry.scope ?? null,
-              supersedes: null,
-              version: 1,
+              supersedes: entry.supersedes ?? null,
+              version,
               time_created: now,
               time_updated: now,
             }

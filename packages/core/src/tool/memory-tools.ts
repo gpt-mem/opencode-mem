@@ -12,4 +12,5 @@ export const names: ReadonlySet<string> = new Set([
   "find_pii",
   "put_in_operational_memory",
   "search_operational_memory",
+  "get_operational_memory",
 ])
