@@ -1753,7 +1753,9 @@ const llmScenarios = new Set([
 const main = Effect.gen(function* () {
   yield* Effect.addFinalizer(() => Effect.promise(() => disposeApps()).pipe(Effect.andThen(cleanupExercisePaths)))
   const options = parseOptions(Bun.argv.slice(2))
+  if (options.progress) console.log(`HttpApi boot mode=${options.mode}`)
   const modules = yield* Effect.promise(() => runtime())
+  if (options.progress) console.log(`HttpApi runtime ready mode=${options.mode}`)
   const effectRoutes = routeKeys(OpenApi.fromApi(modules.PublicApi))
   const selected = selectedScenarios(options, scenarios)
   const missing = effectRoutes.filter((route) => !scenarios.some((scenario) => route === routeKey(scenario)))
