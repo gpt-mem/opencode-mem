@@ -938,7 +938,7 @@ it.live("session.processor effect tests mark pending tools as aborted on cleanup
   ),
 )
 
-it.live("session.processor effect tests record aborted errors and idle state", () =>
+it.live("session.processor effect tests record aborted errors without ending the session runner", () =>
   provideTmpdirServer(
     ({ dir, llm }) =>
       Effect.gen(function* () {
@@ -1005,7 +1005,7 @@ it.live("session.processor effect tests record aborted errors and idle state", (
         if (stored.info.role === "assistant") {
           expect(stored.info.error?.name).toBe("MessageAbortedError")
         }
-        expect(state).toMatchObject({ type: "idle" })
+        expect(state).toMatchObject({ type: "busy" })
         expect(errs).toContain("MessageAbortedError")
       }),
     { config: (url) => providerCfg(url) },
@@ -1063,7 +1063,7 @@ it.live("session.processor effect tests mark interruptions aborted without manua
         if (stored.info.role === "assistant") {
           expect(stored.info.error?.name).toBe("MessageAbortedError")
         }
-        expect(state).toMatchObject({ type: "idle" })
+        expect(state).toMatchObject({ type: "busy" })
       }),
     { config: (url) => providerCfg(url) },
   ),

@@ -698,6 +698,7 @@ export const RunCommand = effectCmd({
           const toggles = new Map<string, boolean>()
           const sessions = new Set([sessionID])
           let error: string | undefined
+          let errorRaw: unknown
           let messageError: { name: string; message: string; raw: unknown } | undefined
 
           for await (const event of events.stream) {
@@ -808,8 +809,19 @@ export const RunCommand = effectCmd({
                 err = String(props.error.data.message)
               }
               error = error ? error + EOL + err : err
-              if (emit("error", { error: props.error })) continue
-              UI.error(err)
+              errorRaw = props.error
+            }
+
+            // A failed ladder attempt can be followed by a successful continuation.
+            // Only the terminal attempt determines the CLI exit status.
+            if (
+              event.type === "session.status" &&
+              event.properties.sessionID === sessionID &&
+              event.properties.status.type === "retry"
+            ) {
+              error = undefined
+              errorRaw = undefined
+              messageError = undefined
             }
 
             if (
@@ -842,6 +854,14 @@ export const RunCommand = effectCmd({
               }
             }
           }
+          // A recovered ladder attempt can leave an earlier session.error in
+          // the event stream. The latest durable assistant decides the outcome.
+          const finalAssistant = await lastAssistantResult(client, sessionID)
+          if (finalAssistant === null) {
+            error = undefined
+            errorRaw = undefined
+            messageError = undefined
+          }
           // Issue #38: surface message-level errors that never produced a
           // session.error event (abort race, ladder exhaustion, structured
           // output). Skip when session.error already recorded a failure.
@@ -849,7 +869,7 @@ export const RunCommand = effectCmd({
             const label =
               messageError.name === "MessageAbortedError" ? "Response interrupted (Aborted)" : messageError.message
             error = label
-            if (!emit("error", { error: messageError.raw })) UI.error(label)
+            errorRaw = messageError.raw
           }
           // Issue #38 (event race belt-and-suspenders): a mid-stream abort can
           // publish session.status idle before session.error reaches the
@@ -857,14 +877,16 @@ export const RunCommand = effectCmd({
           // assistant message still carries the error — fetch it and fail the
           // run instead of exiting 0 with silence.
           if (!error) {
-            const lastError = await lastAssistantError(client, sessionID)
-            if (lastError) {
+            if (finalAssistant) {
               const label =
-                lastError.name === "MessageAbortedError" ? "Response interrupted (Aborted)" : messageOf(lastError)
+                finalAssistant.name === "MessageAbortedError"
+                  ? "Response interrupted (Aborted)"
+                  : messageOf(finalAssistant)
               error = label
-              if (!emit("error", { error: lastError })) UI.error(label)
+              errorRaw = finalAssistant
             }
           }
+          if (error && !emit("error", { error: errorRaw ?? { message: error } })) UI.error(error)
           return error
         }
 
@@ -873,20 +895,24 @@ export const RunCommand = effectCmd({
           return String(err.name ?? "Error")
         }
 
-        async function lastAssistantError(
+        async function lastAssistantResult(
           client: OpencodeClient,
           id: string,
-        ): Promise<{ name?: string; data?: { message?: string } } | undefined> {
+        ): Promise<{ name?: string; data?: { message?: string } } | null | undefined> {
           try {
             const msgs = await client.session.messages({ sessionID: id })
             const list = (msgs.data ?? []) as Array<{
-              info?: { role?: string; error?: { name?: string; data?: { message?: string } } }
+              info?: { role?: string; finish?: string; error?: { name?: string; data?: { message?: string } } }
               role?: string
+              finish?: string
               error?: { name?: string; data?: { message?: string } }
             }>
             for (let i = list.length - 1; i >= 0; i--) {
               const info = list[i].info ?? list[i]
-              if (info.role === "assistant" && info.error) return info.error
+              if (info.role !== "assistant") continue
+              if (info.error) return info.error
+              if (info.finish && info.finish !== "unknown") return null
+              return undefined
             }
           } catch {
             // messages fetch is best-effort; keep the prior error/exit state
