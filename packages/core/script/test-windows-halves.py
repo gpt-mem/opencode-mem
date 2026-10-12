@@ -1,9 +1,10 @@
-"""Run every core test on Windows in two bounded Bun processes.
+"""Run every core test on Windows in small bounded Bun processes.
 
 Bun 1.4.2 on Windows can retain a handle after the complete 156-file suite
-reports 1275 passing tests. Both file halves exit normally with the same
-1275 passes and 12 skips. A nonzero result or a process that fails to exit
-remains a CI failure; no test is skipped or given a longer per-test timeout.
+reports 1275 passing tests. A 78-file half also intermittently fails a
+subprocess test under shared load, so each process now owns at most 39 files.
+A nonzero result or a process that fails to exit remains a CI failure; no test
+is skipped or given a longer per-test timeout.
 """
 
 from pathlib import Path
@@ -21,18 +22,20 @@ FILES = sorted(str(path.relative_to(ROOT)) for path in TEST_DIR.rglob("*")
 if not FILES:
     raise SystemExit("no core tests discovered")
 
-midpoint = len(FILES) // 2
+CHUNKS = min(4, len(FILES))
 failed = False
-for label, group in (("first", FILES[:midpoint]), ("second", FILES[midpoint:])):
-    print(f"{label} half: {len(group)} files", flush=True)
+for index in range(CHUNKS):
+    group = FILES[index * len(FILES) // CHUNKS:(index + 1) * len(FILES) // CHUNKS]
+    label = f"core chunk {index + 1}/{CHUNKS}"
+    print(f"{label}: {len(group)} files", flush=True)
     try:
         result = subprocess.run(
-            ["bun", "test", "--only-failures", *group],
+            ["bun", "test", *group],
             cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, timeout=240,
         )
         output = result.stdout
-        print(f"{label} half: exit={result.returncode}", flush=True)
+        print(f"{label}: exit={result.returncode}", flush=True)
         summary = next((line for line in output.splitlines() if re.search(r"Ran \d+ tests across", line)), None)
         if result.returncode != 0 or summary is None:
             failed = True
@@ -45,7 +48,7 @@ for label, group in (("first", FILES[:midpoint]), ("second", FILES[midpoint:])):
         output = error.stdout or b""
         if isinstance(output, bytes):
             output = output.decode(errors="replace")
-        print(f"{label} half: did not exit within 240s", flush=True)
+        print(f"{label}: did not exit within 240s", flush=True)
         print("\n".join(output.splitlines()[-30:]), flush=True)
         failed = True
 
