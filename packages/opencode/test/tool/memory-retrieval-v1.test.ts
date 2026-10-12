@@ -7,7 +7,7 @@ import { PartTable, MessageTable, SessionTable } from "@opencode-ai/core/session
 import { ProjectTable } from "@opencode-ai/core/project/sql"
 import { Project } from "@opencode-ai/core/project"
 import { AbsolutePath } from "@opencode-ai/core/schema"
-import { Cause, Effect, Exit } from "effect"
+import { Effect } from "effect"
 import { Agent } from "../../src/agent/agent"
 import { MessageID, PartID, SessionID } from "../../src/session/schema"
 import { Tool } from "@/tool/tool"
@@ -584,9 +584,11 @@ describe("tool.find-tool-calls (V1)", () => {
     Effect.gen(function* () {
       yield* seed
       const def = yield* Tool.init(yield* FindToolCallsTool)
-      const exit = yield* def.execute({ query: "(unclosed" }, ctx(sessionID)).pipe(Effect.exit)
-      expect(Exit.isFailure(exit)).toBe(true)
-      if (Exit.isFailure(exit)) expect(String(Cause.squash(exit.cause))).toContain("Invalid query regular expression")
+      const result = yield* def.execute({ query: "(unclosed" }, ctx(sessionID))
+      const parsed = JSON.parse(result.output)
+      expect(parsed.matched).toBe(0)
+      expect(parsed.calls).toEqual([])
+      expect(String(parsed.error)).toContain("Invalid query regular expression")
     }),
   )
 

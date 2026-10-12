@@ -197,13 +197,20 @@ export const FindToolCallsTool = Tool.define<typeof Parameters, Metadata, Databa
             metadata: {},
           })
           const query = params.query
-          const regex =
-            query === undefined
-              ? undefined
-              : yield* Effect.try({
-                  try: () => new RegExp(query, "i"),
-                  catch: () => new Error(`Invalid query regular expression: ${query}`),
-                })
+          // DefWithoutID pins the error channel to never, so a bad regex is a
+          // soft error in the result payload (same pattern as put-in-operational-memory).
+          let regex: RegExp | undefined
+          if (query !== undefined) {
+            try {
+              regex = new RegExp(query, "i")
+            } catch {
+              return {
+                title: "Invalid query regular expression",
+                output: JSON.stringify({ calls: [], matched: 0, error: `Invalid query regular expression: ${query}` }, null, 2),
+                metadata: { matched: 0 },
+              }
+            }
+          }
           const limit = Math.max(1, Math.min(params.limit ?? DEFAULT_LIMIT, MAX_LIMIT))
           const offset = Math.max(0, Math.floor(params.offset ?? 0))
           const matched = (yield* collectCandidates(db, ctx.sessionID)).filter((item) => {
