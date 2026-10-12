@@ -698,6 +698,7 @@ export const RunCommand = effectCmd({
           const toggles = new Map<string, boolean>()
           const sessions = new Set([sessionID])
           let error: string | undefined
+          let messageError: { name: string; message: string; raw: unknown } | undefined
 
           for await (const event of events.stream) {
             if (event.type === "session.created" && event.properties.info.parentID) {
@@ -715,6 +716,27 @@ export const RunCommand = effectCmd({
               UI.println(`> ${event.properties.info.agent} · ${event.properties.info.modelID}`)
               UI.empty()
               toggles.set("start", true)
+            }
+
+            // Issue #38: message-level errors (abort race, ladder exhaustion,
+            // structured-output failure) attach to the assistant message without
+            // a session.error event. Remember the latest so the run can exit
+            // nonzero instead of silently going idle.
+            if (
+              event.type === "message.updated" &&
+              event.properties.sessionID === sessionID &&
+              event.properties.info.role === "assistant" &&
+              event.properties.info.error
+            ) {
+              const err = event.properties.info.error
+              messageError = {
+                name: String(err.name ?? "Error"),
+                message:
+                  "data" in err && err.data && "message" in err.data
+                    ? String(err.data.message)
+                    : String(err.name ?? "Error"),
+                raw: err,
+              }
             }
 
             if (event.type === "message.part.updated") {
@@ -819,6 +841,15 @@ export const RunCommand = effectCmd({
                 })
               }
             }
+          }
+          // Issue #38: surface message-level errors that never produced a
+          // session.error event (abort race, ladder exhaustion, structured
+          // output). Skip when session.error already recorded a failure.
+          if (messageError && !error) {
+            const label =
+              messageError.name === "MessageAbortedError" ? "Response interrupted (Aborted)" : messageError.message
+            error = label
+            if (!emit("error", { error: messageError.raw })) UI.error(label)
           }
           return error
         }
