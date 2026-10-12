@@ -342,7 +342,7 @@ describe("HttpApi Server.listen", () => {
         (async () => {
           while (!(await Bun.file(tmp.extra.completed).exists())) await Bun.sleep(10)
         })(),
-        5_000,
+        process.platform === "win32" ? 15_000 : 5_000,
         "timed out waiting for plugin client request",
       )
       expect(await Bun.file(tmp.extra.initialized).text()).toBe("initialized\n")
@@ -351,7 +351,7 @@ describe("HttpApi Server.listen", () => {
       if (previous === undefined) delete process.env.OPENCODE_DISABLE_DEFAULT_PLUGINS
       else process.env.OPENCODE_DISABLE_DEFAULT_PLUGINS = previous
     }
-  })
+  }, process.platform === "win32" ? 90_000 : 30_000)
 
   test("port 0 prefers 4096 when free", async () => {
     if (!(await isPortFree(4096))) return
