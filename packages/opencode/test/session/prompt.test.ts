@@ -971,7 +971,12 @@ it.instance("ladder total failure auto-continues and recovers (issue #39)", () =
     const chat = yield* sessions.create({ title: "Pinned" })
     const events = yield* EventV2Bridge.Service
     const states: string[] = []
+    const errors: unknown[] = []
     const off = yield* events.listen((event) => {
+      if (event.type === Session.Event.Error.type) {
+        const data = event.data as typeof Session.Event.Error.data.Type
+        if (data.sessionID === chat.id) errors.push(data.error)
+      }
       if (event.type !== SessionStatus.Event.Status.type) return Effect.void
       const data = event.data as typeof SessionStatus.Event.Status.data.Type
       if (data.sessionID === chat.id) states.push(data.status.type)
@@ -995,6 +1000,7 @@ it.instance("ladder total failure auto-continues and recovers (issue #39)", () =
 
     expect(yield* llm.calls).toBe(2)
     expect(states).toContain("retry")
+    expect(errors).toHaveLength(0)
     expect(states.filter((state) => state === "idle")).toHaveLength(1)
     expect(result.info.role).toBe("assistant")
     if (result.info.role === "assistant") {
@@ -1025,6 +1031,15 @@ it.instance("ladder auto-continue exhausts its budget and ends with an explicit 
     const sessions = yield* Session.Service
     const chat = yield* sessions.create({ title: "Pinned" })
 
+    const events = yield* EventV2Bridge.Service
+    const errors: unknown[] = []
+    const off = yield* events.listen((event) => {
+      if (event.type !== Session.Event.Error.type) return Effect.void
+      const data = event.data as typeof Session.Event.Error.data.Type
+      if (data.sessionID === chat.id) errors.push(data.error)
+      return Effect.void
+    })
+
     // Every attempt fails: 1 initial request + 5 auto-continues = 6 calls.
     for (let i = 0; i < 6; i++) yield* llm.error(400, { error: { message: "every rung failed" } })
     yield* prompt.prompt({
@@ -1035,8 +1050,10 @@ it.instance("ladder auto-continue exhausts its budget and ends with an explicit 
     })
     const result = yield* prompt.loop({ sessionID: chat.id })
     const messages = yield* sessions.messages({ sessionID: chat.id })
+    yield* off
 
     expect(yield* llm.calls).toBe(6)
+    expect(errors).toHaveLength(1)
     expect(result.info.role).toBe("assistant")
     if (result.info.role === "assistant") expect(result.info.error?.name).toBe("APIError")
     const autos = messages.filter(

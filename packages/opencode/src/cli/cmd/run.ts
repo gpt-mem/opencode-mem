@@ -822,6 +822,11 @@ export const RunCommand = effectCmd({
               error = undefined
               errorRaw = undefined
               messageError = undefined
+              const status = event.properties.status
+              if (!emit("retry", { status })) {
+                const seconds = Math.max(0, Math.ceil((status.next - Date.now()) / 1000))
+                UI.println(`Retrying provider ladder (attempt ${status.attempt}, in ${seconds}s)`)
+              }
             }
 
             if (

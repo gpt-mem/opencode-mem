@@ -29,6 +29,10 @@ import { Usage, type LLMEvent } from "@opencode-ai/llm"
 const DOOM_LOOP_THRESHOLD = 3
 export type Result = "compact" | "stop" | "continue"
 
+export function isLadderError(error: SessionV1.Assistant["error"]): error is SessionV1.APIError {
+  return SessionV1.APIError.isInstance(error) && /every rung failed|ladder_error/i.test(error.data.message)
+}
+
 export interface Handle {
   readonly message: SessionV1.Assistant
   readonly updateToolCall: (
@@ -630,6 +634,9 @@ const layer = Layer.effect(
           return
         }
         ctx.assistantMessage.error = error
+        // The prompt loop owns the terminal decision after its durable
+        // auto-continuation budget. A recoverable attempt is not a session error.
+        if (isLadderError(error)) return
         yield* events.publish(Session.Event.Error, {
           sessionID: ctx.assistantMessage.sessionID,
           error: ctx.assistantMessage.error,
