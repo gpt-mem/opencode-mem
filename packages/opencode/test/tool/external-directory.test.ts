@@ -117,7 +117,6 @@ describe("tool.assertExternalDirectory", () => {
 
           const target = path.join(outerTmp, "outside.txt")
           const alt = target
-            .replace(/^[A-Za-z]:/, "")
             .replaceAll("\\", "/")
             .toLowerCase()
 
