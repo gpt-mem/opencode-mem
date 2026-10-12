@@ -11,6 +11,7 @@ const DEFAULT_LIMIT = 20
 const MAX_LIMIT = 100
 const PREVIEW_CHARS = 240
 const INPUT_SUMMARY_CHARS = 200
+const SNIPPET_CONTEXT = 180
 
 export const Parameters = Schema.Struct({
   tool: Schema.optional(Schema.String.annotate({ description: "Exact tool name to filter by (e.g. bash, read)" })),
@@ -22,7 +23,9 @@ export const Parameters = Schema.Struct({
   query: Schema.optional(
     Schema.String.annotate({
       description:
-        "Regular expression matched against tool input (command/url/path), output text and error message, case-insensitive",
+        "Regular expression matched against tool input (command/url/path), output text and error message, case-insensitive. " +
+        "When it matches the output text, each result includes match_offset and match_snippet so you can answer from the " +
+        "snippet or page get_tool_call_details with a small window instead of full=true",
     }),
   ),
   limit: Schema.optional(
@@ -35,6 +38,24 @@ export const Parameters = Schema.Struct({
 type Metadata = { matched: number }
 
 const bound = (text: string, max: number) => (text.length <= max ? text : text.slice(0, max))
+
+// When a query hits the stored tool output, surface a window around the first
+// match so the model can answer a needle question (or page get_tool_call_details
+// with a small offset window) without re-injecting the full original via
+// full=true. match_offset is an index into the same output text that details
+// pages over. Input-only matches (command/url) do not set these fields — the
+// offset would not line up with the output document.
+const matchWindow = (raw: string | undefined, regex: RegExp | undefined) => {
+  if (raw === undefined || regex === undefined) return undefined
+  const hit = regex.exec(raw)
+  if (hit === null) return undefined
+  const start = Math.max(0, hit.index - SNIPPET_CONTEXT)
+  const end = Math.min(raw.length, hit.index + hit[0].length + SNIPPET_CONTEXT)
+  return {
+    match_offset: hit.index,
+    match_snippet: PII.redact(raw.slice(start, end)).text,
+  }
+}
 
 const inputSummary = (input: unknown) => {
   if (typeof input === "string") return input === "" ? undefined : bound(PII.redact(input).text, INPUT_SUMMARY_CHARS)
@@ -57,6 +78,7 @@ export type Candidate = {
   preview?: string
   error?: string
   haystack: string
+  raw?: string
   seq: string
 }
 
@@ -90,6 +112,7 @@ const candidate = (data: unknown, id: string, includeMemoryTools = false): Candi
     ...(preview === undefined ? {} : { preview }),
     ...(error === undefined ? {} : { error: bound(PII.redact(error).text, PREVIEW_CHARS) }),
     haystack: [input, raw].filter((piece): piece is string => piece !== undefined && piece !== "").join("\n"),
+    ...(raw === "" ? {} : { raw }),
     seq: id,
   }
 }
@@ -123,7 +146,8 @@ export const FindToolCallsTool = Tool.define<typeof Parameters, Metadata, Databa
       description:
         "Search tool calls in this session by tool name, status or pattern. " +
         "Returns compact entries (call_id, status, input, preview) so you can locate a call and then load its full " +
-        "output with get_tool_call_details(call_id). Compacted [mem:compacted] results are searchable here because " +
+        "output with get_tool_call_details(call_id). A query that matches tool output also returns match_snippet and " +
+        "match_offset — prefer that over full=true when hunting a needle. Compacted [mem:compacted] results are searchable here because " +
         "the originals live in session history. Memory-tool calls are never returned here " +
         "(a query would match its own earlier searches, issue #34); they are counted in " +
         "get_tool_call_overview and load by call_id (issue #48).",
@@ -147,7 +171,10 @@ export const FindToolCallsTool = Tool.define<typeof Parameters, Metadata, Databa
           const calls = matched
             .slice(-limit)
             .reverse()
-            .map(({ haystack: _haystack, seq: _seq, ...item }) => item)
+            .map(({ haystack: _haystack, seq: _seq, raw, ...item }) => {
+              const window = matchWindow(raw, regex)
+              return { ...item, ...(window === undefined ? {} : window) }
+            })
           return {
             title: `${matched.length} matching tool calls`,
             output: JSON.stringify({ calls, matched: matched.length }, null, 2),

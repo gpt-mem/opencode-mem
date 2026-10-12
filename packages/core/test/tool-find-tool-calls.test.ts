@@ -46,14 +46,22 @@ const model = { id: ModelV2.ID.make("model"), providerID: ProviderV2.ID.make("pr
 const encodeMessage = Schema.encodeSync(SessionMessage.Message)
 
 const assistantRow = (id: SessionMessage.ID, seq: number, content: SessionMessage.Assistant["content"]) => {
-  const { id: _id, type, ...data } = encodeMessage(
+  const {
+    id: _id,
+    type,
+    ...data
+  } = encodeMessage(
     SessionMessage.Assistant.make({ id, type: "assistant", agent: "build", model, content, time: { created } }),
   )
   return { id, session_id: sessionID, type, seq, time_created: DateTime.toEpochMillis(created), data }
 }
 
 const shellRow = (id: SessionMessage.ID, seq: number, callID: string, command: string, output: string) => {
-  const { id: _id, type, ...data } = encodeMessage(
+  const {
+    id: _id,
+    type,
+    ...data
+  } = encodeMessage(
     SessionMessage.Shell.make({
       id,
       type: "shell",
@@ -146,6 +154,22 @@ const setup = Effect.gen(function* () {
           time: { created },
         }),
       ]),
+      assistantRow(SessionMessage.ID.make("msg_call_needle"), 6, [
+        SessionMessage.AssistantTool.make({
+          type: "tool",
+          id: "call_long_log",
+          name: "bash",
+          state: SessionMessage.ToolStateCompleted.make({
+            status: "completed",
+            input: { command: "cat app.log" },
+            content: [
+              { type: "text", text: `${"heartbeat\n".repeat(80)}DEPLOY-CODE-NEEDLE = X7Q9-M3KT\n${"ok\n".repeat(40)}` },
+            ],
+            structured: {},
+          }),
+          time: { created },
+        }),
+      ]),
     ])
     .run()
     .pipe(Effect.orDie)
@@ -159,7 +183,9 @@ const call = (input: Record<string, unknown>) => ({
 
 const parsed = (result: { type: string; value: unknown }) => {
   if (result.type !== "text" && result.type !== "json") throw new Error(`unexpected result type: ${result.type}`)
-  return typeof result.value === "string" ? (JSON.parse(result.value) as Record<string, unknown>) : (result.value as Record<string, unknown>)
+  return typeof result.value === "string"
+    ? (JSON.parse(result.value) as Record<string, unknown>)
+    : (result.value as Record<string, unknown>)
 }
 
 const callsOf = (output: Record<string, unknown>) => output["calls"] as Record<string, unknown>[]
@@ -170,11 +196,11 @@ describe("FindToolCallsTool", () => {
       yield* setup
       const registry = yield* ToolRegistry.Service
       const output = parsed(yield* executeTool(registry, call({})))
-      expect(output["matched"]).toBe(5)
+      expect(output["matched"]).toBe(6)
       const calls = callsOf(output)
-      expect(calls.length).toBe(5)
+      expect(calls.length).toBe(6)
       expect(calls[0]!["tool"]).toBe("bash")
-      expect(calls[0]!["call_id"]).toBe("call_secret")
+      expect(calls[0]!["call_id"]).toBe("call_long_log")
       const shell = calls.find((candidate) => candidate["call_id"] === "call_shell_1")
       expect(String(shell?.["input"])).toContain("git status")
     }),
@@ -212,10 +238,10 @@ describe("FindToolCallsTool", () => {
       yield* setup
       const registry = yield* ToolRegistry.Service
       const output = parsed(yield* executeTool(registry, call({ tool: "bash", limit: 1 })))
-      expect(output["matched"]).toBe(4)
+      expect(output["matched"]).toBe(5)
       const calls = callsOf(output)
       expect(calls.length).toBe(1)
-      expect(calls[0]!["call_id"]).toBe("call_secret")
+      expect(calls[0]!["call_id"]).toBe("call_long_log")
     }),
   )
 
@@ -272,7 +298,7 @@ describe("FindToolCallsTool", () => {
       yield* db
         .insert(SessionMessageTable)
         .values([
-          assistantRow(SessionMessage.ID.make("msg_call_search"), 6, [
+          assistantRow(SessionMessage.ID.make("msg_call_search"), 7, [
             SessionMessage.AssistantTool.make({
               type: "tool",
               id: "call_search_echo",
@@ -293,7 +319,35 @@ describe("FindToolCallsTool", () => {
       const byQuery = parsed(yield* executeTool(registry, call({ query: "echo-needle" })))
       expect(byQuery["matched"]).toBe(0)
       const unfiltered = parsed(yield* executeTool(registry, call({})))
-      expect(unfiltered["matched"]).toBe(5)
+      expect(unfiltered["matched"]).toBe(6)
+    }),
+  )
+
+  it.effect("query that matches mid-output returns match_snippet and match_offset", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const registry = yield* ToolRegistry.Service
+      const output = parsed(yield* executeTool(registry, call({ query: "DEPLOY-CODE-NEEDLE" })))
+      expect(output["matched"]).toBe(1)
+      const entry = callsOf(output)[0]
+      expect(entry?.["call_id"]).toBe("call_long_log")
+      expect(typeof entry?.["match_offset"]).toBe("number")
+      expect(Number(entry?.["match_offset"])).toBeGreaterThan(200)
+      expect(String(entry?.["match_snippet"])).toContain("DEPLOY-CODE-NEEDLE = X7Q9-M3KT")
+      expect(String(entry?.["match_snippet"]).length).toBeLessThanOrEqual(180 * 2 + 40)
+      expect(String(entry?.["preview"])).not.toContain("X7Q9-M3KT")
+    }),
+  )
+
+  it.effect("input-only query match does not set match_offset", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const registry = yield* ToolRegistry.Service
+      const output = parsed(yield* executeTool(registry, call({ query: "npm (test|run)" })))
+      for (const entry of callsOf(output)) {
+        expect(entry["match_offset"]).toBeUndefined()
+        expect(entry["match_snippet"]).toBeUndefined()
+      }
     }),
   )
 })
