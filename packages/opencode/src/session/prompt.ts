@@ -547,29 +547,30 @@ const layer = Layer.effect(
           let output = ""
           let aborted = false
 
-          const finish = Effect.uninterruptible(
-            Effect.gen(function* () {
-              if (aborted) {
-                output += "\n\n" + ["<metadata>", "User aborted the command", "</metadata>"].join("\n")
-              }
-              const completed = Date.now()
-              if (!msg.time.completed) {
-                msg.time.completed = completed
-                yield* sessions.updateMessage(msg)
-              }
-              if (part.state.status === "running") {
-                part.state = {
-                  status: "completed",
-                  time: { ...part.state.time, end: completed },
-                  input: part.state.input,
-                  title: "",
-                  metadata: { output },
-                  output,
+          const finish = (exitCode?: number) =>
+            Effect.uninterruptible(
+              Effect.gen(function* () {
+                if (aborted) {
+                  output += "\n\n" + ["<metadata>", "User aborted the command", "</metadata>"].join("\n")
                 }
-                yield* sessions.updatePart(part)
-              }
-            }),
-          )
+                const completed = Date.now()
+                if (!msg.time.completed) {
+                  msg.time.completed = completed
+                  yield* sessions.updateMessage(msg)
+                }
+                if (part.state.status === "running") {
+                  part.state = {
+                    status: "completed",
+                    time: { ...part.state.time, end: completed },
+                    input: part.state.input,
+                    title: "",
+                    metadata: { output, ...(exitCode === undefined ? {} : { exit: exitCode }) },
+                    output,
+                  }
+                  yield* sessions.updatePart(part)
+                }
+              }),
+            )
 
           const exit = yield* restore(
             Effect.gen(function* () {
@@ -595,14 +596,14 @@ const layer = Layer.effect(
                   }
                 }),
               )
-              yield* handle.exitCode
+              return yield* handle.exitCode
             }).pipe(Effect.scoped, Effect.orDie),
           ).pipe(Effect.exit)
 
           if (Exit.isFailure(exit) && Cause.hasInterrupts(exit.cause) && !Cause.hasDies(exit.cause)) {
             aborted = true
           }
-          yield* finish
+          yield* finish(Exit.isSuccess(exit) ? exit.value : undefined)
 
           if (Exit.isFailure(exit) && !aborted && !Cause.hasInterruptsOnly(exit.cause)) {
             return yield* Effect.failCause(exit.cause)

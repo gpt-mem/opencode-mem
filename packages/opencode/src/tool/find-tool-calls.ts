@@ -33,6 +33,13 @@ export const Parameters = Schema.Struct({
       description: `Maximum results to return, most recent first (default ${DEFAULT_LIMIT}, max ${MAX_LIMIT})`,
     }),
   ),
+  failed: Schema.optional(
+    Schema.Boolean.annotate({
+      description:
+        "When true, only return calls that failed: status=error or a non-zero exit_code (failed Bash with a " +
+        "completed status). Default false.",
+    }),
+  ),
 })
 
 type Metadata = { matched: number }
@@ -77,9 +84,18 @@ export type Candidate = {
   input?: string
   preview?: string
   error?: string
+  exit_code?: number
   haystack: string
   raw?: string
   seq: string
+}
+
+// The V1 shell tool records its process exit code in part state.metadata.exit;
+// only surface a real number so a missing field stays distinct from exit 0.
+const metadataExit = (metadata: unknown) => {
+  if (typeof metadata !== "object" || metadata === null) return undefined
+  const exit = (metadata as { exit?: unknown }).exit
+  return typeof exit === "number" ? exit : undefined
 }
 
 const candidate = (data: unknown, id: string, includeMemoryTools = false): Candidate | undefined => {
@@ -88,7 +104,7 @@ const candidate = (data: unknown, id: string, includeMemoryTools = false): Candi
     type?: string
     callID?: string
     tool?: string
-    state?: { status?: string; input?: unknown; output?: string; error?: string }
+    state?: { status?: string; input?: unknown; output?: string; error?: string; metadata?: unknown }
   }
   if (part.type !== "tool" || typeof part.callID !== "string") return undefined
   // Self-indexing guard: memory tools are how this index is queried, so
@@ -104,14 +120,19 @@ const candidate = (data: unknown, id: string, includeMemoryTools = false): Candi
   // haystack stays raw (internal, never returned to the model); model-visible
   // fields are redacted.
   const preview = raw === "" ? undefined : bound(PII.redact(raw).text, PREVIEW_CHARS)
+  // No stored status is unknown, not pending — pending is an explicit state.
+  const status = state?.status ?? "unknown"
+  const exitCode = status === "completed" || status === "error" ? metadataExit(state?.metadata) : undefined
+  const exitTag = exitCode === undefined ? undefined : `exit_code=${exitCode}`
   return {
     call_id: part.callID,
     tool: part.tool ?? "unknown",
-    status: state?.status ?? "pending",
+    status,
     ...(input === undefined ? {} : { input }),
     ...(preview === undefined ? {} : { preview }),
     ...(error === undefined ? {} : { error: bound(PII.redact(error).text, PREVIEW_CHARS) }),
-    haystack: [input, raw].filter((piece): piece is string => piece !== undefined && piece !== "").join("\n"),
+    ...(exitCode === undefined ? {} : { exit_code: exitCode }),
+    haystack: [input, raw, exitTag].filter((piece): piece is string => piece !== undefined && piece !== "").join("\n"),
     ...(raw === "" ? {} : { raw }),
     seq: id,
   }
@@ -145,8 +166,9 @@ export const FindToolCallsTool = Tool.define<typeof Parameters, Metadata, Databa
     return {
       description:
         "Search tool calls in this session by tool name, status or pattern. " +
-        "Returns compact entries (call_id, status, input, preview) so you can locate a call and then load its full " +
-        "output with get_tool_call_details(call_id). A query that matches tool output also returns match_snippet and " +
+        "Returns compact entries (call_id, status, exit_code, input, preview) so you can locate a call and then load " +
+        "its full output with get_tool_call_details(call_id). failed=true returns only error-status calls and " +
+        "non-zero-exit Bash. A query that matches tool output also returns match_snippet and " +
         "match_offset — prefer that over full=true when hunting a needle. Compacted [mem:compacted] results are searchable here because " +
         "the originals live in session history. Memory-tool calls are never returned here " +
         "(a query would match its own earlier searches, issue #34); they are counted in " +
@@ -165,6 +187,12 @@ export const FindToolCallsTool = Tool.define<typeof Parameters, Metadata, Databa
           const matched = (yield* collectCandidates(db, ctx.sessionID)).filter((item) => {
             if (params.tool !== undefined && item.tool !== params.tool) return false
             if (params.status !== undefined && item.status !== params.status) return false
+            if (
+              params.failed === true &&
+              item.status !== "error" &&
+              (item.exit_code === undefined || item.exit_code === 0)
+            )
+              return false
             if (regex !== undefined && !regex.test(item.haystack)) return false
             return true
           })
