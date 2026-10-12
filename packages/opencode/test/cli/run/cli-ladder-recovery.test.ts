@@ -18,8 +18,33 @@ cliIt.concurrent(
           }),
         },
       })
-      expect(result.exitCode).toBe(0)
+      expect(result.exitCode, result.stderr).toBe(0)
       expect(result.stdout).toContain("audit-recovered")
+      expect(result.stderr).not.toContain("every rung failed")
+    }),
+  45_000,
+)
+
+cliIt.live(
+  "delivers a recovered ladder response through run --attach",
+  ({ llm, opencode }) =>
+    Effect.gen(function* () {
+      yield* llm.error(400, { error: { message: "every rung failed" } })
+      yield* llm.text("attach-recovered")
+      const server = yield* opencode.serve({
+        env: {
+          OPENCODE_CONFIG_CONTENT: JSON.stringify({
+            ...testProviderConfig(llm.url),
+            experimental: { ladder_retry_delay: 0 },
+          }),
+        },
+      })
+      const result = yield* opencode.run("synthetic attach recovery check", {
+        timeoutMs: 30_000,
+        extraArgs: ["--attach", server.url],
+      })
+      expect(result.exitCode, result.stderr).toBe(0)
+      expect(result.stdout).toContain("attach-recovered")
       expect(result.stderr).not.toContain("every rung failed")
     }),
   45_000,
