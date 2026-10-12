@@ -72,10 +72,11 @@ jobs:
             turbo-${{ runner.os }}-
 
       - name: Run unit tests
-        timeout-minutes: 20
+        timeout-minutes: 30
         run: |
           if [ "$RUNNER_OS" = "Windows" ]; then
-            GITHUB_ACTIONS=false bun turbo test --filter='!@opencode-ai/core'
+            GITHUB_ACTIONS=false bun turbo test --filter='!@opencode-ai/core' --filter='!opencode'
+            GITHUB_ACTIONS=false python3 packages/opencode/script/test-windows-quarters.py
             GITHUB_ACTIONS=false python3 packages/core/script/test-windows-halves.py
           else
             GITHUB_ACTIONS=false bun turbo test
