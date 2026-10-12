@@ -106,6 +106,22 @@ test("moves busy through retry and recovery to final idle content", async ({ pag
   await expect(page.locator('[data-timeline-row="DiffSummary"]')).toBeVisible()
 })
 
+test("shows interrupted tool action as a terminal state after restart", async ({ page }) => {
+  const message = "The previous bash action was interrupted. Check its effects before sending a new instruction."
+  await setupTimeline(page, {
+    messages: [
+      userMessage(),
+      assistantMessage([shell("prt_crash_uncertain", "error", message, "touch marker")], {
+        error: { name: "UnknownError", data: { message } },
+      }),
+    ],
+  })
+
+  await expect(page.locator('[data-timeline-row="Error"]')).toContainText(message)
+  await expect(page.locator('[data-timeline-row="Thinking"]')).toHaveCount(0)
+  await expect(page.locator('[data-timeline-row="Retry"]')).toHaveCount(0)
+})
+
 function lines(count: number) {
   return Array.from({ length: count }, (_, index) => `line ${index + 1}`).join("\n")
 }

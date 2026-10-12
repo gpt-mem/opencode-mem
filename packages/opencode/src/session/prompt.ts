@@ -1158,6 +1158,16 @@ const layer = Layer.effect(
               finish: "error",
               time: { ...lastAssistant.time, completed: Date.now() },
             })
+            if (lastAssistant.parentID !== lastUser.id) {
+              yield* sessions.updateMessage({
+                ...lastAssistant,
+                id: MessageID.ascending(),
+                parentID: lastUser.id,
+                error,
+                finish: "error",
+                time: { created: Date.now(), completed: Date.now() },
+              })
+            }
             yield* events.publish(Session.Event.Error, { sessionID, error })
             break
           }

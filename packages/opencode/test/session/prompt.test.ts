@@ -581,6 +581,38 @@ it.instance("restart blocks an uncertain tool action while preserving completed 
   }),
 )
 
+it.instance("restart answers a newly submitted user prompt with the uncertain-action error (issue #83)", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const chat = yield* sessions.create({ title: "Pinned" })
+    const seeded = yield* seed(chat.id)
+    yield* sessions.updatePart({
+      id: PartID.ascending(),
+      messageID: seeded.assistant.id,
+      sessionID: chat.id,
+      type: "tool",
+      callID: "uncertain-action",
+      tool: "bash",
+      state: { status: "running", input: { command: "touch marker" }, time: { start: 3 } },
+    })
+    const next = yield* prompt.prompt({
+      sessionID: chat.id,
+      agent: "build",
+      noReply: true,
+      parts: [{ type: "text", text: "continue after crash" }],
+    })
+    const result = yield* prompt.loop({ sessionID: chat.id })
+    expect(yield* llm.calls).toBe(0)
+    expect(result.info.role).toBe("assistant")
+    if (result.info.role === "assistant") {
+      expect(result.info.parentID).toBe(next.info.id)
+      expect(result.info.error?.name).toBe("UnknownError")
+    }
+  }),
+)
+
 it.instance("loop calls LLM and returns assistant message", () =>
   Effect.gen(function* () {
     const { llm } = yield* useServerConfig(providerCfg)
