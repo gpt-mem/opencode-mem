@@ -699,6 +699,10 @@ export const dict = {
   "session.messages.loadEarlier": "Load earlier messages",
   "session.messages.loading": "Loading messages...",
   "session.messages.jumpToLatest": "Jump to latest",
+  "session.activity.connecting": "Connecting to the OpenCode server…",
+  "session.activity.disconnected": "Connection lost. Reconnect and check this session before retrying.",
+  "session.activity.waiting": "Waiting for the provider; last session update {{seconds}}s ago.",
+  "session.activity.stalled": "No session update for {{seconds}}s. Check the provider or reconnect before retrying.",
 
   "session.context.addToContext": "Add {{selection}} to context",
   "session.todo.title": "Todos",

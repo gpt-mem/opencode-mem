@@ -778,6 +778,10 @@ export const dict = {
   "session.messages.loadEarlier": "Učitaj ranije poruke",
   "session.messages.loading": "Učitavanje poruka...",
   "session.messages.jumpToLatest": "Idi na najnovije",
+  "session.activity.connecting": "Connecting to the OpenCode server…",
+  "session.activity.disconnected": "Connection lost. Reconnect and check this session before retrying.",
+  "session.activity.waiting": "Waiting for the provider; last session update {{seconds}}s ago.",
+  "session.activity.stalled": "No session update for {{seconds}}s. Check the provider or reconnect before retrying.",
 
   "session.context.addToContext": "Dodaj {{selection}} u kontekst",
   "session.todo.title": "Zadaci",

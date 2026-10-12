@@ -800,6 +800,10 @@ export const dict = {
   "session.messages.loadEarlier": "Muat pesan sebelumnya",
   "session.messages.loading": "Memuat pesan...",
   "session.messages.jumpToLatest": "Lompat ke pesan terbaru",
+  "session.activity.connecting": "Connecting to the OpenCode server…",
+  "session.activity.disconnected": "Connection lost. Reconnect and check this session before retrying.",
+  "session.activity.waiting": "Waiting for the provider; last session update {{seconds}}s ago.",
+  "session.activity.stalled": "No session update for {{seconds}}s. Check the provider or reconnect before retrying.",
 
   "session.context.addToContext": "Tambahkan {{selection}} ke konteks",
   "session.todo.title": "Tugas",

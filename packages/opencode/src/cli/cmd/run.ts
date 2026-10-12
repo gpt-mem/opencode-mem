@@ -84,7 +84,10 @@ function block(info: Inline, output?: string) {
 }
 
 function formatRunError(error: unknown) {
-  return FormatError(error) ?? FormatUnknownError(error)
+  const message = FormatError(error) ?? FormatUnknownError(error)
+  if (/socket connection was closed|ECONNRESET|ECONNREFUSED|fetch failed/i.test(message))
+    return "Connection to the OpenCode server was lost. Reconnect and check the session before retrying."
+  return message
 }
 
 async function tool(part: ToolPart) {
@@ -674,6 +677,11 @@ export const RunCommand = effectCmd({
           process.exit(1)
         }
         const sessionID = sess.id
+        let lastProgressAt = Date.now()
+        let lastReported = 0
+        let currentStatus: "busy" | "retry" | "idle" = "busy"
+        let retryAttempt: number | undefined
+        let retryNext: number | undefined
 
         function emit(type: string, data: Record<string, unknown>) {
           if (args.format === "json") {
@@ -700,8 +708,16 @@ export const RunCommand = effectCmd({
           let error: string | undefined
           let errorRaw: unknown
           let messageError: { name: string; message: string; raw: unknown } | undefined
+          let idleObserved = false
 
           for await (const event of events.stream) {
+            if (
+              ("sessionID" in event.properties && event.properties.sessionID === sessionID) ||
+              (event.type === "message.part.updated" && event.properties.part.sessionID === sessionID)
+            ) {
+              lastProgressAt = Date.now()
+              lastReported = 0
+            }
             if (event.type === "session.created" && event.properties.info.parentID) {
               if (sessions.has(event.properties.info.parentID)) sessions.add(event.properties.info.id)
             }
@@ -825,10 +841,24 @@ export const RunCommand = effectCmd({
               errorRaw = undefined
               messageError = undefined
               const status = event.properties.status
+              currentStatus = "retry"
+              retryAttempt = status.attempt
+              retryNext = status.next
               if (!emit("retry", { status })) {
                 const seconds = Math.max(0, Math.ceil((status.next - Date.now()) / 1000))
                 UI.println(`Retrying provider ladder (attempt ${status.attempt}, in ${seconds}s)`)
+                UI.println(`Next attempt at ${new Date(status.next).toISOString()}`)
               }
+            }
+
+            if (
+              event.type === "session.status" &&
+              event.properties.sessionID === sessionID &&
+              event.properties.status.type === "busy"
+            ) {
+              currentStatus = "busy"
+              retryAttempt = undefined
+              retryNext = undefined
             }
 
             if (
@@ -836,6 +866,8 @@ export const RunCommand = effectCmd({
               event.properties.sessionID === sessionID &&
               event.properties.status.type === "idle"
             ) {
+              currentStatus = "idle"
+              idleObserved = true
               break
             }
 
@@ -893,6 +925,11 @@ export const RunCommand = effectCmd({
               errorRaw = finalAssistant
             }
           }
+          if (!idleObserved && !error) {
+            error =
+              "The event stream ended before this session reported completion. Reconnect and check the session before retrying."
+            errorRaw = { message: error }
+          }
           if (error && !emit("error", { error: errorRaw ?? { message: error } })) UI.error(error)
           return error
         }
@@ -938,11 +975,42 @@ export const RunCommand = effectCmd({
           const streamController = new AbortController()
           const events = await client.event.subscribe(undefined, { signal: streamController.signal })
           let timedOut = false
-          const completed = loop(client, events).catch((e) => {
-            if (timedOut) return undefined
-            console.error(e)
-            process.exitCode = 1
-          })
+          let heartbeat: ReturnType<typeof setInterval> | undefined
+          const completed = loop(client, events)
+            .catch(() => {
+              if (timedOut) return undefined
+              const message =
+                "Connection to the OpenCode server was lost. Reconnect and check the session before retrying."
+              if (!emit("error", { error: { message } })) UI.error(message)
+              process.exitCode = 1
+              return message
+            })
+            .finally(() => {
+              if (heartbeat) clearInterval(heartbeat)
+            })
+          heartbeat = setInterval(() => {
+            if (currentStatus === "idle") return
+            const ageMs = Date.now() - lastProgressAt
+            const bucket = Math.floor(ageMs / 15_000)
+            if (bucket < 1 || bucket === lastReported) return
+            lastReported = bucket
+            const seconds = Math.floor(ageMs / 1000)
+            if (
+              emit("waiting", {
+                status: { type: currentStatus, attempt: retryAttempt, next: retryNext },
+                lastProgressAt,
+                ageMs,
+              })
+            )
+              return
+            if (currentStatus === "retry" && retryNext)
+              UI.println(
+                `Retry attempt ${retryAttempt} at ${new Date(retryNext).toISOString()}; last update ${seconds}s ago`,
+              )
+            else if (seconds >= 60)
+              UI.println(`No session update for ${seconds}s. Check the provider or connection before retrying.`)
+            else UI.println(`Waiting for provider; last session update ${seconds}s ago.`)
+          }, 5_000)
           async function finish() {
             // Issue #38: attach mode must honor the same exit-code contract as
             // local mode — a failed/aborted response exits nonzero, not 0.
@@ -960,6 +1028,7 @@ export const RunCommand = effectCmd({
             if (timer) clearTimeout(timer)
             if (error === missing) {
               timedOut = true
+              if (heartbeat) clearInterval(heartbeat)
               streamController.abort()
               const final = await lastAssistantResult(client, sessionID)
               const message = final
@@ -982,6 +1051,9 @@ export const RunCommand = effectCmd({
               variant: args.variant,
             })
             if (result.error) {
+              timedOut = true
+              streamController.abort()
+              if (heartbeat) clearInterval(heartbeat)
               if (!emit("error", { error: result.error })) UI.error(formatRunError(result.error))
               process.exitCode = 1
               return
@@ -999,6 +1071,9 @@ export const RunCommand = effectCmd({
             parts: [...files, { type: "text", text: message }],
           })
           if (result.error) {
+            timedOut = true
+            streamController.abort()
+            if (heartbeat) clearInterval(heartbeat)
             if (!emit("error", { error: result.error })) UI.error(formatRunError(result.error))
             process.exitCode = 1
             return
