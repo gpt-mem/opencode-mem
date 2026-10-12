@@ -9,10 +9,13 @@ import { FindPiiTool } from "./find-pii"
 import { FindToolCallsTool } from "./find-tool-calls"
 import { GetToolCallDetailsTool } from "./get-tool-call-details"
 import { GetToolCallOverviewTool } from "./get-tool-call-overview"
+import { GetOperationalMemoryTool } from "./get-operational-memory"
 import { GlobTool } from "./glob"
 import { GrepTool } from "./grep"
+import { PutInOperationalMemoryTool } from "./put-in-operational-memory"
 import { QuestionTool } from "./question"
 import { ReadTool } from "./read"
+import { SearchOperationalMemoryTool } from "./search-operational-memory"
 import { SkillTool } from "./skill"
 import { TodoWriteTool } from "./todowrite"
 import { WebFetchTool } from "./webfetch"
@@ -43,10 +46,13 @@ export const node = makeLocationNode({
     FindToolCallsTool.node,
     GetToolCallDetailsTool.node,
     GetToolCallOverviewTool.node,
+    GetOperationalMemoryTool.node,
     GlobTool.node,
     GrepTool.node,
+    PutInOperationalMemoryTool.node,
     QuestionTool.node,
     ReadTool.node,
+    SearchOperationalMemoryTool.node,
     SkillTool.node,
     TodoWriteTool.node,
     WebFetchTool.node,
