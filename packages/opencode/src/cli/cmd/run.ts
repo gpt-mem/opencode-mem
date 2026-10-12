@@ -743,6 +743,8 @@ export const RunCommand = effectCmd({
             if (event.type === "message.part.updated") {
               const part = event.properties.part
               if (part.sessionID !== sessionID) continue
+              // The continuation prompt is a durable retry marker, not user-facing output.
+              if (part.type === "text" && part.synthetic && part.metadata?.ladder_auto_continue === true) continue
 
               if (part.type === "tool" && (part.state.status === "completed" || part.state.status === "error")) {
                 if (emit("tool_use", { part })) continue
