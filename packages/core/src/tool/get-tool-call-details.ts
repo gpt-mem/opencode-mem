@@ -57,9 +57,16 @@ const decodeMessage = Schema.decodeUnknownEffect(SessionMessage.Message)
 
 // truncated means "more content remains after this window" so the model can
 // page a large original with offset instead of hitting a silent dead end.
+// An offset past the end returns an empty window with truncated=false; say so
+// explicitly so a paging model does not read the empty string as missing data.
 const window = (text: string, offset: number, max: number) => {
   const slice = text.slice(offset, offset + max)
-  return { text: slice, truncated: offset + slice.length < text.length }
+  const truncated = offset + slice.length < text.length
+  const note =
+    offset > 0 && offset >= text.length
+      ? `offset ${offset} is past the end of the output (total_chars=${text.length}); window is empty`
+      : undefined
+  return { text: slice, truncated, ...(note === undefined ? {} : { note }) }
 }
 
 // When the stored text is only a truncation notice, the full output lives in the
@@ -90,6 +97,7 @@ const retrieve = (
         truncated: output.truncated,
         total_chars: text.length,
         ...(offset > 0 ? { offset } : {}),
+        ...(output.note === undefined ? {} : { note: output.note }),
         message_id: messageID,
         source: ref.kind,
       }
@@ -111,6 +119,7 @@ const retrieve = (
         truncated: output.truncated,
         total_chars: content.length,
         ...(offset > 0 ? { offset } : {}),
+        ...(output.note === undefined ? {} : { note: output.note }),
         message_id: messageID,
         source: "managed_output_file",
         managed_path: managedPath,

@@ -372,6 +372,21 @@ describe("tool.get-tool-call-details (V1)", () => {
     }),
   )
 
+  it.instance("offset past the end explains the empty window", () =>
+    Effect.gen(function* () {
+      yield* seed
+      const def = yield* Tool.init(yield* GetToolCallDetailsTool)
+      const past = JSON.parse(
+        (yield* def.execute({ call_id: "call_big", offset: 5000 }, ctx(sessionID))).output,
+      )
+      expect(past.found).toBe(true)
+      expect(past.output).toBe("")
+      expect(past.truncated).toBe(false)
+      expect(String(past.note)).toContain("past the end")
+      expect(String(past.note)).toContain("total_chars=5000")
+    }),
+  )
+
   it.instance("full=true returns the complete output", () =>
     Effect.gen(function* () {
       yield* seed
@@ -547,6 +562,44 @@ describe("tool.find-tool-calls (V1)", () => {
       const parsed = JSON.parse(result.output)
       expect(parsed.calls.length).toBe(1)
       expect(parsed.matched).toBe(3)
+    }),
+  )
+
+  it.instance("offset pages past the most-recent limit window", () =>
+    Effect.gen(function* () {
+      yield* seed
+      const def = yield* Tool.init(yield* FindToolCallsTool)
+      const page1 = JSON.parse((yield* def.execute({ limit: 1 }, ctx(sessionID))).output)
+      expect(page1.calls.map((call: { call_id: string }) => call.call_id)).toEqual(["call_small"])
+      const page2 = JSON.parse((yield* def.execute({ limit: 1, offset: 1 }, ctx(sessionID))).output)
+      expect(page2.matched).toBe(3)
+      expect(page2.calls.map((call: { call_id: string }) => call.call_id)).toEqual(["call_err"])
+      const past = JSON.parse((yield* def.execute({ offset: 10 }, ctx(sessionID))).output)
+      expect(past.matched).toBe(3)
+      expect(past.calls.length).toBe(0)
+    }),
+  )
+
+  it.instance("rejects an invalid query regex", () =>
+    Effect.gen(function* () {
+      yield* seed
+      const def = yield* Tool.init(yield* FindToolCallsTool)
+      const result = yield* def.execute({ query: "(unclosed" }, ctx(sessionID)).pipe(Effect.either)
+      expect(result._tag).toBe("Left")
+      if (result._tag === "Left") expect(String(result.left)).toContain("Invalid query regular expression")
+    }),
+  )
+
+  it.instance("truncation-notice output matches but never sets match_offset", () =>
+    Effect.gen(function* () {
+      yield* seedEvidence
+      const def = yield* Tool.init(yield* FindToolCallsTool)
+      const parsed = JSON.parse((yield* def.execute({ query: "truncated" }, ctx(evidenceSessionID))).output)
+      expect(parsed.matched).toBe(2)
+      for (const call of parsed.calls) {
+        expect(call.match_offset).toBeUndefined()
+        expect(call.match_snippet).toBeUndefined()
+      }
     }),
   )
 

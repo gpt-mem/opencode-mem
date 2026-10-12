@@ -9,6 +9,7 @@ import { PermissionV2 } from "../permission"
 import { SessionMessage } from "../session/message"
 import { SessionSchema } from "../session/schema"
 import { SessionMessageTable } from "../session/sql"
+import { Evidence } from "../session/evidence"
 import { PII } from "../session/pii"
 import { MemoryTools } from "./memory-tools"
 import { ToolRegistry } from "./registry"
@@ -40,7 +41,16 @@ export const Input = Schema.Struct({
   ),
   limit: Schema.optional(
     Schema.Number.annotate({
-      description: `Maximum results to return, most recent first (default ${DEFAULT_LIMIT}, max ${MAX_LIMIT})`,
+      description:
+        `Maximum results to return, most recent first (default ${DEFAULT_LIMIT}, max ${MAX_LIMIT}). ` +
+        "matched is the total before paging; use offset to reach older pages",
+    }),
+  ),
+  offset: Schema.optional(
+    Schema.Number.annotate({
+      description:
+        "Skip this many of the most-recent matches before taking limit results (default 0). " +
+        "Page 2 of a limit=N page = offset=N",
     }),
   ),
   failed: Schema.optional(
@@ -94,9 +104,12 @@ const bound = (text: string, max: number) => (text.length <= max ? text : text.s
 // with a small offset window) without re-injecting the full original via
 // full=true. match_offset is an index into the same output text that details
 // pages over. Input-only matches (command/url) do not set these fields — the
-// offset would not line up with the output document.
+// offset would not line up with the output document. A stored truncation
+// notice (managed_output_file) is likewise excluded: details pages the managed
+// file, so an offset into the notice would be a lie (issue #10 source refs).
 const matchWindow = (raw: string | undefined, regex: RegExp | undefined) => {
   if (raw === undefined || regex === undefined) return undefined
+  if (Evidence.classify(raw).kind === "managed_output_file") return undefined
   const hit = regex.exec(raw)
   if (hit === null) return undefined
   const start = Math.max(0, hit.index - SNIPPET_CONTEXT)
@@ -248,7 +261,8 @@ const layer = Layer.effectDiscard(
             "Returns compact entries (call_id, status, exit_code, input, preview) so you can locate a call and then load " +
             "its full output with get_tool_call_details(call_id). failed=true returns only error-status calls and " +
             "non-zero-exit Bash. A query that matches tool output also returns match_snippet and " +
-            "match_offset — prefer that over full=true when hunting a needle. Compacted [mem:compacted] results are " +
+            "match_offset — prefer that over full=true when hunting a needle. Results page most-recent-first: " +
+            "matched is the total, limit/offset select one page. Compacted [mem:compacted] results are " +
             "searchable here because the originals live in session history. Memory-tool calls are never returned here " +
             "(a query would match its own earlier searches, issue #34); they are counted in " +
             "get_tool_call_overview and load by call_id (issue #48).",
@@ -270,6 +284,7 @@ const layer = Layer.effectDiscard(
                 catch: () => new ToolFailure({ message: `Invalid query regular expression: ${input.query}` }),
               })
               const limit = Math.max(1, Math.min(input.limit ?? DEFAULT_LIMIT, MAX_LIMIT))
+              const offset = Math.max(0, Math.floor(input.offset ?? 0))
               const candidates = yield* collectCandidates(db, context.sessionID)
               const matched = candidates.filter((candidate) => {
                 if (input.tool !== undefined && candidate.tool !== input.tool) return false
@@ -284,7 +299,7 @@ const layer = Layer.effectDiscard(
                 return true
               })
               const calls = matched
-                .slice(-limit)
+                .slice(Math.max(0, matched.length - offset - limit), Math.max(0, matched.length - offset))
                 .reverse()
                 .map((candidate) => {
                   const window = matchWindow(candidate.raw, regex)
