@@ -5,7 +5,7 @@ import { Effect } from "effect"
 import { Discovery } from "../../src/skill/discovery"
 import { Global } from "@opencode-ai/core/global"
 import { Filesystem } from "@/util/filesystem"
-import { rm } from "fs/promises"
+import { readFile, rm } from "fs/promises"
 import path from "path"
 import { testEffect } from "../lib/effect"
 
@@ -175,6 +175,8 @@ describe("Discovery.pull", () => {
       mutableContent = "# New"
       mutableFiles = ["SKILL.md"]
       yield* discovery.pull(url)
+      expect(yield* Effect.promise(() => readFile(path.join(second[0], ".opencode-version"), "utf8"))).toBe("3")
+      expect(yield* Effect.promise(() => readFile(path.join(second[0], "SKILL.md"), "utf8"))).toBe("# New")
       expect(yield* Effect.promise(() => Bun.file(path.join(second[0], "SKILL.md")).text())).toBe("# New")
       expect(yield* Effect.promise(() => Bun.file(path.join(second[0], "old.md")).exists())).toBe(false)
       expect(mutableDownloadCount).toBe(3)
