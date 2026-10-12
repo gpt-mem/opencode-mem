@@ -38,6 +38,13 @@ export const Entry = Schema.Struct({
   scope: Schema.optional(
     Schema.String.annotate({ description: "Optional task/project tag, e.g. 'issue-13', 'release-v3'" }),
   ),
+  supersedes: Schema.optional(
+    Schema.String.annotate({
+      description:
+        "ID of the active record this entry replaces. The old record is marked superseded; " +
+        "this one gets version = old.version + 1. The target must be active in this project.",
+    }),
+  ),
 })
 
 export type Entry = Schema.Schema.Type<typeof Entry>
