@@ -94,3 +94,21 @@ jobs:
         working-directory: packages/opencode
         timeout-minutes: 15
         run: bun run typecheck
+
+  ripgrep-windows:
+    name: ripgrep Windows tests
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Setup Bun
+        uses: ./.github/actions/setup-bun
+
+      - name: Run Ripgrep tests
+        working-directory: packages/core
+        timeout-minutes: 8
+        run: bun test test/ripgrep.test.ts test/filesystem/search.test.ts
