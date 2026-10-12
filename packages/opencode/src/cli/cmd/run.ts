@@ -819,6 +819,8 @@ export const RunCommand = effectCmd({
             ) {
               break
             }
+
+            if (event.type === "permission.asked") {
               const permission = event.properties
               if (!sessions.has(permission.sessionID)) continue
 
@@ -839,6 +841,17 @@ export const RunCommand = effectCmd({
                 })
               }
             }
+          }
+          // Issue #38: surface message-level errors that never produced a
+          // session.error event (abort race, ladder exhaustion, structured
+          // output). Skip when session.error already recorded a failure.
+          if (messageError && !error) {
+            const label =
+              messageError.name === "MessageAbortedError"
+                ? "Response interrupted (Aborted)"
+                : messageError.message
+            error = label
+            if (!emit("error", { error: messageError.raw })) UI.error(label)
           }
           return error
         }

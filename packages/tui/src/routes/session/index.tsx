@@ -1531,25 +1531,25 @@ function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; las
         </box>
       </Show>
       <Show when={props.message.error}>
-        <box
-          ref={(el: BoxRenderable) => alwaysSeparate.add(el)}
-          border={["left"]}
-          paddingTop={1}
-          paddingBottom={1}
-          paddingLeft={2}
-          marginTop={1}
-          backgroundColor={theme.backgroundPanel}
-          customBorderChars={SplitBorder.customBorderChars}
-          borderColor={
-            props.message.error.name === "MessageAbortedError" ? theme.textMuted : theme.error
-          }
-        >
-          <text fg={theme.textMuted}>
-            {props.message.error.name === "MessageAbortedError"
-              ? "Response interrupted — resend the message to retry"
-              : errorMessage(props.message.error)}
-          </text>
-        </box>
+        {(error) => (
+          <box
+            ref={(el: BoxRenderable) => alwaysSeparate.add(el)}
+            border={["left"]}
+            paddingTop={1}
+            paddingBottom={1}
+            paddingLeft={2}
+            marginTop={1}
+            backgroundColor={theme.backgroundPanel}
+            customBorderChars={SplitBorder.customBorderChars}
+            borderColor={error().name === "MessageAbortedError" ? theme.textMuted : theme.error}
+          >
+            <text fg={theme.textMuted}>
+              {error().name === "MessageAbortedError"
+                ? "Response interrupted — resend the message to retry"
+                : errorMessage(error())}
+            </text>
+          </box>
+        )}
       </Show>
       <Switch>
         <Match when={props.last || final() || props.message.error?.name === "MessageAbortedError"}>
