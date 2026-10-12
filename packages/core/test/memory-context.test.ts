@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import path from "node:path"
 import { DateTime } from "effect"
 import { SessionMessage } from "@opencode-ai/core/session/message"
 import { ModelV2 } from "@opencode-ai/core/model"
@@ -949,7 +950,7 @@ describe("MemoryContext debug log", () => {
 
 describe("evidence refs", () => {
   const managedNotice = (name: string) =>
-    `...output truncated...\n\nFull output saved to: ${Global.Path.data}/tool-output/${name}\n\npreview output`
+    `...output truncated...\n\nFull output saved to: ${path.join(Global.Path.data, "tool-output", name)}\n\npreview output`
 
   test("managed tool output marker states the managed file", () => {
     const messages = [
@@ -967,7 +968,7 @@ describe("evidence refs", () => {
     const projected = compact(messages, { midTurn: true })
     const text = toolText(projected[1]!)
     expect(text).toContain("stored=managed_output_file path=")
-    expect(text).toContain(`path=${Global.Path.data}/tool-output/tool_test_evidence`)
+    expect(text).toContain(`path=${path.join(Global.Path.data, "tool-output", "tool_test_evidence")}`)
     expect(text).toContain('retrieve=get_tool_call_details(call_id="call_evidence_1")')
     expect(text).not.toContain("full text kept in SQLite")
   })
@@ -1054,7 +1055,7 @@ describe("evidence refs", () => {
     const message = projected[1]!
     if (message.type !== "shell") throw new Error("expected shell")
     expect(message.output).toContain("stored=managed_output_file")
-    expect(message.output).toContain(`path=${Global.Path.data}/tool-output/tool_shell_evidence`)
+    expect(message.output).toContain(`path=${path.join(Global.Path.data, "tool-output", "tool_shell_evidence")}`)
     expect(message.output).toContain("retrieve=get_tool_call_details")
     expect(message.output).not.toContain("full output kept in SQLite")
   })

@@ -1,4 +1,5 @@
 import { describe, expect } from "bun:test"
+import path from "node:path"
 import { mkdir, rm, writeFile } from "fs/promises"
 import { DateTime, Effect, Layer, Schema } from "effect"
 import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
@@ -55,7 +56,7 @@ const model = { id: ModelV2.ID.make("model"), providerID: ProviderV2.ID.make("pr
 const encodeMessage = Schema.encodeSync(SessionMessage.Message)
 
 const MANAGED_NOTICE = (name: string) =>
-  `...output truncated...\n\nFull output saved to: ${Global.Path.data}/tool-output/${name}\n\npreview`
+  `...output truncated...\n\nFull output saved to: ${path.join(Global.Path.data, "tool-output", name)}\n\npreview`
 
 const assistantRow = (id: SessionMessage.ID, seq: number, content: SessionMessage.Assistant["content"]) => {
   const { id: _id, type, ...data } = encodeMessage(
@@ -270,9 +271,9 @@ describe("GetToolCallDetailsTool", () => {
     Effect.gen(function* () {
       yield* setup
       const registry = yield* ToolRegistry.Service
-      const file = `${Global.Path.data}/tool-output/tool_test_details_managed`
+      const file = path.join(Global.Path.data, "tool-output", "tool_test_details_managed")
       const content = "X".repeat(20000)
-      yield* Effect.promise(() => mkdir(`${Global.Path.data}/tool-output`, { recursive: true }))
+      yield* Effect.promise(() => mkdir(path.join(Global.Path.data, "tool-output"), { recursive: true }))
       yield* Effect.promise(() => writeFile(file, content))
       try {
         const output = parsed(yield* executeTool(registry, call({ call_id: "call_managed" })))
@@ -297,7 +298,7 @@ describe("GetToolCallDetailsTool", () => {
     Effect.gen(function* () {
       yield* setup
       const registry = yield* ToolRegistry.Service
-      const file = `${Global.Path.data}/tool-output/tool_test_details_missing`
+      const file = path.join(Global.Path.data, "tool-output", "tool_test_details_missing")
       yield* Effect.promise(() => rm(file, { force: true }))
       const output = parsed(yield* executeTool(registry, call({ call_id: "call_missing_file" })))
       expect(output["source"]).toBe("bounded_stored_output")
