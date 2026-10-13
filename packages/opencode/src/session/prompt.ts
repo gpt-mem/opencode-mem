@@ -54,6 +54,7 @@ import { ProviderV2 } from "@opencode-ai/core/provider"
 import { eq } from "drizzle-orm"
 import { SessionTable } from "@opencode-ai/core/session/sql"
 import { SessionReminders } from "./reminders"
+import { Todo } from "./todo"
 import { SessionTools } from "./tools"
 import { LLMEvent } from "@opencode-ai/llm"
 
@@ -140,6 +141,7 @@ const layer = Layer.effect(
     const events = yield* EventV2Bridge.Service
     const flags = yield* RuntimeFlags.Service
     const database = yield* Database.Service
+    const todos = yield* Todo.Service
     const { db } = database
     const ops = Effect.fn("SessionPrompt.ops")(function* () {
       return {
@@ -1083,6 +1085,8 @@ const layer = Layer.effect(
         const ctx = yield* InstanceState.context
         let structured: unknown
         let step = 0
+        let todoContinuationCount = 0
+        let resumePendingTodo = false
         const session = yield* sessions.get(sessionID).pipe(Effect.orDie)
 
         while (true) {
@@ -1110,23 +1114,37 @@ const layer = Layer.effect(
 
           if (
             lastAssistant?.finish &&
+            !lastAssistant.error &&
             !["tool-calls", "unknown"].includes(lastAssistant.finish) &&
             !hasToolCalls &&
             lastAssistant.parentID === lastUser.id
           ) {
-            const orphan = lastAssistantMsg?.parts.find(
-              (part): part is SessionV1.ToolPart => part.type === "tool" && isOrphanedInterruptedTool(part),
+            const pendingTodos = (yield* todos.get(sessionID)).filter(
+              (todo) => todo.status !== "completed" && todo.status !== "cancelled",
             )
-            if (orphan) {
-              yield* Effect.logWarning("loop exit with orphaned interrupted tool", {
+            if (pendingTodos.length > 0 && todoContinuationCount < 3) {
+              todoContinuationCount++
+              resumePendingTodo = true
+              yield* Effect.logWarning("continuing session with unfinished checklist", {
                 "session.id": sessionID,
-                messageID: lastAssistant.id,
-                tool: orphan.tool,
-                callID: orphan.callID,
+                pending: pendingTodos.length,
+                continuation: todoContinuationCount,
               })
+            } else {
+              const orphan = lastAssistantMsg?.parts.find(
+                (part): part is SessionV1.ToolPart => part.type === "tool" && isOrphanedInterruptedTool(part),
+              )
+              if (orphan) {
+                yield* Effect.logWarning("loop exit with orphaned interrupted tool", {
+                  "session.id": sessionID,
+                  messageID: lastAssistant.id,
+                  tool: orphan.tool,
+                  callID: orphan.callID,
+                })
+              }
+              yield* Effect.logInfo("exiting loop", { "session.id": sessionID })
+              break
             }
-            yield* Effect.logInfo("exiting loop", { "session.id": sessionID })
-            break
           }
 
           step++
@@ -1267,6 +1285,17 @@ const layer = Layer.effect(
               ...(mcpInstructions ? [mcpInstructions] : []),
               ...(skills ? [skills] : []),
             ]
+            if (resumePendingTodo) {
+              const pending = (yield* todos.get(sessionID)).filter(
+                (todo) => todo.status !== "completed" && todo.status !== "cancelled",
+              )
+              resumePendingTodo = false
+              if (pending.length > 0) {
+                system.push(
+                  `<session-continuation> The previous response stopped with ${pending.length} unfinished checklist item(s). Continue from the first unfinished item. Preserve completed work and do not repeat completed actions. Finish the checklist, or explain the concrete blocker if you cannot proceed.</session-continuation>`,
+                )
+              }
+            }
             const format = lastUser.format ?? { type: "text" as const }
             if (format.type === "json_schema") system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
             const result = yield* handle.process({
@@ -1625,6 +1654,7 @@ export const node = LayerNode.make({
     EventV2Bridge.node,
     RuntimeFlags.node,
     Database.node,
+    Todo.node,
   ],
 })
 

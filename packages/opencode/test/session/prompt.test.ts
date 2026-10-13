@@ -554,6 +554,41 @@ it.instance("loop calls LLM and returns assistant message", () =>
   }),
 )
 
+it.instance("loop continues a stopped response while checklist items remain, then stops at its retry cap", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const todos = yield* Todo.Service
+    const chat = yield* sessions.create({
+      title: "Checklist continuation",
+      permission: [{ permission: "*", pattern: "*", action: "allow" }],
+    })
+    yield* prompt.prompt({
+      sessionID: chat.id,
+      agent: "build",
+      noReply: true,
+      parts: [{ type: "text", text: "finish the checklist" }],
+    })
+    yield* todos.update({
+      sessionID: chat.id,
+      todos: [{ content: "unfinished work", status: "pending", priority: "high" }],
+    })
+    yield* llm.text("I stopped too early")
+    yield* llm.text("Continuing the item")
+    yield* llm.text("Still not complete")
+    yield* llm.text("Stopped at the automatic continuation limit")
+
+    const result = yield* prompt.loop({ sessionID: chat.id })
+    const inputs = yield* llm.inputs
+
+    expect(result.info.role).toBe("assistant")
+    expect(yield* llm.calls).toBe(4)
+    expect(inputs.slice(1).some((input) => JSON.stringify(input).includes("<session-continuation>"))).toBe(true)
+    expect((yield* todos.get(chat.id))[0]?.status).toBe("pending")
+  }),
+)
+
 withMcpInstructions.instance(
   "loop includes MCP instructions in model system context",
   () =>

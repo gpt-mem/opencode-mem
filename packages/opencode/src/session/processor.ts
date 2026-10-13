@@ -72,6 +72,7 @@ interface ProcessorContext extends Input {
   needsCompaction: boolean
   currentText: SessionV1.TextPart | undefined
   reasoningMap: Record<string, SessionV1.ReasoningPart>
+  hasOutput: boolean
 }
 
 type StreamEvent = LLMEvent
@@ -111,14 +112,17 @@ const layer = Layer.effect(
         needsCompaction: false,
         currentText: undefined,
         reasoningMap: {},
+        hasOutput: false,
       }
       let aborted = false
 
       const parse = (e: unknown) =>
-        MessageV2.fromError(e, {
-          providerID: input.model.providerID,
-          aborted,
-        })
+        SessionV1.APIError.isInstance(e)
+          ? e.toObject()
+          : MessageV2.fromError(e, {
+              providerID: input.model.providerID,
+              aborted,
+            })
 
       const settleToolCall = Effect.fn("SessionProcessor.settleToolCall")(function* (toolCallID: string) {
         const done = ctx.toolcalls[toolCallID]?.done
@@ -333,6 +337,7 @@ const layer = Layer.effect(
               throw new Error(`Tool call not allowed while generating summary: ${value.name}`)
             }
             yield* ensureToolCall(value)
+            ctx.hasOutput = true
             const input = isRecord(value.input) ? value.input : { value: value.input }
             yield* updateToolCall(value.id, (match) => ({
               ...match,
@@ -433,6 +438,16 @@ const layer = Layer.effect(
             return
 
           case "step-finish": {
+            // Some providers report a successful finish without returning any
+            // content. Route this through the existing bounded retry policy.
+            if (!ctx.hasOutput && !["tool-calls", "unknown"].includes(value.reason)) {
+              throw new SessionV1.APIError({
+                message: "Model returned an empty response",
+                isRetryable: true,
+                responseHeaders: { "retry-after-ms": "0" },
+                metadata: { reason: "empty_response" },
+              })
+            }
             const completedSnapshot = yield* snapshot.track()
             yield* Effect.forEach(Object.keys(ctx.reasoningMap), finishReasoning)
             // Anthropic reports thinking blocks it removed before the model saw the
@@ -513,6 +528,7 @@ const layer = Layer.effect(
           case "text-delta":
             if (!ctx.currentText) return
             ctx.currentText.text += value.text
+            if (value.text.trim().length > 0) ctx.hasOutput = true
             if (value.providerMetadata) ctx.currentText.metadata = value.providerMetadata
             yield* session.updatePartDelta({
               sessionID: ctx.currentText.sessionID,
@@ -650,6 +666,7 @@ const layer = Layer.effect(
           yield* Effect.gen(function* () {
             ctx.currentText = undefined
             ctx.reasoningMap = {}
+            ctx.hasOutput = false
             yield* status.set(ctx.sessionID, { type: "busy" })
             const stream = llm.stream(streamInput)
 
