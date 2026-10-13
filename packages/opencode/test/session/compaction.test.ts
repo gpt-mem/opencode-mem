@@ -8,7 +8,13 @@ import { Cause, Deferred, Effect, Exit, Fiber, Layer, Schema } from "effect"
 import * as Stream from "effect/Stream"
 import { Config } from "@/config/config"
 import { LLM } from "../../src/session/llm"
-import { compactionModelRef, SessionCompaction } from "../../src/session/compaction"
+import {
+  compactionModelRef,
+  REASONING_COMPACTION_INCREMENTAL_CHARS,
+  REASONING_COMPACTION_INITIAL_CHARS,
+  SessionCompaction,
+  shouldCompactReasoning,
+} from "../../src/session/compaction"
 import { Token } from "@/util/token"
 import { Plugin } from "../../src/plugin"
 import { provideTmpdirInstance, TestInstance } from "../fixture/fixture"
@@ -83,6 +89,31 @@ describe("session.compaction.model", () => {
         session: { providerID: ProviderV2.ID.make("anthropic"), modelID: ModelV2.ID.make("sonnet") },
       }),
     ).toEqual({ providerID: ProviderV2.ID.make("anthropic"), modelID: ModelV2.ID.make("sonnet") })
+  })
+})
+
+describe("session.compaction.reasoning threshold", () => {
+  const messages = (sizes: number[], hasSummary = false) =>
+    [
+      ...(hasSummary
+        ? [{ info: { role: "assistant", summary: true, finish: "stop" }, parts: [] }]
+        : []),
+      {
+        info: { role: "assistant" },
+        parts: sizes.map((size) => ({ type: "reasoning", text: "r".repeat(size) })),
+      },
+    ]
+
+  test("waits for 100k accumulated reasoning characters before the first summary", () => {
+    expect(REASONING_COMPACTION_INITIAL_CHARS).toBe(100_000)
+    expect(shouldCompactReasoning(messages([60_000, 39_999]))).toBe(false)
+    expect(shouldCompactReasoning(messages([60_000, 40_000]))).toBe(true)
+  })
+
+  test("uses 50k new reasoning characters for later iterative summaries", () => {
+    expect(REASONING_COMPACTION_INCREMENTAL_CHARS).toBe(50_000)
+    expect(shouldCompactReasoning(messages([30_000, 19_999], true))).toBe(false)
+    expect(shouldCompactReasoning(messages([30_000, 20_000], true))).toBe(true)
   })
 })
 

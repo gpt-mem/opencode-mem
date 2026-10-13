@@ -27,6 +27,8 @@ export const Event = SessionCompactionEvent
 
 export const PRUNE_MINIMUM = 20_000
 export const PRUNE_PROTECT = 40_000
+export const REASONING_COMPACTION_INITIAL_CHARS = 100_000
+export const REASONING_COMPACTION_INCREMENTAL_CHARS = 50_000
 const PRUNE_PROTECTED_TOOLS = ["skill"]
 const MIN_PRESERVE_RECENT_TOKENS = 2_000
 const MAX_PRESERVE_RECENT_TOKENS = 15_000
@@ -45,6 +47,31 @@ type CompletedCompaction = {
   userIndex: number
   assistantIndex: number
   summary: string | undefined
+}
+
+// `filterCompactedEffect` supplies the current SQLite-backed compaction
+// checkpoint and only the retained, still-raw tail. Counting this view means
+// the first compaction covers 100k raw characters; after a durable summary,
+// each 50k new raw characters trigger the next summary update.
+export function shouldCompactReasoning(
+  messages: readonly {
+    info: { role: string; summary?: unknown; finish?: unknown; error?: unknown }
+    parts: readonly { type: string; text?: string }[]
+  }[],
+) {
+  const hasPriorSummary = messages.some(
+    (message) => message.info.role === "assistant" && message.info.summary && message.info.finish && !message.info.error,
+  )
+  const threshold = hasPriorSummary
+    ? REASONING_COMPACTION_INCREMENTAL_CHARS
+    : REASONING_COMPACTION_INITIAL_CHARS
+  let chars = 0
+  for (const message of messages) {
+    for (const part of message.parts) {
+      if (part.type === "reasoning") chars += part.text?.length ?? 0
+    }
+  }
+  return chars >= threshold
 }
 
 const LADDER_COMPACTION_MODEL = {
