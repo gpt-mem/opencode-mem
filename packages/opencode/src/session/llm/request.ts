@@ -186,6 +186,8 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
     messageTransformOptions: options,
     headers: {
       "x-opencode-session-id": input.sessionID,
+      // The persisted user message ID groups every provider/tool step for this prompt run.
+      "x-opencode-run-id": input.user.id,
       ...(input.parentSessionID ? { "x-opencode-parent-session-id": input.parentSessionID } : {}),
       ...(input.model.providerID.startsWith("opencode")
         ? {
