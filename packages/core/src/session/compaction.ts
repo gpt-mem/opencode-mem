@@ -11,7 +11,6 @@ import { Token } from "../util/token"
 
 const DEFAULT_BUFFER = 20_000
 const DEFAULT_KEEP_TOKENS = 8_000
-const TOOL_OUTPUT_MAX_CHARS = 2_000
 const SUMMARY_OUTPUT_TOKENS = 4_096
 const SUMMARY_TEMPLATE = `Output exactly the Markdown structure shown inside <template> and keep the section order unchanged. Do not include the <template> tags in your response.
 <template>
@@ -43,6 +42,9 @@ Rules:
 - Keep every section, even when empty.
 - Use terse bullets, not prose paragraphs.
 - Preserve exact file paths, symbols, commands, error strings, URLs, and identifiers when known.
+- For source-code reads, summarize relevant behavior and preserve the exact path and line range so the code can be reopened; do not copy large source blocks into the summary.
+- For command and test output, preserve the final exit status, pass/fail counts, important errors, and relevant output from both the beginning and end.
+- Separate verified results from hypotheses, and retain unresolved questions that affect the next step.
 - Do not mention the summary process or that context was compacted.`
 const SUMMARY_UPDATE_INSTRUCTIONS = `The <prior-summary> summarizes everything that happened before the <conversation>. Construct a new summary that combines both. The <prior-summary> is discarded after this: anything you do not carry into the new summary is lost.
 
@@ -82,9 +84,6 @@ type Input = {
 
 const estimate = (value: unknown) => Token.estimate(JSON.stringify(value))
 
-const truncate = (value: string) =>
-  value.length <= TOOL_OUTPUT_MAX_CHARS ? value : `${value.slice(0, TOOL_OUTPUT_MAX_CHARS)}\n[truncated]`
-
 export const serializeToolContent = (content: SessionMessage.ToolStateCompleted["content"]) =>
   content
     .map((item) =>
@@ -92,7 +91,7 @@ export const serializeToolContent = (content: SessionMessage.ToolStateCompleted[
     )
     .join("\n")
 
-const serialize = (message: SessionMessage.Message) => {
+export const serializeMessageForCompaction = (message: SessionMessage.Message) => {
   if (message.type === "user") {
     const files = message.files?.map((file) => `[Attached ${file.mime}: ${file.name ?? file.uri}]`) ?? []
     return [`[User]: ${message.text}`, ...files].join("\n")
@@ -106,7 +105,7 @@ const serialize = (message: SessionMessage.Message) => {
         if (part.state.status === "completed")
           return [
             `[Assistant tool call]: ${part.name}(${input})`,
-            `[Tool result]: ${truncate(serializeToolContent(part.state.content))}`,
+            `[Tool result]: ${serializeToolContent(part.state.content)}`,
           ]
         if (part.state.status === "error")
           return [`[Assistant tool call]: ${part.name}(${input})`, `[Tool error]: ${part.state.error.message}`]
@@ -116,7 +115,7 @@ const serialize = (message: SessionMessage.Message) => {
   }
   if (message.type === "system") return `[System update]: ${message.text}`
   if (message.type === "synthetic") return `[Synthetic context]: ${message.text}`
-  if (message.type === "shell") return `[Shell]: ${message.command}\n${truncate(message.output)}`
+  if (message.type === "shell") return `[Shell]: ${message.command}\n${message.output}`
   return ""
 }
 
@@ -140,7 +139,7 @@ const select = (
 ): { readonly head: string; readonly recent: string } | undefined => {
   const conversation = entries
     .filter((entry) => entry.message.type !== "compaction")
-    .map((entry) => serialize(entry.message))
+    .map((entry) => serializeMessageForCompaction(entry.message))
     .filter(Boolean)
   if (conversation.length === 0) return
   let total = 0
