@@ -107,6 +107,7 @@ const layer: Layer.Layer<Service, never, FSUtil.Service | Path.Path | HttpClient
               const token = crypto.randomUUID()
               const staging = `${root}.tmp-${token}`
               const backup = `${root}.old-${token}`
+              let stage = "download"
               yield* Effect.gen(function* () {
                 const downloaded = yield* Effect.forEach(
                   skill.files,
@@ -115,11 +116,14 @@ const layer: Layer.Layer<Service, never, FSUtil.Service | Path.Path | HttpClient
                 )
                 if (!downloaded.every(Boolean)) return
                 if (!(yield* fs.exists(path.join(staging, "SKILL.md")).pipe(Effect.orDie))) return
+                stage = "write-version"
                 yield* fs.writeFileString(path.join(staging, ".opencode-version"), version)
                 yield* Effect.uninterruptible(
                   Effect.gen(function* () {
                     const cached = yield* fs.exists(root).pipe(Effect.orDie)
+                    stage = "backup"
                     if (cached) yield* rename(root, backup)
+                    stage = "install"
                     yield* rename(staging, root).pipe(
                       Effect.catch((error) =>
                         Effect.gen(function* () {
@@ -132,7 +136,19 @@ const layer: Layer.Layer<Service, never, FSUtil.Service | Path.Path | HttpClient
                   }),
                 )
               }).pipe(
-                Effect.catch((error) => Effect.logError("failed to refresh skill", { skill: skill.name, error })),
+                Effect.catch((error) =>
+                  Effect.gen(function* () {
+                    // TestConsole captures Effect logs, so keep a terse process log
+                    // that also identifies failed cache swaps in Windows CI.
+                    console.warn("skill refresh failed", {
+                      skill: skill.name,
+                      stage,
+                      reason: error.reason._tag,
+                      method: "method" in error.reason ? error.reason.method : undefined,
+                    })
+                    yield* Effect.logError("failed to refresh skill", { skill: skill.name, error })
+                  }),
+                ),
                 Effect.ensuring(fs.remove(staging, { recursive: true, force: true }).pipe(Effect.ignore)),
               )
             }
