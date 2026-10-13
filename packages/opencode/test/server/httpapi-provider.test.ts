@@ -307,7 +307,7 @@ describe("provider HttpApi", () => {
       })
     }),
     { ...projectOptions, init: writeProviderAuthPlugin },
-    30000,
+    process.platform === "win32" ? 60_000 : 30_000,
   )
 
   it.instance(

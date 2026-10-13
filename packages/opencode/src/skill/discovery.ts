@@ -1,7 +1,7 @@
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { httpClient, path } from "@opencode-ai/core/effect/app-node-platform"
 import { NodePath } from "@effect/platform-node"
-import { Effect, Layer, Path, Schema, Context } from "effect"
+import { Effect, Layer, Path, Schema, Context, Schedule } from "effect"
 import { FetchHttpClient, HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import { withTransientReadRetry } from "@/util/effect-http-client"
 import { FSUtil } from "@opencode-ai/core/fs-util"
@@ -33,6 +33,21 @@ const layer: Layer.Layer<Service, never, FSUtil.Service | Path.Path | HttpClient
     const path = yield* Path.Path
     const http = HttpClient.filterStatusOk(withTransientReadRetry(yield* HttpClient.HttpClient))
     const cache = path.join(Global.Path.cache, "skills")
+
+    // On Windows a just-read SKILL.md can briefly keep the directory handle
+    // open. Bun can normalize that rename failure as Unknown, so bound the
+    // retry to this Windows cache swap; a missing path still fails immediately.
+    const rename = (from: string, to: string) =>
+      fs.rename(from, to).pipe(
+        Effect.retry({
+          while: (error) =>
+            process.platform === "win32" &&
+            (error.reason._tag === "Busy" ||
+              error.reason._tag === "PermissionDenied" ||
+              error.reason._tag === "Unknown"),
+          schedule: Schedule.spaced("100 millis").pipe(Schedule.both(Schedule.recurs(30))),
+        }),
+      )
 
     const download = Effect.fn("Discovery.download")(function* (url: string, dest: string) {
       if (yield* fs.exists(dest).pipe(Effect.orDie)) return true
@@ -94,6 +109,7 @@ const layer: Layer.Layer<Service, never, FSUtil.Service | Path.Path | HttpClient
               const token = crypto.randomUUID()
               const staging = `${root}.tmp-${token}`
               const backup = `${root}.old-${token}`
+              let stage = "download"
               yield* Effect.gen(function* () {
                 const downloaded = yield* Effect.forEach(
                   skill.files,
@@ -102,15 +118,18 @@ const layer: Layer.Layer<Service, never, FSUtil.Service | Path.Path | HttpClient
                 )
                 if (!downloaded.every(Boolean)) return
                 if (!(yield* fs.exists(path.join(staging, "SKILL.md")).pipe(Effect.orDie))) return
+                stage = "write-version"
                 yield* fs.writeFileString(path.join(staging, ".opencode-version"), version)
                 yield* Effect.uninterruptible(
                   Effect.gen(function* () {
                     const cached = yield* fs.exists(root).pipe(Effect.orDie)
-                    if (cached) yield* fs.rename(root, backup)
-                    yield* fs.rename(staging, root).pipe(
+                    stage = "backup"
+                    if (cached) yield* rename(root, backup)
+                    stage = "install"
+                    yield* rename(staging, root).pipe(
                       Effect.catch((error) =>
                         Effect.gen(function* () {
-                          if (cached) yield* fs.rename(backup, root).pipe(Effect.ignore)
+                          if (cached) yield* rename(backup, root).pipe(Effect.ignore)
                           return yield* Effect.fail(error)
                         }),
                       ),
@@ -119,7 +138,19 @@ const layer: Layer.Layer<Service, never, FSUtil.Service | Path.Path | HttpClient
                   }),
                 )
               }).pipe(
-                Effect.catch((error) => Effect.logError("failed to refresh skill", { skill: skill.name, error })),
+                Effect.catch((error) =>
+                  Effect.gen(function* () {
+                    // TestConsole captures Effect logs, so keep a terse process log
+                    // that also identifies failed cache swaps in Windows CI.
+                    console.warn("skill refresh failed", {
+                      skill: skill.name,
+                      stage,
+                      reason: error.reason._tag,
+                      method: "method" in error.reason ? error.reason.method : undefined,
+                    })
+                    yield* Effect.logError("failed to refresh skill", { skill: skill.name, error })
+                  }),
+                ),
                 Effect.ensuring(fs.remove(staging, { recursive: true, force: true }).pipe(Effect.ignore)),
               )
             }

@@ -62,7 +62,7 @@ describe("opencode acp lifecycle subprocess", () => {
 
         expect(selectConfigOption(loaded.configOptions, "model")?.category).toBe("model")
       }),
-    60_000,
+    process.platform === "win32" ? 90_000 : 60_000,
   )
 
   cliIt.live(

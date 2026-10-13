@@ -23,15 +23,21 @@ FILES = sorted(str(path.relative_to(ROOT)) for path in TEST_DIR.rglob("*")
 if not FILES:
     raise SystemExit("no OpenCode tests discovered")
 
-CHUNKS = 16
+# Eight or nine files per process keeps the slow CLI subprocess tests from
+# sharing a five-minute deadline with a whole second group of tests. Chunk 3
+# previously timed out at 300s with 17 CLI files although all other chunks
+# passed, so keep the same per-chunk timeout and narrow the failure boundary.
+CHUNKS = min(32, len(FILES))
 failed = []
 for index in range(CHUNKS):
     group = FILES[index * len(FILES) // CHUNKS:(index + 1) * len(FILES) // CHUNKS]
     print(f"OpenCode chunk {index + 1}/{CHUNKS}: {len(group)} files; starting", flush=True)
     print("\n".join(group), flush=True)
     with tempfile.TemporaryFile(mode="w+t", encoding="utf8", errors="replace") as log:
+        # Retain per-test progress in the temporary log. Successful chunks still
+        # print only their summary, but a killed chunk reports its last tests.
         process = subprocess.Popen(
-            ["bun", "test", "--timeout", "30000", "--only-failures", *group],
+            ["bun", "test", "--timeout", "30000", *group],
             cwd=ROOT, stdout=log, stderr=subprocess.STDOUT,
         )
         started = time.monotonic()
@@ -54,7 +60,7 @@ for index in range(CHUNKS):
         print(f"OpenCode chunk {index + 1}/{CHUNKS}: exit={code}, elapsed={time.monotonic() - started:.0f}s", flush=True)
         summary = next((line for line in output.splitlines() if re.search(r"Ran \d+ tests across", line)), None)
         if code != 0 or summary is None:
-            print("\n".join(output.splitlines()[-100:]), flush=True)
+            print("\n".join(output.splitlines()[-500:]), flush=True)
             failed.append(index + 1)
             continue
         for line in output.splitlines():
