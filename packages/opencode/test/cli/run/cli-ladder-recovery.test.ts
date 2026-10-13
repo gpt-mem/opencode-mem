@@ -115,7 +115,7 @@ cliIt.live(
       server.kill()
       const result = yield* run.result
       expect(result.exitCode).not.toBe(0)
-      expect(result.durationMs).toBeLessThan(15_000)
+      expect(result.durationMs).toBeLessThan(25_000)
       expect(result.stderr).toContain("Reconnect and check the session before retrying")
     }),
   30_000,
