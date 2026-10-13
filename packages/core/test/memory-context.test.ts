@@ -375,6 +375,44 @@ const compactV1 = (messages: readonly SessionV1.WithParts[], overrides?: Partial
   MemoryContext.projectV1(messages, { enabled: true, minOutputChars: 100, keepRecentUserTurns: 1, ...overrides })
 
 describe("MemoryContext.projectV1", () => {
+  test("measureV1 reports content-free sizes for default and cache-preserving projections", () => {
+    const messages = [
+      v1user("u1"),
+      v1assistant("a1", [v1tool({ id: "call_1", tool: "bash", output: `PRIVATE-${big()}` })]),
+      v1user("u2"),
+      v1assistant("a2", [v1tool({ id: "call_2", tool: "bash", output: `LATEST-${big()}` })]),
+    ]
+    const raw = MemoryContext.measureV1(messages)
+    const defaultProjection = MemoryContext.projectV1(messages, {
+      enabled: true,
+      firstDelivery: true,
+      firstDeliveryMinChars: 100,
+    })
+    const cachePreservingMask = MemoryContext.projectV1(messages, {
+      enabled: true,
+      firstDelivery: true,
+      firstDeliveryMinChars: 100,
+      markIndex: 3,
+    })
+    const defaultStats = MemoryContext.measureV1(defaultProjection)
+    const maskedStats = MemoryContext.measureV1(cachePreservingMask)
+
+    expect(raw.messageCount).toBe(4)
+    expect(raw.completedToolOutputs).toBe(2)
+    expect(raw.completedToolOutputChars).toBe(`PRIVATE-${big()}`.length + `LATEST-${big()}`.length)
+    expect(raw.outputSizes.map((item) => [item.callID, item.tool, item.chars])).toEqual([
+      ["call_1", "bash", `PRIVATE-${big()}`.length],
+      ["call_2", "bash", `LATEST-${big()}`.length],
+    ])
+    expect(raw.historyJsonBytes).toBeGreaterThan(raw.completedToolOutputChars)
+    expect(defaultStats.completedToolOutputChars).toBeLessThan(maskedStats.completedToolOutputChars)
+    expect(maskedStats.completedToolOutputChars).toBeLessThan(raw.completedToolOutputChars)
+    expect(defaultStats.historyJsonBytes).toBeLessThan(maskedStats.historyJsonBytes)
+    expect(maskedStats.historyJsonBytes).toBeLessThan(raw.historyJsonBytes)
+    expect(JSON.stringify(raw)).not.toContain("PRIVATE-")
+    expect(JSON.stringify(raw)).not.toContain("LATEST-")
+  })
+
   test("disabled flag returns identical array", () => {
     const messages = [v1user("u1"), v1assistant("a1", [v1tool({ id: "call_1", tool: "bash", output: big() })])]
     expect(MemoryContext.projectV1(messages, { enabled: false })).toBe(messages)

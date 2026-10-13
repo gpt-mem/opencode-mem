@@ -384,6 +384,27 @@ export const projectV1 = (
   return projected
 }
 
+// Content-free accounting for diagnostics and fixed-history comparisons. The
+// byte count is for serialized session history (before provider conversion),
+// not a provider token estimate. Call only when diagnostics are enabled.
+export const measureV1 = (messages: readonly SessionV1.WithParts[]) => {
+  const outputSizes: { callID: string; tool: string; chars: number }[] = []
+  for (const message of messages) {
+    if (message.info.role !== "assistant") continue
+    for (const part of message.parts) {
+      if (part.type !== "tool" || part.state.status !== "completed") continue
+      outputSizes.push({ callID: part.callID, tool: part.tool, chars: part.state.output.length })
+    }
+  }
+  return {
+    messageCount: messages.length,
+    historyJsonBytes: new TextEncoder().encode(JSON.stringify(messages)).byteLength,
+    completedToolOutputs: outputSizes.length,
+    completedToolOutputChars: outputSizes.reduce((total, item) => total + item.chars, 0),
+    outputSizes,
+  }
+}
+
 // Boundary-mode resolution: first index that must stay verbatim, or 0 when
 // nothing can be safely compressed. Two windows qualify:
 // - the conversation window: from the Nth-from-last user turn on (needs more

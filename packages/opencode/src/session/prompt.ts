@@ -6,6 +6,7 @@ import os from "os"
 import { SessionID, MessageID, PartID } from "./schema"
 import { MessageV2 } from "./message-v2"
 import { MemoryContext } from "@opencode-ai/core/session/memory-context"
+import { MemDebugLog } from "@opencode-ai/core/session/mem-debug-log"
 import { CacheMark } from "@opencode-ai/core/session/cache-mark"
 import { LadderTransport } from "@/provider/ladder-transport"
 import { Flag } from "@opencode-ai/core/flag/flag"
@@ -67,6 +68,14 @@ globalThis.AI_SDK_LOG_WARNINGS = false
 
 const decodeMessageInfo = Schema.decodeUnknownExit(SessionV1.Info)
 const decodeMessagePart = Schema.decodeUnknownExit(SessionV1.Part)
+const serializedByteLength = (value: unknown) => {
+  try {
+    const serialized = JSON.stringify(value)
+    return serialized === undefined ? undefined : new TextEncoder().encode(serialized).byteLength
+  } catch {
+    return undefined
+  }
+}
 const MAX_MCP_RESOURCE_BLOB_BYTES = 10 * 1024 * 1024
 const SUPPORTED_MCP_RESOURCE_ATTACHMENT_MIMES = new Set([
   "application/pdf",
@@ -1408,6 +1417,40 @@ const layer = Layer.effect(
             ]
             const format = lastUser.format ?? { type: "text" as const }
             if (format.type === "json_schema") system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
+            if (Flag.OPENCODE_MEMORY_CONTEXT_DEBUG) {
+              const toolSchema = Object.fromEntries(
+                Object.entries(tools).map(([name, value]) => [
+                  name,
+                  { description: value.description, inputSchema: value.inputSchema },
+                ]),
+              )
+              MemDebugLog.write(
+                "memory-context.log",
+                JSON.stringify({
+                  event: "projection",
+                  sessionID,
+                  userMessageID: lastUser.id,
+                  step,
+                  agent: agent.name,
+                  mode: agent.mode,
+                  ladderVariantOffered: !!ladderMark && !!maskedMsgs,
+                  ladderTargetRung: ladderMark?.rung,
+                  ladderMarkIndex: ladderMark?.index ?? 0,
+                  ladderMarkAvailable: !!ladderMark,
+                  raw: MemoryContext.measureV1(msgs),
+                  defaultProjected: MemoryContext.measureV1(projectedMsgs),
+                  ...(maskedMsgs ? { ladderMasked: MemoryContext.measureV1(maskedMsgs) } : {}),
+                  modelMessageJsonBytes: serializedByteLength(modelMsgs),
+                  ladderMaskedModelMessageJsonBytes: maskedModelMsgs
+                    ? serializedByteLength(maskedModelMsgs)
+                    : undefined,
+                  systemPromptChars: system.reduce((total, part) => total + part.length, 0),
+                  toolCount: Object.keys(tools).length,
+                  toolSchemaBytes: serializedByteLength(toolSchema),
+                }),
+              )
+            }
+            const requestStartedAt = Date.now()
             const result = yield* handle.process({
               user: lastUser,
               agent,
@@ -1442,6 +1485,34 @@ const layer = Layer.effect(
                 : {}),
               toolChoice: format.type === "json_schema" ? "required" : undefined,
             })
+
+            if (Flag.OPENCODE_MEMORY_CONTEXT_DEBUG && ladderCacheOn) {
+              const usage = handle.message.tokens
+              MemDebugLog.write(
+                "memory-context.log",
+                JSON.stringify({
+                  event: "ladder_response",
+                  sessionID,
+                  userMessageID: lastUser.id,
+                  assistantMessageID: handle.message.id,
+                  step,
+                  rung: ladderResponse?.rung,
+                  variant: ladderResponse?.variant ?? "unknown",
+                  scopeMatched: !!ladderResponse?.scope && ladderResponse.scope === ladderMark?.scope,
+                  latencyMs: Date.now() - requestStartedAt,
+                  finish: handle.message.finish,
+                  failed: !!handle.message.error,
+                  cost: handle.message.cost,
+                  usage: {
+                    input: usage.input,
+                    cacheRead: usage.cache.read,
+                    cacheWrite: usage.cache.write,
+                    output: usage.output,
+                    reasoning: usage.reasoning,
+                  },
+                }),
+              )
+            }
 
             // Issue #29: confirm the cache mark post-factum from the response
             // usage. Aborted/error turns carry no usage and recordUsage
