@@ -440,7 +440,7 @@ const layer = Layer.effect(
           case "step-finish": {
             // Some providers report a successful finish without returning any
             // content. Route this through the existing bounded retry policy.
-            if (!ctx.hasOutput && !["tool-calls", "unknown"].includes(value.reason)) {
+            if (!ctx.hasOutput && !["tool-calls", "content-filter", "unknown"].includes(value.reason)) {
               throw new SessionV1.APIError({
                 message: "Model returned an empty response",
                 isRetryable: true,

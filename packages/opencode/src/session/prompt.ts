@@ -1087,6 +1087,8 @@ const layer = Layer.effect(
         let step = 0
         let todoContinuationCount = 0
         let resumePendingTodo = false
+        let resumeInterruptedTool: SessionV1.ToolPart | undefined
+        let interruptedToolRecoveryCount = 0
         const session = yield* sessions.get(sessionID).pipe(Effect.orDie)
 
         while (true) {
@@ -1119,6 +1121,31 @@ const layer = Layer.effect(
             !hasToolCalls &&
             lastAssistant.parentID === lastUser.id
           ) {
+            const orphan = lastAssistantMsg?.parts.find(
+              (part): part is SessionV1.ToolPart => part.type === "tool" && isOrphanedInterruptedTool(part),
+            )
+            if (orphan) {
+              if (interruptedToolRecoveryCount < 1) {
+                interruptedToolRecoveryCount++
+                resumeInterruptedTool = orphan
+                yield* Effect.logWarning("continuing session to recover interrupted tool", {
+                  "session.id": sessionID,
+                  messageID: lastAssistant.id,
+                  tool: orphan.tool,
+                  callID: orphan.callID,
+                  recovery: interruptedToolRecoveryCount,
+                })
+              } else {
+                yield* Effect.logWarning("loop exit after interrupted tool recovery", {
+                  "session.id": sessionID,
+                  messageID: lastAssistant.id,
+                  tool: orphan.tool,
+                  callID: orphan.callID,
+                })
+                yield* Effect.logInfo("exiting loop", { "session.id": sessionID })
+                break
+              }
+            }
             const pendingTodos = (yield* todos.get(sessionID)).filter(
               (todo) => todo.status !== "completed" && todo.status !== "cancelled",
             )
@@ -1130,18 +1157,7 @@ const layer = Layer.effect(
                 pending: pendingTodos.length,
                 continuation: todoContinuationCount,
               })
-            } else {
-              const orphan = lastAssistantMsg?.parts.find(
-                (part): part is SessionV1.ToolPart => part.type === "tool" && isOrphanedInterruptedTool(part),
-              )
-              if (orphan) {
-                yield* Effect.logWarning("loop exit with orphaned interrupted tool", {
-                  "session.id": sessionID,
-                  messageID: lastAssistant.id,
-                  tool: orphan.tool,
-                  callID: orphan.callID,
-                })
-              }
+            } else if (!orphan) {
               yield* Effect.logInfo("exiting loop", { "session.id": sessionID })
               break
             }
@@ -1295,6 +1311,13 @@ const layer = Layer.effect(
                   `<session-continuation> The previous response stopped with ${pending.length} unfinished checklist item(s). Continue from the first unfinished item. Preserve completed work and do not repeat completed actions. Finish the checklist, or explain the concrete blocker if you cannot proceed.</session-continuation>`,
                 )
               }
+            }
+            if (resumeInterruptedTool) {
+              const interrupted = resumeInterruptedTool
+              resumeInterruptedTool = undefined
+              system.push(
+                `<interrupted-tool-recovery>Tool call ${interrupted.callID} (${interrupted.tool}) was interrupted. Its result is unknown; the error in the conversation records the interruption, not proof that no side effect occurred. Do not repeat this call or assume it succeeded. First inspect the current state using safe read-only checks. Then continue the unfinished work if safe; if the state cannot be established, stop and explain the uncertainty.</interrupted-tool-recovery>`,
+              )
             }
             const format = lastUser.format ?? { type: "text" as const }
             if (format.type === "json_schema") system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)

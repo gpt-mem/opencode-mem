@@ -500,11 +500,12 @@ noLLMServer.instance(
   { config: cfg },
 )
 
-it.instance("loop exits without an LLM request for interrupted orphan tool calls", () =>
+it.instance("loop safely recovers an interrupted tool before bounded checklist continuation", () =>
   Effect.gen(function* () {
     const { llm } = yield* useServerConfig(providerCfg)
     const prompt = yield* SessionPrompt.Service
     const sessions = yield* Session.Service
+    const todos = yield* Todo.Service
     const chat = yield* sessions.create({ title: "Pinned" })
     const seeded = yield* seed(chat.id, { finish: "stop" })
     yield* sessions.updatePart({
@@ -522,10 +523,24 @@ it.instance("loop exits without an LLM request for interrupted orphan tool calls
         time: { start: 1, end: 2 },
       },
     })
+    yield* todos.update({
+      sessionID: chat.id,
+      todos: [{ content: "unfinished item", status: "pending", priority: "high" }],
+    })
+    yield* llm.text("I checked the current state and can safely continue.")
+    yield* llm.text("Continuing the unfinished checklist.")
+    yield* llm.text("Still working through the checklist.")
+    yield* llm.text("The automatic continuation limit is reached.")
 
     const result = yield* prompt.loop({ sessionID: chat.id })
-    expect(result.info.id).toBe(seeded.assistant.id)
-    expect(yield* llm.hits).toHaveLength(0)
+    const inputs = yield* llm.inputs
+    expect(result.info.role).toBe("assistant")
+    expect(result.info.id).not.toBe(seeded.assistant.id)
+    expect(yield* llm.hits).toHaveLength(3)
+    expect(JSON.stringify(inputs[0])).toContain("Tool execution aborted")
+    expect(JSON.stringify(inputs[0])).toContain("<interrupted-tool-recovery>")
+    expect(JSON.stringify(inputs[0])).toContain("First inspect the current state using safe read-only checks")
+    expect(JSON.stringify(inputs[0])).toContain("<session-continuation>")
   }),
 )
 
@@ -706,6 +721,31 @@ it.instance("loop surfaces content-filter finishes as session errors", () =>
     expect(result.parts).toEqual(
       expect.arrayContaining([expect.objectContaining({ type: "text", text: "partial response" })]),
     )
+  }),
+)
+
+it.instance("loop does not retry an empty content-filter response", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const chat = yield* sessions.create({ title: "Filtered empty response" })
+    yield* prompt.prompt({
+      sessionID: chat.id,
+      agent: "build",
+      noReply: true,
+      parts: [{ type: "text", text: "hello" }],
+    })
+    yield* llm.push(reply().contentFilter())
+
+    const result = yield* prompt.loop({ sessionID: chat.id })
+
+    expect(yield* llm.hits).toHaveLength(1)
+    expect(result.info.role).toBe("assistant")
+    if (result.info.role === "assistant") {
+      expect(result.info.finish).toBe("content-filter")
+      expect(result.info.error?.name).toBe("ContentFilterError")
+    }
   }),
 )
 
