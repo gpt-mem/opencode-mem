@@ -14,6 +14,7 @@ import { Session } from "@/session/session"
 import { LLM } from "../../src/session/llm"
 import { MessageV2 } from "../../src/session/message-v2"
 import { SessionProcessor } from "../../src/session/processor"
+import { SessionRetry } from "../../src/session/retry"
 import { MessageID, PartID, SessionID } from "../../src/session/schema"
 import { SessionStatus } from "../../src/session/status"
 import { SessionSummary } from "../../src/session/summary"
@@ -473,7 +474,7 @@ it.live("session.processor effect tests reset reasoning state across retries", (
       Effect.gen(function* () {
         const { processors, session, provider } = yield* boot()
 
-        yield* llm.push(reply().reason("one").reset(), reply().reason("two").stop())
+        yield* llm.push(reply().reason("one").reset(), reply().reason("two").text("answer").stop())
 
         const chat = yield* session.create({})
         const parent = yield* user(chat.id, "reason")
@@ -708,6 +709,108 @@ it.live("session.processor effect tests retry network_error finish reasons", () 
   ),
 )
 
+it.live("session.processor retries a successful empty model response", () =>
+  provideTmpdirServer(
+    ({ dir, llm }) =>
+      Effect.gen(function* () {
+        const { processors, session, provider } = yield* boot()
+        yield* llm.push(
+          raw({
+            chunks: [
+              {
+                id: "chatcmpl-empty",
+                object: "chat.completion.chunk",
+                choices: [{ index: 0, delta: { role: "assistant", content: "" }, finish_reason: "stop" }],
+              },
+            ],
+          }),
+        )
+        yield* llm.text("recovered answer")
+
+        const chat = yield* session.create({})
+        const parent = yield* user(chat.id, "answer this")
+        const msg = yield* assistant(chat.id, parent.id, path.resolve(dir))
+        const mdl = yield* provider.getModel(ref.providerID, ref.modelID)
+        const handle = yield* processors.create({ assistantMessage: msg, sessionID: chat.id, model: mdl })
+        const value = yield* handle.process({
+          user: {
+            id: parent.id,
+            sessionID: chat.id,
+            role: "user",
+            time: parent.time,
+            agent: parent.agent,
+            model: { providerID: ref.providerID, modelID: ref.modelID },
+          } satisfies SessionV1.User,
+          sessionID: chat.id,
+          model: mdl,
+          agent: agent(),
+          system: [],
+          messages: [{ role: "user", content: "answer this" }],
+          tools: {},
+        })
+
+        const parts = yield* MessageV2.parts(msg.id)
+        expect(value).toBe("continue")
+        expect(yield* llm.calls).toBe(2)
+        expect(parts.some((part) => part.type === "text" && part.text === "recovered answer")).toBe(true)
+        expect(handle.message.error).toBeUndefined()
+      }),
+    { config: (url) => providerCfg(url) },
+  ),
+)
+
+it.live("session.processor reports an error after repeated empty model responses", () =>
+  provideTmpdirServer(
+    ({ dir, llm }) =>
+      Effect.gen(function* () {
+        const { processors, session, provider } = yield* boot()
+        for (let attempt = 0; attempt <= SessionRetry.RETRY_MAX_RETRIES; attempt++) {
+          yield* llm.push(
+            raw({
+              chunks: [
+                {
+                  id: `chatcmpl-empty-${attempt}`,
+                  object: "chat.completion.chunk",
+                  choices: [{ index: 0, delta: { role: "assistant", content: "" }, finish_reason: "stop" }],
+                },
+              ],
+            }),
+          )
+        }
+
+        const chat = yield* session.create({})
+        const parent = yield* user(chat.id, "answer this")
+        const msg = yield* assistant(chat.id, parent.id, path.resolve(dir))
+        const mdl = yield* provider.getModel(ref.providerID, ref.modelID)
+        const handle = yield* processors.create({ assistantMessage: msg, sessionID: chat.id, model: mdl })
+        const value = yield* handle.process({
+          user: {
+            id: parent.id,
+            sessionID: chat.id,
+            role: "user",
+            time: parent.time,
+            agent: parent.agent,
+            model: { providerID: ref.providerID, modelID: ref.modelID },
+          } satisfies SessionV1.User,
+          sessionID: chat.id,
+          model: mdl,
+          agent: agent(),
+          system: [],
+          messages: [{ role: "user", content: "answer this" }],
+          tools: {},
+        })
+
+        expect(value).toBe("stop")
+        expect(yield* llm.calls).toBe(SessionRetry.RETRY_MAX_RETRIES + 1)
+        expect(handle.message.error?.name).toBe("APIError")
+        expect((handle.message.error as SessionV1.APIError | undefined)?.data.message).toBe(
+          "Model returned an empty response",
+        )
+      }),
+    { config: (url) => providerCfg(url) },
+  ),
+)
+
 it.live("session.processor effect tests publish retry status updates", () =>
   provideTmpdirServer(
     ({ dir, llm }) =>
@@ -755,8 +858,8 @@ it.live("session.processor effect tests publish retry status updates", () =>
         yield* off
 
         expect(value).toBe("continue")
-        expect(yield* llm.calls).toBe(2)
-        expect(states).toStrictEqual([1])
+        expect(yield* llm.calls).toBe(3)
+        expect(states).toStrictEqual([1, 2])
       }),
     { config: (url) => providerCfg(url) },
   ),
