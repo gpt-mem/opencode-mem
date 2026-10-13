@@ -17,6 +17,11 @@ test("compaction prompt preserves detailed work state and relevant files", () =>
   expect(prompt).toContain("### Active")
   expect(prompt).toContain("### Blocked")
   expect(prompt).toContain("## Relevant Files")
+  expect(prompt).toContain("keep only the latest run for that project in the active summary")
+  expect(prompt).toContain("ReplacingMergeTree rows")
+  expect(prompt).toContain("Do not claim a targeted run validates the full suite")
+  expect(prompt).toContain("Give the first substantive reasoning block of the session extra weight")
+  expect(prompt).toContain("keep recent reasoning most detailed")
 })
 
 test("compaction prompt gives update instructions for a prior summary", () => {
@@ -32,6 +37,7 @@ test("compaction prompt gives update instructions for a prior summary", () => {
   )
   expect(prompt).toContain('Move completed work from "Active" to "Completed".')
   expect(prompt).toContain('Update "Objective" and "Next Move" to reflect the current work state.')
+  expect(prompt).toContain("Carry that initial anchor forward when updating an existing summary")
 })
 
 test("compaction describes tool media without embedding base64", () => {
