@@ -1240,11 +1240,13 @@ const layer = Layer.effect(
           }
 
           if (
-            model.providerID === "ladder" &&
-            (yield* config.get()).compaction?.auto !== false &&
-            lastFinished &&
-            lastFinished.summary !== true &&
-            SessionCompaction.shouldCompactReasoning(msgs)
+            SessionCompaction.shouldTriggerReasoningCompaction({
+              providerID: model.providerID,
+              auto: (yield* config.get()).compaction?.auto !== false,
+              hasFinishedAssistant: lastFinished !== undefined,
+              lastFinishedIsSummary: lastFinished?.summary === true,
+              messages: msgs,
+            })
           ) {
             yield* Effect.logInfo("compacting accumulated Ladder reasoning", {
               "session.id": sessionID,

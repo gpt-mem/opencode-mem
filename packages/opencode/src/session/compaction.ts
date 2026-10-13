@@ -74,6 +74,22 @@ export function shouldCompactReasoning(
   return chars >= threshold
 }
 
+export function shouldTriggerReasoningCompaction(input: {
+  providerID: string
+  auto: boolean
+  hasFinishedAssistant: boolean
+  lastFinishedIsSummary: boolean
+  messages: Parameters<typeof shouldCompactReasoning>[0]
+}) {
+  return (
+    input.providerID === "ladder" &&
+    input.auto &&
+    input.hasFinishedAssistant &&
+    !input.lastFinishedIsSummary &&
+    shouldCompactReasoning(input.messages)
+  )
+}
+
 const LADDER_COMPACTION_MODEL = {
   free: { providerID: ProviderV2.ID.make("ladder"), modelID: ModelV2.ID.make("free") },
   standard: { providerID: ProviderV2.ID.make("ladder"), modelID: ModelV2.ID.make("standard") },

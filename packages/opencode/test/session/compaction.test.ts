@@ -14,6 +14,7 @@ import {
   REASONING_COMPACTION_INITIAL_CHARS,
   SessionCompaction,
   shouldCompactReasoning,
+  shouldTriggerReasoningCompaction,
 } from "../../src/session/compaction"
 import { Token } from "@/util/token"
 import { Plugin } from "../../src/plugin"
@@ -114,6 +115,21 @@ describe("session.compaction.reasoning threshold", () => {
     expect(REASONING_COMPACTION_INCREMENTAL_CHARS).toBe(50_000)
     expect(shouldCompactReasoning(messages([30_000, 19_999], true))).toBe(false)
     expect(shouldCompactReasoning(messages([30_000, 20_000], true))).toBe(true)
+  })
+
+  test("triggers only for completed Ladder turns while auto-compaction is enabled", () => {
+    const input = {
+      providerID: "ladder",
+      auto: true,
+      hasFinishedAssistant: true,
+      lastFinishedIsSummary: false,
+      messages: messages([REASONING_COMPACTION_INITIAL_CHARS]),
+    }
+    expect(shouldTriggerReasoningCompaction(input)).toBe(true)
+    expect(shouldTriggerReasoningCompaction({ ...input, providerID: "anthropic" })).toBe(false)
+    expect(shouldTriggerReasoningCompaction({ ...input, auto: false })).toBe(false)
+    expect(shouldTriggerReasoningCompaction({ ...input, hasFinishedAssistant: false })).toBe(false)
+    expect(shouldTriggerReasoningCompaction({ ...input, lastFinishedIsSummary: true })).toBe(false)
   })
 })
 
