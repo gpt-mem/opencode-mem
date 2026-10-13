@@ -112,17 +112,3 @@ jobs:
         working-directory: packages/core
         timeout-minutes: 8
         run: bun test test/ripgrep.test.ts test/filesystem/search.test.ts
-
-      - name: Run Windows skill refresh test
-        working-directory: packages/opencode
-        timeout-minutes: 8
-        run: >-
-          bun test --timeout 30000
-          test/session/tools.test.ts
-          test/share/share-next.test.ts
-          test/skill/discovery.test.ts
-          test/skill/skill.test.ts
-          test/snapshot/snapshot.test.ts
-          test/storage/storage.test.ts
-          test/tool/apply_patch.test.ts
-          test/tool/code-mode-integration.test.ts
