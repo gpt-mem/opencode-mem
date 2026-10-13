@@ -1,5 +1,9 @@
 import { expect, test } from "bun:test"
+import { DateTime } from "effect"
 import { SessionCompaction } from "@opencode-ai/core/session/compaction"
+import { SessionMessage } from "@opencode-ai/core/session/message"
+import { ModelV2 } from "@opencode-ai/core/model"
+import { ProviderV2 } from "@opencode-ai/core/provider"
 
 test("compaction prompt preserves detailed work state and relevant files", () => {
   const prompt = SessionCompaction.buildPrompt({ context: ["conversation history"] })
@@ -44,4 +48,50 @@ test("compaction describes tool media without embedding base64", () => {
 
   expect(serialized).toBe("Image read successfully\n[Attached image/png: pixel.png]")
   expect(serialized).not.toContain(base64)
+})
+
+test("compaction keeps complete source and shell output for the summarizer", () => {
+  const sourceTail = "241: export const importantBoundary = true"
+  const shellTail = "Tests 1 passed | 152 skipped (153)"
+  const source = `${"source-line\n".repeat(250)}${sourceTail}`
+  const shell = `${"routine test output\n".repeat(250)}${shellTail}`
+  const now = DateTime.makeUnsafe(0)
+  const message: SessionMessage.Message = {
+    id: SessionMessage.ID.create(),
+    type: "assistant",
+    agent: "build",
+    model: { providerID: ProviderV2.ID.make("test"), id: ModelV2.ID.make("test-model") },
+    time: { created: now },
+    content: [
+      {
+        id: "read-call",
+        type: "tool",
+        name: "read",
+        state: {
+          status: "completed",
+          input: { filePath: "src/session/compaction.ts" },
+          content: [{ type: "text", text: source }],
+          structured: {},
+        },
+        time: { created: now, completed: now },
+      },
+    ],
+  }
+  const shellMessage: SessionMessage.Message = {
+    id: SessionMessage.ID.create(),
+    type: "shell",
+    callID: "shell-call",
+    command: "bun test",
+    output: shell,
+    time: { created: now, completed: now },
+  }
+
+  const serializedSource = SessionCompaction.serializeMessageForCompaction(message)
+  const serializedShell = SessionCompaction.serializeMessageForCompaction(shellMessage)
+
+  expect(serializedSource).toContain("src/session/compaction.ts")
+  expect(serializedSource).toContain(sourceTail)
+  expect(serializedSource).not.toContain("[truncated]")
+  expect(serializedShell).toContain(shellTail)
+  expect(serializedShell).not.toContain("[truncated]")
 })
