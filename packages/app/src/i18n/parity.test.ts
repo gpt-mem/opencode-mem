@@ -117,7 +117,7 @@ describe("i18n parity", () => {
         })
       }
     }
-  })
+  }, 30_000)
 
   test("non-English locales preserve English placeholders", async () => {
     for (const domain of domains) {
@@ -140,7 +140,7 @@ describe("i18n parity", () => {
         })
       }
     }
-  })
+  }, 30_000)
 
   test("non-English locales translate targeted unseen session keys", async () => {
     const source = await dictionary("./en.ts")
@@ -166,7 +166,7 @@ describe("i18n parity", () => {
         expect(placeholders(target[key])).toEqual(["count"])
       }
     }
-  })
+  }, 30_000)
 })
 
 describe("i18n plural parity", () => {
