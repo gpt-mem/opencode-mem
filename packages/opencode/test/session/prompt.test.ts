@@ -505,6 +505,7 @@ it.instance("loop exits without an LLM request for interrupted orphan tool calls
     const { llm } = yield* useServerConfig(providerCfg)
     const prompt = yield* SessionPrompt.Service
     const sessions = yield* Session.Service
+    const todos = yield* Todo.Service
     const chat = yield* sessions.create({ title: "Pinned" })
     const seeded = yield* seed(chat.id, { finish: "stop" })
     yield* sessions.updatePart({
@@ -521,6 +522,10 @@ it.instance("loop exits without an LLM request for interrupted orphan tool calls
         metadata: { interrupted: true },
         time: { start: 1, end: 2 },
       },
+    })
+    yield* todos.update({
+      sessionID: chat.id,
+      todos: [{ content: "unfinished item", status: "pending", priority: "high" }],
     })
 
     const result = yield* prompt.loop({ sessionID: chat.id })
@@ -551,6 +556,41 @@ it.instance("loop calls LLM and returns assistant message", () =>
     const parts = result.parts.filter((p) => p.type === "text")
     expect(parts.some((p) => p.type === "text" && p.text === "world")).toBe(true)
     expect(yield* llm.hits).toHaveLength(1)
+  }),
+)
+
+it.instance("loop continues a stopped response while checklist items remain, then stops at its retry cap", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const todos = yield* Todo.Service
+    const chat = yield* sessions.create({
+      title: "Checklist continuation",
+      permission: [{ permission: "*", pattern: "*", action: "allow" }],
+    })
+    yield* prompt.prompt({
+      sessionID: chat.id,
+      agent: "build",
+      noReply: true,
+      parts: [{ type: "text", text: "finish the checklist" }],
+    })
+    yield* todos.update({
+      sessionID: chat.id,
+      todos: [{ content: "unfinished work", status: "pending", priority: "high" }],
+    })
+    yield* llm.text("I stopped too early")
+    yield* llm.text("Continuing the item")
+    yield* llm.text("Still not complete")
+    yield* llm.text("Stopped at the automatic continuation limit")
+
+    const result = yield* prompt.loop({ sessionID: chat.id })
+    const inputs = yield* llm.inputs
+
+    expect(result.info.role).toBe("assistant")
+    expect(yield* llm.calls).toBe(4)
+    expect(inputs.slice(1).some((input) => JSON.stringify(input).includes("<session-continuation>"))).toBe(true)
+    expect((yield* todos.get(chat.id))[0]?.status).toBe("pending")
   }),
 )
 
@@ -671,6 +711,31 @@ it.instance("loop surfaces content-filter finishes as session errors", () =>
     expect(result.parts).toEqual(
       expect.arrayContaining([expect.objectContaining({ type: "text", text: "partial response" })]),
     )
+  }),
+)
+
+it.instance("loop does not retry an empty content-filter response", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const chat = yield* sessions.create({ title: "Filtered empty response" })
+    yield* prompt.prompt({
+      sessionID: chat.id,
+      agent: "build",
+      noReply: true,
+      parts: [{ type: "text", text: "hello" }],
+    })
+    yield* llm.push(reply().contentFilter())
+
+    const result = yield* prompt.loop({ sessionID: chat.id })
+
+    expect(yield* llm.hits).toHaveLength(1)
+    expect(result.info.role).toBe("assistant")
+    if (result.info.role === "assistant") {
+      expect(result.info.finish).toBe("content-filter")
+      expect(result.info.error?.name).toBe("ContentFilterError")
+    }
   }),
 )
 
