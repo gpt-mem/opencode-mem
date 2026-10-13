@@ -1,0 +1,67 @@
+name: Personal OpenCode MEM preview release
+
+on:
+  push:
+    branches: [opencode-mem-preview]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: linux-x64
+          - runner: macos-15
+            target: darwin-arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-bun
+      - name: Build pinned OpenCode version
+        env:
+          OPENCODE_VERSION: 1.18.34
+        run: |
+          bun run packages/opencode/script/build.ts --single
+          mkdir -p "$RUNNER_TEMP/mem-preview"
+          cp "packages/opencode/dist/opencode-${{ matrix.target }}/bin/opencode" \
+            "$RUNNER_TEMP/mem-preview/opencode-${{ matrix.target }}"
+          chmod 0755 "$RUNNER_TEMP/mem-preview/opencode-${{ matrix.target }}"
+          test "$("$RUNNER_TEMP/mem-preview/opencode-${{ matrix.target }}" --version)" = "$OPENCODE_VERSION"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: opencode-${{ matrix.target }}
+          path: ${{ runner.temp }}/mem-preview/opencode-${{ matrix.target }}
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: opencode-*
+          merge-multiple: true
+          path: dist
+      - name: Verify artifacts and publish immutable preview
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$(./dist/opencode-linux-x64 --version)" = '1.18.34'
+          cd dist
+          sha256sum opencode-darwin-arm64 opencode-linux-x64 > SHA256SUMS
+          cd ..
+          tag="mem-preview-20261013-semver-${GITHUB_SHA:0:12}"
+          gh release create "$tag" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --prerelease \
+            --title "OpenCode MEM preview (Ladder-compatible version)" \
+            --notes "Built from source commit $GITHUB_SHA. The embedded OpenCode version stays at 1.18.34 so LLM Ladder's minimum-version checks accept the free tier. Verify SHA256SUMS before installation." \
+            dist/opencode-darwin-arm64 dist/opencode-linux-x64 dist/SHA256SUMS
