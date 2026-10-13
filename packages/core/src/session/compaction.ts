@@ -34,6 +34,11 @@ const SUMMARY_TEMPLATE = `Output exactly the Markdown structure shown inside <te
 1. [immediate concrete action, or "(none)"]
 2. [next action if known, or "(none)"]
 
+## Decision Records
+\`\`\`json
+[]
+\`\`\`
+
 ## Relevant Files
 - [file or directory path: why it matters, or "(none)"]
 </template>
@@ -41,6 +46,7 @@ const SUMMARY_TEMPLATE = `Output exactly the Markdown structure shown inside <te
 Rules:
 - Keep every section, even when empty.
 - Use terse bullets, not prose paragraphs.
+- In Decision Records, emit a JSON array of durable user decisions only. Each entry must have string fields "subject", "decision", "reason", and "source_ref"; "source_ref" must be the exact source message ID from a [Source message id=... role=user] label. Do not record questions, tentative ideas, assistant proposals, or decisions without an explicit user source; emit [] when none qualify.
 - Preserve exact file paths, symbols, commands, error strings, URLs, and identifiers when known.
 - For source-code reads, summarize relevant behavior and preserve the exact path and line range so the code can be reopened; do not copy large source blocks into the summary.
 - For command and test output, preserve the final exit status, pass/fail counts, important errors, and relevant output from both the beginning and end.

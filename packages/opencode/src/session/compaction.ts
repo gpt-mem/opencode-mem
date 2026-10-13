@@ -22,6 +22,9 @@ import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { buildPrompt } from "@opencode-ai/core/session/compaction"
 import { SessionCompactionEvent } from "@opencode-ai/schema/session-compaction-event"
+import { MemRecordStore } from "@opencode-ai/core/session/mem-record-store"
+import { Hash } from "@opencode-ai/core/util/hash"
+import { Database } from "@opencode-ai/core/database/database"
 
 export const Event = SessionCompactionEvent
 
@@ -90,6 +93,47 @@ export function shouldTriggerReasoningCompaction(input: {
   )
 }
 
+export function decisionRecordsFromSummary(summary: string | undefined, userMessageIDs: ReadonlySet<string>) {
+  if (!summary) return []
+  const block = summary.match(/## Decision Records\s*```json\s*([\s\S]*?)\s*```/i)?.[1]
+  if (!block) return []
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(block)
+  } catch {
+    return []
+  }
+  if (!Array.isArray(parsed)) return []
+  const records = new Map<
+    string,
+    { type: "decision"; subject: string; decision: string; reason?: string; decided_by: string; source_ref: string }
+  >()
+  for (const item of parsed) {
+    if (typeof item !== "object" || item === null || Array.isArray(item)) continue
+    const value = item as Record<string, unknown>
+    if (
+      typeof value.subject !== "string" ||
+      typeof value.decision !== "string" ||
+      typeof value.source_ref !== "string" ||
+      !userMessageIDs.has(value.source_ref)
+    )
+      continue
+    const subject = value.subject.trim()
+    const decision = value.decision.trim()
+    if (!subject || !decision) continue
+    const key = `${subject.toLowerCase()}\n${value.source_ref}`
+    records.set(key, {
+      type: "decision",
+      subject,
+      decision,
+      ...(typeof value.reason === "string" && value.reason.trim() ? { reason: value.reason.trim() } : {}),
+      decided_by: "user",
+      source_ref: `${value.source_ref}#decision:${Hash.sha256(subject.toLowerCase()).slice(0, 16)}`,
+    })
+  }
+  return [...records.values()]
+}
+
 const LADDER_COMPACTION_MODEL = {
   free: { providerID: ProviderV2.ID.make("ladder"), modelID: ModelV2.ID.make("free") },
   standard: { providerID: ProviderV2.ID.make("ladder"), modelID: ModelV2.ID.make("standard") },
@@ -109,6 +153,7 @@ export function compactionModelRef(input: {
 }
 
 const serialize = (message: SessionV1.WithParts) => {
+  const source = `[Source message id=${message.info.id} role=${message.info.role}]`
   if (message.info.role === "user") {
     const text = message.parts
       .filter((part): part is SessionV1.TextPart => part.type === "text" && !part.ignored)
@@ -118,10 +163,11 @@ const serialize = (message: SessionV1.WithParts) => {
     const files = message.parts.flatMap((part) =>
       part.type === "file" ? [`[Attached ${part.mime}: ${part.filename ?? "file"}]`] : [],
     )
-    return [...(text ? [`[User]: ${text}`] : []), ...files].join("\n")
+    return [source, ...(text ? [`[User]: ${text}`] : []), ...files].join("\n")
   }
-  return message.parts
-    .flatMap((part) => {
+  return [
+    source,
+    ...message.parts.flatMap((part) => {
       if (part.type === "text") return part.text ? [`[Assistant]: ${part.text}`] : []
       if (part.type === "reasoning") return part.text ? [`[Assistant reasoning]: ${part.text}`] : []
       if (part.type !== "tool") return []
@@ -137,8 +183,8 @@ const serialize = (message: SessionV1.WithParts) => {
       }
       if (part.state.status === "error") return [call, `[Tool error]: ${part.state.error}`]
       return [call]
-    })
-    .join("\n")
+    }),
+  ].join("\n")
 }
 
 function summaryText(message: SessionV1.WithParts) {
@@ -248,6 +294,7 @@ export const use = serviceUse(Service)
 const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
+    const database = yield* Database.Service
     const config = yield* Config.Service
     const session = yield* Session.Service
     const agents = yield* Agent.Service
@@ -517,6 +564,44 @@ const layer = Layer.effect(
         return "stop"
       }
 
+      const compactedMessage = yield* MessageV2.get({ sessionID: input.sessionID, messageID: msg.id }).pipe(
+        Effect.provideService(Database.Service, database),
+        Effect.orDie,
+      )
+      const allMessages = yield* session.messages({ sessionID: input.sessionID }).pipe(Effect.orDie)
+      const userMessageIDs = new Set(
+        allMessages
+          .filter(
+            (item) =>
+              item.info.role === "user" &&
+              !item.parts.some((part) => part.type === "compaction") &&
+              item.parts.some((part) => !("synthetic" in part) || !part.synthetic),
+          )
+          .map((item) => item.info.id),
+      )
+      const decisions =
+        compactedMessage.info.role === "assistant"
+          ? decisionRecordsFromSummary(summaryText(compactedMessage), userMessageIDs)
+          : []
+      if (decisions.length > 0) {
+        const written = yield* MemRecordStore.writeBatch(database.db, {
+          sessionID: input.sessionID,
+          agent: "compaction",
+          entries: decisions,
+        }).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("failed to persist compaction decisions", { sessionID: input.sessionID, cause }).pipe(
+              Effect.as(undefined),
+            ),
+          ),
+        )
+        if (written && !written.ok)
+          yield* Effect.logWarning("compaction decisions were not persisted", {
+            sessionID: input.sessionID,
+            error: written.error.kind,
+          })
+      }
+
       if (compactionPart && selected.tail_start_id && compactionPart.tail_start_id !== selected.tail_start_id) {
         yield* session.updatePart({
           ...compactionPart,
@@ -653,6 +738,7 @@ export const node = LayerNode.make({
   service: Service,
   layer: layer,
   deps: [
+    Database.node,
     Config.node,
     Session.node,
     Agent.node,
