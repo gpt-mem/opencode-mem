@@ -812,6 +812,7 @@ describe("session.llm.stream", () => {
 
           const headers = (yield* Effect.promise(() => request)).headers
           expect(headers.get("x-opencode-session-id")).toBe(sessionID)
+          expect(headers.get("x-opencode-run-id")).toBe(user.id)
           expect(headers.get("x-opencode-parent-session-id")).toBe(parentSessionID ?? null)
           expect(headers.get("x-parent-session-id")).toBe(parentSessionID ?? null)
           if (input.providerID.startsWith("opencode")) {
