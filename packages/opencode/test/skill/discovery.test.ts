@@ -175,6 +175,7 @@ describe("Discovery.pull", () => {
       mutableContent = "# New"
       mutableFiles = ["SKILL.md"]
       yield* discovery.pull(url)
+      expect(mutableDownloadCount).toBe(3)
       expect(yield* Effect.promise(() => readFile(path.join(second[0], ".opencode-version"), "utf8"))).toBe("3")
       expect(yield* Effect.promise(() => readFile(path.join(second[0], "SKILL.md"), "utf8"))).toBe("# New")
       expect(yield* Effect.promise(() => Bun.file(path.join(second[0], "SKILL.md")).text())).toBe("# New")
