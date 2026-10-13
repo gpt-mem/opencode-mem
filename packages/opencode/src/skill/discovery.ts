@@ -35,14 +35,16 @@ const layer: Layer.Layer<Service, never, FSUtil.Service | Path.Path | HttpClient
     const cache = path.join(Global.Path.cache, "skills")
 
     // On Windows a just-read SKILL.md can briefly keep the directory handle
-    // open. Retry only sharing violations during the atomic cache swap; a
-    // missing path or another permanent error still fails immediately.
+    // open. Bun can normalize that rename failure as Unknown, so bound the
+    // retry to this Windows cache swap; a missing path still fails immediately.
     const rename = (from: string, to: string) =>
       fs.rename(from, to).pipe(
         Effect.retry({
           while: (error) =>
             process.platform === "win32" &&
-            (error.reason._tag === "Busy" || error.reason._tag === "PermissionDenied"),
+            (error.reason._tag === "Busy" ||
+              error.reason._tag === "PermissionDenied" ||
+              error.reason._tag === "Unknown"),
           schedule: Schedule.spaced("100 millis").pipe(Schedule.both(Schedule.recurs(30))),
         }),
       )
