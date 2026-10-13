@@ -22,11 +22,18 @@ test("compaction prompt preserves detailed work state and relevant files", () =>
   expect(prompt).toContain("The latest run is the complete result for its recorded command")
   expect(prompt).toContain("from any runner")
   expect(prompt).toContain("Vitest, Jest, Mocha, Playwright, Cypress, pytest, go test, and cargo test")
-  expect(prompt).toContain("Keep the first substantive reasoning block as an explicit initial plan/decision anchor")
-  expect(prompt).toContain("Give recent reasoning the most detail, then decrease detail gradually with age")
+  expect(prompt).toContain("Keep the first substantive reasoning paragraph as an explicit initial plan/decision anchor")
+  expect(prompt).toContain("Give the latest user request and the immediately preceding substantive assistant result the most detail")
+  expect(prompt).toContain("reduce detail progressively for each older turn")
   expect(prompt).toContain("retain roughly 30% or more of its distinct substantive points when space allows")
   expect(prompt).toContain("semantic guardrail, not a quota for verbatim text or tokens")
   expect(prompt).toContain("Preserve more when older reasoning contains unique evidence")
+  expect(prompt).toContain("preserving paragraph integrity")
+  expect(prompt).toContain("do not split it into disconnected fragments")
+  expect(prompt).toContain("the immediately preceding substantive assistant result")
+  expect(prompt).toContain("short or elliptical")
+  expect(prompt).toContain("Apply exponential recency weighting")
+  expect(prompt).toContain("as a separate anchor with extra weight regardless of age")
 })
 
 test("compaction prompt gives update instructions for a prior summary", () => {
@@ -43,6 +50,15 @@ test("compaction prompt gives update instructions for a prior summary", () => {
   expect(prompt).toContain('Move completed work from "Active" to "Completed".')
   expect(prompt).toContain('Update "Objective" and "Next Move" to reflect the current work state.')
   expect(prompt).toContain("carry it forward through every summary update")
+})
+
+test("compaction prompt keeps the result needed to understand a short follow-up", () => {
+  const prompt = SessionCompaction.buildPrompt({
+    context: ["[Assistant]: The run failed because the provider timed out.", "[User]: why?"],
+  })
+
+  expect(prompt.indexOf("The run failed because the provider timed out.")).toBeLessThan(prompt.indexOf("[User]: why?"))
+  expect(prompt).toContain("When a user message is short or elliptical")
 })
 
 test("compaction describes tool media without embedding base64", () => {
