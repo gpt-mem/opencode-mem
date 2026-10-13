@@ -47,18 +47,21 @@ type CompletedCompaction = {
   summary: string | undefined
 }
 
-const STANDARD_LADDER_MODEL = {
-  providerID: ProviderV2.ID.make("ladder"),
-  modelID: ModelV2.ID.make("standard"),
+const LADDER_COMPACTION_MODEL = {
+  free: { providerID: ProviderV2.ID.make("ladder"), modelID: ModelV2.ID.make("free") },
+  standard: { providerID: ProviderV2.ID.make("ladder"), modelID: ModelV2.ID.make("standard") },
 }
 
-/** Route Ladder compaction through the Standard ladder, regardless of the active rung. */
+/** Keep Free sessions free; route other Ladder compaction through Standard. */
 export function compactionModelRef(input: {
   configured?: { providerID: ProviderV2.ID; modelID: ModelV2.ID }
   session: { providerID: ProviderV2.ID; modelID: ModelV2.ID }
 }) {
   if (input.configured) return input.configured
-  if (input.session.providerID === "ladder") return STANDARD_LADDER_MODEL
+  if (input.session.providerID === "ladder") {
+    if (input.session.modelID === "free") return LADDER_COMPACTION_MODEL.free
+    return LADDER_COMPACTION_MODEL.standard
+  }
   return input.session
 }
 

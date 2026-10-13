@@ -57,7 +57,7 @@ afterEach(() => {
 })
 
 describe("session.compaction.model", () => {
-  test("uses Standard Ladder for Ladder sessions, including Fast and Free", () => {
+  test("keeps Free compaction on Free and routes paid Ladder modes through Standard", () => {
     expect(
       compactionModelRef({
         session: { providerID: ProviderV2.ID.make("ladder"), modelID: ModelV2.ID.make("fast") },
@@ -67,7 +67,7 @@ describe("session.compaction.model", () => {
       compactionModelRef({
         session: { providerID: ProviderV2.ID.make("ladder"), modelID: ModelV2.ID.make("free") },
       }),
-    ).toEqual({ providerID: ProviderV2.ID.make("ladder"), modelID: ModelV2.ID.make("standard") })
+    ).toEqual({ providerID: ProviderV2.ID.make("ladder"), modelID: ModelV2.ID.make("free") })
   })
 
   test("preserves explicit compaction model and non-Ladder session model", () => {
