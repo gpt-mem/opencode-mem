@@ -47,6 +47,21 @@ type CompletedCompaction = {
   summary: string | undefined
 }
 
+const STANDARD_LADDER_MODEL = {
+  providerID: ProviderV2.ID.make("ladder"),
+  modelID: ModelV2.ID.make("standard"),
+}
+
+/** Route Ladder compaction through the Standard ladder, regardless of the active rung. */
+export function compactionModelRef(input: {
+  configured?: { providerID: ProviderV2.ID; modelID: ModelV2.ID }
+  session: { providerID: ProviderV2.ID; modelID: ModelV2.ID }
+}) {
+  if (input.configured) return input.configured
+  if (input.session.providerID === "ladder") return STANDARD_LADDER_MODEL
+  return input.session
+}
+
 const serialize = (message: SessionV1.WithParts) => {
   if (message.info.role === "user") {
     const text = message.parts
@@ -352,9 +367,11 @@ const layer = Layer.effect(
       }
 
       const agent = yield* agents.get("compaction")
-      const model = agent.model
-        ? yield* provider.getModel(agent.model.providerID, agent.model.modelID).pipe(Effect.orDie)
-        : yield* provider.getModel(userMessage.model.providerID, userMessage.model.modelID).pipe(Effect.orDie)
+      const selectedModel = compactionModelRef({
+        configured: agent.model,
+        session: userMessage.model,
+      })
+      const model = yield* provider.getModel(selectedModel.providerID, selectedModel.modelID).pipe(Effect.orDie)
       const cfg = yield* config.get()
       const history = compactionPart && messages.at(-1)?.info.id === input.parentID ? messages.slice(0, -1) : messages
       const prior = completedCompactions(history)

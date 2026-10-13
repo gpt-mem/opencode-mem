@@ -8,7 +8,7 @@ import { Cause, Deferred, Effect, Exit, Fiber, Layer, Schema } from "effect"
 import * as Stream from "effect/Stream"
 import { Config } from "@/config/config"
 import { LLM } from "../../src/session/llm"
-import { SessionCompaction } from "../../src/session/compaction"
+import { compactionModelRef, SessionCompaction } from "../../src/session/compaction"
 import { Token } from "@/util/token"
 import { Plugin } from "../../src/plugin"
 import { provideTmpdirInstance, TestInstance } from "../fixture/fixture"
@@ -54,6 +54,36 @@ const basicUsage = () => usage({ inputTokens: 1, outputTokens: 1, totalTokens: 2
 
 afterEach(() => {
   mock.restore()
+})
+
+describe("session.compaction.model", () => {
+  test("uses Standard Ladder for Ladder sessions, including Fast and Free", () => {
+    expect(
+      compactionModelRef({
+        session: { providerID: ProviderV2.ID.make("ladder"), modelID: ModelV2.ID.make("fast") },
+      }),
+    ).toEqual({ providerID: ProviderV2.ID.make("ladder"), modelID: ModelV2.ID.make("standard") })
+    expect(
+      compactionModelRef({
+        session: { providerID: ProviderV2.ID.make("ladder"), modelID: ModelV2.ID.make("free") },
+      }),
+    ).toEqual({ providerID: ProviderV2.ID.make("ladder"), modelID: ModelV2.ID.make("standard") })
+  })
+
+  test("preserves explicit compaction model and non-Ladder session model", () => {
+    const configured = { providerID: ProviderV2.ID.make("custom"), modelID: ModelV2.ID.make("summary") }
+    expect(
+      compactionModelRef({
+        configured,
+        session: { providerID: ProviderV2.ID.make("ladder"), modelID: ModelV2.ID.make("free") },
+      }),
+    ).toBe(configured)
+    expect(
+      compactionModelRef({
+        session: { providerID: ProviderV2.ID.make("anthropic"), modelID: ModelV2.ID.make("sonnet") },
+      }),
+    ).toEqual({ providerID: ProviderV2.ID.make("anthropic"), modelID: ModelV2.ID.make("sonnet") })
+  })
 })
 
 function createModel(opts: {
