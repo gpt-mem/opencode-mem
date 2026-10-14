@@ -1,0 +1,130 @@
+name: mem-gpt-auth
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/mem-gpt-auth.yml
+      - .github/workflows/test.yml
+      - packages/app/src/components/dialog-connect-provider.tsx
+      - packages/app/src/components/dialog-mem-gpt.tsx
+      - packages/app/src/hooks/use-providers.ts
+      - packages/core/src/v1/config/mcp.ts
+      - packages/opencode/src/mcp/**
+      - packages/opencode/src/provider/provider.ts
+      - packages/opencode/test/mcp/**
+      - packages/opencode/test/lib/cli-process.ts
+      - packages/opencode/test/cli/run/cli-ladder-recovery.test.ts
+      - packages/opencode/test/session/prompt.test.ts
+  push:
+    branches:
+      - dev
+      - out-of-box-integration
+    paths:
+      - .github/workflows/mem-gpt-auth.yml
+      - .github/workflows/test.yml
+      - packages/app/src/components/dialog-connect-provider.tsx
+      - packages/app/src/components/dialog-mem-gpt.tsx
+      - packages/app/src/hooks/use-providers.ts
+      - packages/core/src/v1/config/mcp.ts
+      - packages/opencode/src/mcp/**
+      - packages/opencode/src/provider/provider.ts
+      - packages/opencode/test/mcp/**
+      - packages/opencode/test/lib/cli-process.ts
+      - packages/opencode/test/cli/run/cli-ladder-recovery.test.ts
+      - packages/opencode/test/session/prompt.test.ts
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  focused-tests:
+    name: Mem-GPT auth tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - uses: ./.github/actions/setup-bun
+
+      - name: Test MCP credential forwarding
+        working-directory: packages/opencode
+        run: bun test test/mcp/headers.test.ts
+
+      - name: Typecheck core config
+        working-directory: packages/core
+        run: bun run typecheck
+
+      - name: Typecheck OpenCode and app
+        run: |
+          bun run --cwd packages/opencode typecheck
+          bun run --cwd packages/app typecheck
+
+  container-smoke:
+    name: Run OpenCode in a container
+    needs: focused-tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - uses: ./.github/actions/setup-bun
+
+      - name: Start OpenCode from this checkout inside Bun container
+        env:
+          CONTAINER_NAME: opencode-mem-gpt-${{ github.run_id }}
+        run: |
+          docker run --rm \
+            --mount "type=bind,source=$GITHUB_WORKSPACE,target=/workspace" \
+            --workdir /workspace \
+            --entrypoint bun \
+            oven/bun:1.3.14 \
+            run --cwd packages/opencode src/index.ts --version
+
+          docker run --detach \
+            --name "$CONTAINER_NAME" \
+            --publish 127.0.0.1:4096:4096 \
+            --mount "type=bind,source=$GITHUB_WORKSPACE,target=/workspace" \
+            --workdir /workspace \
+            --entrypoint bun \
+            --env XDG_DATA_HOME=/tmp/opencode-ci/share \
+            --env XDG_CACHE_HOME=/tmp/opencode-ci/cache \
+            --env XDG_CONFIG_HOME=/tmp/opencode-ci/config \
+            --env XDG_STATE_HOME=/tmp/opencode-ci/state \
+            --env OPENCODE_DB=:memory: \
+            oven/bun:1.3.14 \
+            run --cwd packages/opencode src/index.ts serve --hostname 0.0.0.0 --port 4096
+
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:4096/global/health; then
+              exit 0
+            fi
+            sleep 2
+          done
+
+          docker logs "$CONTAINER_NAME"
+          exit 1
+
+      - name: Stop OpenCode container
+        if: always()
+        env:
+          CONTAINER_NAME: opencode-mem-gpt-${{ github.run_id }}
+        run: docker rm --force "$CONTAINER_NAME" || true
+
+  build:
+    name: Build OpenCode after container smoke
+    needs: container-smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - uses: ./.github/actions/setup-bun
+
+      - name: Build Linux OpenCode binary
+        run: ./packages/opencode/script/build.ts --single --skip-install
+
+      - name: Verify built binary
+        run: ./packages/opencode/dist/opencode-linux-x64/bin/opencode --version
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: opencode-mem-gpt-linux-x64
+          path: packages/opencode/dist/opencode-linux-x64/bin/opencode

@@ -3,6 +3,9 @@ import { Effect } from "effect"
 import { cliIt } from "../../lib/cli-process"
 import { testProviderConfig } from "../../lib/test-provider"
 
+const processTimeoutMs = process.platform === "win32" ? 60_000 : 30_000
+const testTimeoutMs = process.platform === "win32" ? 90_000 : 45_000
+
 cliIt.concurrent(
   "delivers a recovered ladder response and exits successfully",
   ({ llm, opencode }) =>
@@ -10,7 +13,7 @@ cliIt.concurrent(
       yield* llm.error(400, { error: { message: "every rung failed" } })
       yield* llm.text("audit-recovered")
       const result = yield* opencode.run("synthetic recovery check", {
-        timeoutMs: 30_000,
+        timeoutMs: processTimeoutMs,
         env: {
           OPENCODE_CONFIG_CONTENT: JSON.stringify({
             ...testProviderConfig(llm.url),
@@ -24,7 +27,7 @@ cliIt.concurrent(
       expect(result.stderr).toContain("Retrying provider ladder (attempt 1, in 0s)")
       expect(result.stderr).not.toContain("every rung failed")
     }),
-  45_000,
+  testTimeoutMs,
 )
 
 cliIt.live(
@@ -42,7 +45,7 @@ cliIt.live(
         },
       })
       const result = yield* opencode.run("synthetic attach recovery check", {
-        timeoutMs: 30_000,
+        timeoutMs: processTimeoutMs,
         extraArgs: ["--attach", server.url],
       })
       expect(result.exitCode, result.stderr).toBe(0)
@@ -51,7 +54,7 @@ cliIt.live(
       expect(result.stderr).toContain("Retrying provider ladder (attempt 1, in 0s)")
       expect(result.stderr).not.toContain("every rung failed")
     }),
-  45_000,
+  testTimeoutMs,
 )
 
 cliIt.concurrent(
@@ -62,7 +65,7 @@ cliIt.concurrent(
       yield* llm.text("json-recovered")
       const result = yield* opencode.run("synthetic JSON recovery check", {
         format: "json",
-        timeoutMs: 30_000,
+        timeoutMs: processTimeoutMs,
         env: {
           OPENCODE_CONFIG_CONTENT: JSON.stringify({
             ...testProviderConfig(llm.url),
@@ -81,7 +84,7 @@ cliIt.concurrent(
         true,
       )
     }),
-  45_000,
+  testTimeoutMs,
 )
 
 cliIt.live(
@@ -99,7 +102,7 @@ cliIt.live(
       expect(result.stderr).toContain("Waiting for provider; last session update")
       expect(result.stdout).toContain("slow-finished")
     }),
-  45_000,
+  testTimeoutMs,
 )
 
 cliIt.live(

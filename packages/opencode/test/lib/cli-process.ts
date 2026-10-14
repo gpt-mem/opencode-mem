@@ -210,7 +210,7 @@ export function withCliFixture<A, E>(
 
     const spawn = Effect.fn("opencode.spawn")(function* (args: string[], opts?: SpawnOpts) {
       const start = Date.now()
-      const timeoutMs = opts?.timeoutMs ?? 30_000
+      const timeoutMs = opts?.timeoutMs ?? (process.platform === "win32" ? 60_000 : 30_000)
       // stdin: "ignore" so the child doesn't see a piped stdin and block
       // on `Bun.stdin.text()` (see src/cli/cmd/run.ts — non-TTY stdin is
       // consumed as the prompt). The old Process.run wrapper defaulted to
@@ -533,9 +533,5 @@ export const cliIt = {
   ) =>
     // Each fixture starts a real CLI and LLM server. Running many of them at
     // once saturates CI and turns bounded subprocess checks into false timeouts.
-    test(
-      name,
-      () => Effect.runPromise(Effect.scoped(withCliFixture(body))),
-      opts,
-    ),
+    test(name, () => Effect.runPromise(Effect.scoped(withCliFixture(body))), opts),
 }
