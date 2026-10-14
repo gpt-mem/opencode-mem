@@ -1157,6 +1157,8 @@ export type McpRemoteConfig = {
   headers?: {
     [key: string]: string
   }
+  /** Provider ID whose API key is sent as a Bearer token */
+  authProviderID?: string
   /**
    * OAuth authentication configuration for the MCP server. Set to false to disable OAuth auto-detection.
    */

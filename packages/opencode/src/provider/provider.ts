@@ -1849,7 +1849,8 @@ const layer = Layer.effect(
 
         const timedFetch = timeoutFetch(options)
         options["fetch"] =
-          model.providerID === "ladder" && model.api.npm === "@ai-sdk/openai-compatible"
+          (model.providerID === "ladder" || model.providerID === "mem-gpt") &&
+          model.api.npm === "@ai-sdk/openai-compatible"
             ? (input: RequestInfo | URL, init?: RequestInit) => LadderTransport.fetchRequest(input, init, timedFetch)
             : timedFetch
         delete options["chunkTimeout"]

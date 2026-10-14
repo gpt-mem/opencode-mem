@@ -38,6 +38,7 @@ import { useSettings } from "@/context/settings"
 import { popularProviders, useProviders } from "@/hooks/use-providers"
 import { CustomProviderForm } from "./dialog-custom-provider"
 import { decode64 } from "@/utils/base64"
+import { MemGPTConnectForm } from "./dialog-mem-gpt"
 
 const CUSTOM_ID = "_custom"
 type ConnectMethod = Extract<IntegrationMethod, { type: "key" | "oauth" }>
@@ -76,6 +77,9 @@ export const DialogConnectProvider: Component<{
       <Switch>
         <Match when={controller.selected() === CUSTOM_ID}>
           <CustomProviderForm autofocus={!newLayout()} />
+        </Match>
+        <Match when={controller.selected() === "mem-gpt"}>
+          <MemGPTConnectForm />
         </Match>
         <Match when={controller.selected() && controller.selected() !== CUSTOM_ID ? controller.selected() : undefined}>
           {(provider) => (
@@ -180,7 +184,7 @@ function ProviderPicker(props: {
       key={(x) => x?.id}
       items={() => {
         language.locale()
-        return [{ id: CUSTOM_ID, name: customLabel() }, ...providers.all().values()]
+        return [{ id: CUSTOM_ID, name: customLabel() }, { id: "mem-gpt", name: "Mem-GPT" }, ...providers.all().values()]
       }}
       filterKeys={["id", "name"]}
       groupBy={(x) => (popularProviders.includes(x.id) ? popularGroup() : otherGroup())}
@@ -237,12 +241,12 @@ function ProviderPickerV2(props: {
     active: undefined as string | undefined,
     connecting: undefined as string | undefined,
   })
-  const featured = ["opencode", "opencode-go", "anthropic", "openai", "google", "openrouter", "vercel"]
+  const featured = ["mem-gpt", "opencode", "opencode-go", "anthropic", "openai", "google", "openrouter", "vercel"]
   const custom = () => ({ id: CUSTOM_ID, name: language.t("dialog.provider.custom.label") })
   const all = createMemo(() => {
     language.locale()
     const query = store.filter.trim().toLowerCase()
-    const values = [custom(), ...providers.all().values()]
+    const values = [custom(), { id: "mem-gpt", name: "Mem-GPT" }, ...providers.all().values()]
     if (!query) return values
     return values.filter((provider) => `${provider.id} ${provider.name}`.toLowerCase().includes(query))
   })

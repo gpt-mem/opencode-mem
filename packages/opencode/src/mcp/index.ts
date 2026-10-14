@@ -34,6 +34,7 @@ import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { McpCatalog } from "./catalog"
 import { McpEvent } from "@opencode-ai/schema/mcp-event"
 import { McpBrowser } from "./browser"
+import { Auth } from "@/auth"
 
 const DEFAULT_TIMEOUT = 30_000
 const CLIENT_OPTIONS = {
@@ -206,6 +207,7 @@ const layer = Layer.effect(
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
     const auth = yield* McpAuth.Service
+    const authStore = yield* Auth.Service
     const events = yield* EventV2Bridge.Service
     const browser = yield* McpBrowser.Service
 
@@ -247,6 +249,9 @@ const layer = Layer.effect(
         }
       }
       let authProvider: McpOAuthProvider | undefined
+      const credential = mcp.authProviderID ? yield* authStore.get(mcp.authProviderID) : undefined
+      const headers = new Headers(mcp.headers)
+      if (credential?.type === "api") headers.set("Authorization", `Bearer ${credential.key}`)
 
       if (!oauthDisabled) {
         authProvider = new McpOAuthProvider(
@@ -271,14 +276,14 @@ const layer = Layer.effect(
           name: "StreamableHTTP",
           transport: new StreamableHTTPClientTransport(url, {
             authProvider,
-            requestInit: mcp.headers ? { headers: mcp.headers } : undefined,
+            requestInit: { headers },
           }),
         },
         {
           name: "SSE",
           transport: new SSEClientTransport(url, {
             authProvider,
-            requestInit: mcp.headers ? { headers: mcp.headers } : undefined,
+            requestInit: { headers },
           }),
         },
       ]
@@ -998,7 +1003,7 @@ export type AuthStatus = "authenticated" | "expired" | "not_authenticated"
 export const node = LayerNode.make({
   service: Service,
   layer: layer,
-  deps: [CrossSpawnSpawner.node, McpAuth.node, EventV2Bridge.node, Config.node, McpBrowser.node],
+  deps: [CrossSpawnSpawner.node, McpAuth.node, Auth.node, EventV2Bridge.node, Config.node, McpBrowser.node],
 })
 
 export * as MCP from "."

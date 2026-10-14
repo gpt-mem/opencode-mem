@@ -21060,6 +21060,10 @@
               "type": "string"
             }
           },
+          "authProviderID": {
+            "type": "string",
+            "description": "Provider ID whose API key is sent as a Bearer token"
+          },
           "oauth": {
             "anyOf": [
               {

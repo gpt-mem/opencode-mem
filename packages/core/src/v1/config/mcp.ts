@@ -50,6 +50,9 @@ export const Remote = Schema.Struct({
   headers: Schema.optional(Schema.Record(Schema.String, Schema.String)).annotate({
     description: "Headers to send with the request",
   }),
+  authProviderID: Schema.optional(Schema.String).annotate({
+    description: "Provider ID whose API key is sent as a Bearer token",
+  }),
   oauth: Schema.optional(Schema.Union([OAuth, Schema.Literal(false)])).annotate({
     description: "OAuth authentication configuration for the MCP server. Set to false to disable OAuth auto-detection.",
   }),
