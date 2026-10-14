@@ -23,7 +23,7 @@ export function MemGPTConnectForm() {
   const mutation = useMutation(() => ({
     mutationFn: async () => {
       const token = key().trim()
-      if (!token) throw new Error(language.t("memGPT.keyRequired"))
+      if (!token) throw new Error(language.t("provider.connect.apiKey.required"))
       if ((await serverSDK().protocol) !== "v1") throw new Error(language.t("provider.custom.unavailable"))
 
       const current = serverSync().data.config
@@ -63,8 +63,8 @@ export function MemGPTConnectForm() {
       showToast({
         variant: "success",
         icon: "circle-check",
-        title: language.t("memGPT.connected"),
-        description: language.t(enableMcp() ? "memGPT.connectedWithMcp" : "memGPT.connectedMcpDisabled"),
+          title: language.t("provider.connect.toast.connected.title", { provider: "Mem-GPT" }),
+          description: language.t("provider.connect.toast.connected.description", { provider: "Mem-GPT" }),
       })
     },
     onError: (error) => {
@@ -84,22 +84,23 @@ export function MemGPTConnectForm() {
         mutation.mutate()
       }}
     >
-      <div class="text-14-regular text-text-base">{language.t("memGPT.description")}</div>
+      <div class="text-14-regular text-text-base">
+        {language.t("provider.connect.apiKey.description", { provider: "Mem-GPT" })}
+      </div>
       <TextField
         type="password"
         autofocus
-        label={language.t("memGPT.tokenLabel")}
-        placeholder={language.t("memGPT.tokenPlaceholder")}
+        label={language.t("provider.connect.apiKey.label", { provider: "Mem-GPT" })}
+        placeholder={language.t("provider.connect.apiKey.placeholder")}
         value={key()}
         onChange={setKey}
       />
       <label class="flex items-start gap-2 text-14-regular text-text-base">
         <input type="checkbox" checked={enableMcp()} onChange={(event) => setEnableMcp(event.currentTarget.checked)} />
-        <span>{language.t("memGPT.enableMcp")}</span>
+        <span>{language.t("common.connect")} MCP</span>
       </label>
-      <p class="text-12-regular text-text-weak">{language.t("memGPT.localStorageNote")}</p>
       <Button type="submit" disabled={mutation.isPending} class="self-end">
-        {mutation.isPending ? language.t("common.loading") : language.t("memGPT.connect")}
+        {mutation.isPending ? language.t("common.loading") : language.t("common.connect")}
       </Button>
     </form>
   )
