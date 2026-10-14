@@ -30,6 +30,7 @@ import { SessionEvent } from "../event"
 import { SessionHistory } from "../history"
 import { MemoryContext } from "../memory-context"
 import { CacheMark } from "../cache-mark"
+import { MemDebugLog } from "../mem-debug-log"
 import { Flag } from "../../flag/flag"
 import { SessionInput } from "../input"
 import { SessionSchema } from "../schema"
@@ -219,6 +220,14 @@ const layer = Layer.effect(
             return MemoryContext.project(rawMessages, { sessionID: session.id, markIndex: mark })
           }).pipe(Effect.catchDefect(() => Effect.succeed(rawMessages)))
         : MemoryContext.project(rawMessages, { sessionID: session.id })
+  if (Flag.OPENCODE_MEMORY_CONTEXT_DEBUG) {
+    const rawChars = JSON.stringify(rawMessages).length
+    const projectedChars = JSON.stringify(context).length
+    MemDebugLog.write(
+      "memory-context.log",
+      `[context-size] session=${session.id} rawchars=${rawChars} projectedchars=${projectedChars} cache_mark=${cacheMarkOn}`,
+    )
+  }
       const isLastStep = agent.info?.steps !== undefined && currentStep >= agent.info.steps
       const toolMaterialization = isLastStep ? undefined : yield* tools.materialize(agent.info?.permissions)
       const promptCacheKey = /^ses_[0-9a-f]{64}$/.test(session.id) ? session.id.slice(4) : session.id
@@ -315,17 +324,24 @@ const layer = Layer.effect(
             (yield* restore(recoverOverflow({ sessionID: session.id, entries, model, request })))
           )
             return yield* Effect.die(continueAfterOverflowCompaction(currentStep))
-          if (overflowFailure) yield* publish(overflowFailure)
-          // Issue #39 (ledger hook): a failed, timed-out or aborted attempt
-          // leaves the provider cache unverifiable — collapse the mark so the
-          // next attempt sends the compact projection instead of
-          // resuscitating a full verbatim prefix into a cold cache. The next
-          // confirmed response self-heals it from usage (ARCHITECTURE §13).
-          // Context overflow is excluded: the provider rejected the request
-          // before touching the cache, so the confirmed mark still holds.
-          const attemptFailed =
-            (stream._tag === "Failure" && !isContextOverflowFailure(failure)) ||
-            (publisher.hasProviderError() && !isContextOverflowFailure(overflowFailure ?? failure))
+           // Issue #112: ladder sometimes ends the stream successfully without
+           // producing an assistant answer (no output/no response). Treat that
+           // as a real attempt failure so the cache mark collapses and the next
+           // attempt can rebuild from a safe projection.
+           const attemptFailed =
+             (stream._tag === "Failure" && !isContextOverflowFailure(failure)) ||
+             (publisher.hasProviderError() && !isContextOverflowFailure(overflowFailure ?? failure)) ||
+             !publisher.hasActiveAssistant()
+           if (overflowFailure) yield* publish(overflowFailure)
+           const autoCompact = !publisher.hasActiveAssistant() && !overflowFailure && recoverOverflow !== undefined
+           if (
+             autoCompact &&
+             JSON.stringify(context).length >= 100_000 &&
+             stream._tag !== "Failure"
+           ) {
+             const compacted = yield* recoverOverflow({ sessionID: session.id, entries, model, request })
+             if (compacted) return yield* Effect.die(continueAfterOverflowCompaction(currentStep))
+           }
           if (cacheMarkOn && attemptFailed)
             yield* CacheMark.reset(db, cacheMarkKey).pipe(Effect.catchDefect(() => Effect.void))
           const llmFailure = failure instanceof LLMError ? failure : undefined
