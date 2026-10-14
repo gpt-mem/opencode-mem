@@ -80,9 +80,8 @@ const layer = Layer.effect(
   Effect.gen(function* () {
     const mcp = yield* MCP.Service
     const init = Effect.fn("SkillDelivery.init")(function* () {
-      yield* consumeManifest(mcp).pipe(Effect.catchCause(() => Effect.void))
+      yield* Effect.logInfo("skill delivery noop init")
     })
-    yield* init().pipe(Effect.catchCause((cause) => Effect.logWarning("skill delivery failed", { cause })))
     return Service.of({ init })
   }),
 )

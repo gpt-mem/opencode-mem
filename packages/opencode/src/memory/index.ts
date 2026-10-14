@@ -17,15 +17,10 @@ const layer = Layer.effect(
   Effect.gen(function* () {
     const database = yield* Database.Service
     const init = Effect.fn("Memory.init")(function* () {
-      // Touch the operational-memory store so its tables/indexes are reachable
-      // from the standard agent data path. Memory failures must never break
-      // startup or tool registration.
-      yield* database.db
-        .select({ id: MemRecordTable.id })
-        .from(MemRecordTable)
-        .limit(1)
-        .all()
-        .pipe(Effect.catch((error) => Effect.logWarning("memory init failed", { error })))
+      // The operational-memory store lives on the standard agent data path and
+      // is created lazily by the database layer; keep init intentionally
+      // lightweight so memory problems can never block tool registration.
+      yield* Effect.void
     })
     return Service.of({ init })
   }),
