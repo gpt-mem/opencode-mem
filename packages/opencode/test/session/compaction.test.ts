@@ -8,7 +8,15 @@ import { Cause, Deferred, Effect, Exit, Fiber, Layer, Schema } from "effect"
 import * as Stream from "effect/Stream"
 import { Config } from "@/config/config"
 import { LLM } from "../../src/session/llm"
-import { SessionCompaction } from "../../src/session/compaction"
+import {
+  compactionModelRef,
+  decisionRecordsFromSummary,
+  REASONING_COMPACTION_INCREMENTAL_CHARS,
+  REASONING_COMPACTION_INITIAL_CHARS,
+  SessionCompaction,
+  shouldCompactReasoning,
+  shouldTriggerReasoningCompaction,
+} from "../../src/session/compaction"
 import { Token } from "@/util/token"
 import { Plugin } from "../../src/plugin"
 import { provideTmpdirInstance, TestInstance } from "../fixture/fixture"
@@ -20,6 +28,7 @@ import { SessionSummary } from "../../src/session/summary"
 import { SessionV2 } from "@opencode-ai/core/session"
 import { SessionExecution } from "@opencode-ai/core/session/execution"
 import { SessionProjector } from "@opencode-ai/core/session/projector"
+import { MemRecordTable } from "@opencode-ai/core/session/sql"
 
 import { Provider } from "@/provider/provider"
 import * as SessionProcessorModule from "../../src/session/processor"
@@ -33,6 +42,7 @@ import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
+import { eq } from "drizzle-orm"
 
 const summary = Layer.succeed(
   SessionSummary.Service,
@@ -54,6 +64,99 @@ const basicUsage = () => usage({ inputTokens: 1, outputTokens: 1, totalTokens: 2
 
 afterEach(() => {
   mock.restore()
+})
+
+describe("session.compaction.model", () => {
+  test("keeps Free compaction on Free and routes paid Ladder modes through Standard", () => {
+    expect(
+      compactionModelRef({
+        session: { providerID: ProviderV2.ID.make("ladder"), modelID: ModelV2.ID.make("fast") },
+      }),
+    ).toEqual({ providerID: ProviderV2.ID.make("ladder"), modelID: ModelV2.ID.make("standard") })
+    expect(
+      compactionModelRef({
+        session: { providerID: ProviderV2.ID.make("ladder"), modelID: ModelV2.ID.make("free") },
+      }),
+    ).toEqual({ providerID: ProviderV2.ID.make("ladder"), modelID: ModelV2.ID.make("free") })
+  })
+
+  test("preserves explicit compaction model and non-Ladder session model", () => {
+    const configured = { providerID: ProviderV2.ID.make("custom"), modelID: ModelV2.ID.make("summary") }
+    expect(
+      compactionModelRef({
+        configured,
+        session: { providerID: ProviderV2.ID.make("ladder"), modelID: ModelV2.ID.make("free") },
+      }),
+    ).toBe(configured)
+    expect(
+      compactionModelRef({
+        session: { providerID: ProviderV2.ID.make("anthropic"), modelID: ModelV2.ID.make("sonnet") },
+      }),
+    ).toEqual({ providerID: ProviderV2.ID.make("anthropic"), modelID: ModelV2.ID.make("sonnet") })
+  })
+})
+
+describe("session.compaction.reasoning threshold", () => {
+  const messages = (sizes: number[], hasSummary = false) =>
+    [
+      ...(hasSummary
+        ? [{ info: { role: "assistant", summary: true, finish: "stop" }, parts: [] }]
+        : []),
+      {
+        info: { role: "assistant" },
+        parts: sizes.map((size) => ({ type: "reasoning", text: "r".repeat(size) })),
+      },
+    ]
+
+  test("uses raw reasoning thresholds and only triggers after a completed Ladder turn", () => {
+    expect(REASONING_COMPACTION_INITIAL_CHARS).toBe(100_000)
+    expect(shouldCompactReasoning(messages([60_000, 39_999]))).toBe(false)
+    expect(shouldCompactReasoning(messages([60_000, 40_000]))).toBe(true)
+    expect(REASONING_COMPACTION_INCREMENTAL_CHARS).toBe(50_000)
+    expect(shouldCompactReasoning(messages([30_000, 19_999], true))).toBe(false)
+    expect(shouldCompactReasoning(messages([30_000, 20_000], true))).toBe(true)
+
+    const input = {
+      providerID: "ladder",
+      auto: true,
+      hasFinishedAssistant: true,
+      lastFinishedIsSummary: false,
+      messages: messages([REASONING_COMPACTION_INITIAL_CHARS]),
+    }
+    expect(shouldTriggerReasoningCompaction(input)).toBe(true)
+    expect(shouldTriggerReasoningCompaction({ ...input, providerID: "anthropic" })).toBe(false)
+    expect(shouldTriggerReasoningCompaction({ ...input, auto: false })).toBe(false)
+    expect(shouldTriggerReasoningCompaction({ ...input, hasFinishedAssistant: false })).toBe(false)
+    expect(shouldTriggerReasoningCompaction({ ...input, lastFinishedIsSummary: true })).toBe(false)
+  })
+})
+
+describe("session.compaction.decision records", () => {
+  test("accepts only structured decisions linked to known user message IDs", () => {
+    const summary = `## Decision Records
+\`\`\`json
+[
+  {"subject":"reasoning ledger","decision":"start at 100k chars","reason":"batch summaries","source_ref":"msg-user-1"},
+  {"subject":"invented source","decision":"do something","source_ref":"msg-not-in-session"},
+  {"subject":"missing evidence","decision":"do something","source_ref":""}
+]
+\`\`\``
+    const records = decisionRecordsFromSummary(summary, new Set(["msg-user-1"]))
+    expect(records).toHaveLength(1)
+    expect(records[0]).toMatchObject({
+      type: "decision",
+      subject: "reasoning ledger",
+      decision: "start at 100k chars",
+      reason: "batch summaries",
+      source_ref: expect.stringMatching(/^msg-user-1#decision:/),
+    })
+    expect(records[0]?.decided_by).toBe("user")
+  })
+
+  test("ignores absent and malformed decision blocks", () => {
+    expect(decisionRecordsFromSummary("## Decision Records\n```json\nnot-json\n```", new Set())).toEqual([])
+    expect(decisionRecordsFromSummary("no decision section", new Set())).toEqual([])
+  })
 })
 
 function createModel(opts: {
@@ -88,11 +191,11 @@ function createModel(opts: {
 
 const wide = () => ProviderTest.fake({ model: createModel({ context: 100_000, output: 32_000 }) })
 
-function createUserMessage(sessionID: SessionID, text: string) {
+function createUserMessage(sessionID: SessionID, text: string, id = MessageID.ascending()) {
   return Effect.gen(function* () {
     const ssn = yield* SessionNs.Service
     const msg = yield* ssn.updateMessage({
-      id: MessageID.ascending(),
+      id,
       role: "user",
       sessionID,
       agent: "build",
@@ -1367,6 +1470,52 @@ describe("session.compaction.process", () => {
 
         expect(summary?.info.role).toBe("assistant")
         expect(summary?.parts.some((part) => part.type === "tool")).toBe(false)
+      }).pipe(withCompaction({ llm: stub.llmLayer }))
+    },
+    { git: true },
+  )
+
+  itCompaction.instance(
+    "stores source-linked summary decisions with user authority",
+    () => {
+      const stub = llm()
+      let captured = ""
+      return Effect.gen(function* () {
+        const ssn = yield* SessionNs.Service
+        const session = yield* ssn.create({})
+        const sourceID = MessageID.ascending()
+        const source = yield* createUserMessage(session.id, "We decided to keep a rolling reasoning summary.", sourceID)
+        const summary = `## Objective\n- Keep a rolling reasoning summary.\n\n## Decision Records\n\`\`\`json\n[{"subject":"reasoning ledger","decision":"Keep a rolling reasoning summary","reason":"Preserve useful long-session context","source_ref":"${source.id}"}]\n\`\`\``
+        stub.push(
+          reply(summary, (input) => {
+            captured = JSON.stringify(input.messages)
+          }),
+        )
+        const msgs = yield* ssn.messages({ sessionID: session.id })
+        yield* SessionCompaction.use.process({
+          parentID: source.id,
+          messages: msgs,
+          sessionID: session.id,
+          auto: false,
+        })
+
+        const { db } = yield* Database.Service
+        const rows = yield* db
+          .select()
+          .from(MemRecordTable)
+          .where(eq(MemRecordTable.session_id, session.id))
+          .all()
+          .pipe(Effect.orDie)
+        expect(rows).toHaveLength(1)
+        expect(rows[0]).toMatchObject({
+          type: "decision",
+          subject: "reasoning ledger",
+          content: "Keep a rolling reasoning summary",
+          authority: "user",
+          recorded_by: "compaction",
+        })
+        expect(rows[0]?.source_ref).toStartWith(`${source.id}#decision:`)
+        expect(captured).toContain(`[Source message id=${source.id} role=user]`)
       }).pipe(withCompaction({ llm: stub.llmLayer }))
     },
     { git: true },
