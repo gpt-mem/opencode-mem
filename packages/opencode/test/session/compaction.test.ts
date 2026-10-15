@@ -108,19 +108,14 @@ describe("session.compaction.reasoning threshold", () => {
       },
     ]
 
-  test("waits for 100k accumulated reasoning characters before the first summary", () => {
+  test("uses raw reasoning thresholds and only triggers after a completed Ladder turn", () => {
     expect(REASONING_COMPACTION_INITIAL_CHARS).toBe(100_000)
     expect(shouldCompactReasoning(messages([60_000, 39_999]))).toBe(false)
     expect(shouldCompactReasoning(messages([60_000, 40_000]))).toBe(true)
-  })
-
-  test("uses 50k new reasoning characters for later iterative summaries", () => {
     expect(REASONING_COMPACTION_INCREMENTAL_CHARS).toBe(50_000)
     expect(shouldCompactReasoning(messages([30_000, 19_999], true))).toBe(false)
     expect(shouldCompactReasoning(messages([30_000, 20_000], true))).toBe(true)
-  })
 
-  test("triggers only for completed Ladder turns while auto-compaction is enabled", () => {
     const input = {
       providerID: "ladder",
       auto: true,
