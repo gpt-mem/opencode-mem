@@ -1556,7 +1556,12 @@ const layer = Layer.effect(
                   /^(?:(?:Я|В этой сессии|В текущей сессии)[^.!?\n]{0,180})?(?:нет доступа к [^.!?\n]{0,40}(?:инструмент|tool|shell)|(?:инструменты|тулы) (?:мне )?(?:не предоставлены|недоступны)|нет (?:доступных )?(?:инструментов|тулов))/i.test(
                     text,
                   ))
-              const reason = !text && !hasTools ? "empty_response" : unavailable ? "tools_unavailable" : undefined
+              const reason =
+                !text && !hasTools && !parts.some((p) => p.type === "file")
+                  ? "empty_response"
+                  : unavailable
+                    ? "tools_unavailable"
+                    : undefined
               if (reason) {
                 const isRecovery = (m: (typeof msgs)[number]) =>
                   m.info.role === "user" &&
@@ -1593,6 +1598,7 @@ const layer = Layer.effect(
                 handle.message.error = new NamedError.Unknown({
                   message: `Model failed to deliver a usable response after ${attempts} recovery attempts (${reason}).`,
                 }).toObject()
+                handle.message.finish = "error"
                 yield* sessions.updateMessage(handle.message)
                 yield* events.publish(Session.Event.Error, { sessionID, error: handle.message.error })
                 return "break" as const

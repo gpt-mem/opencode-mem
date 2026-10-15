@@ -1387,31 +1387,35 @@ it.instance("does not retry an answer quoting an earlier tool-unavailability cla
   }),
 )
 
-it.instance("bounds empty-response recovery and persists exhaustion across resumes", () =>
-  Effect.gen(function* () {
-    const { llm } = yield* useServerConfig(providerCfg)
-    const prompt = yield* SessionPrompt.Service
-    const sessions = yield* Session.Service
-    const chat = yield* sessions.create({ title: "Recovery budget" })
-    for (const _ of [0, 1, 2]) yield* llm.push(reply().stop())
-    const result = yield* prompt.prompt({
-      sessionID: chat.id,
-      agent: "build",
-      parts: [{ type: "text", text: "hello" }],
-    })
-    expect(yield* llm.calls).toBe(3)
-    expect(JSON.stringify(result.info.role === "assistant" && result.info.error)).toContain("after 2 recovery attempts")
-    yield* prompt.loop({ sessionID: chat.id })
-    expect(yield* llm.calls).toBe(3)
-    yield* llm.text("New answer")
-    const next = yield* prompt.prompt({
-      sessionID: chat.id,
-      agent: "build",
-      parts: [{ type: "text", text: "new instruction" }],
-    })
-    expect(next.parts.some((p) => p.type === "text" && p.text === "New answer")).toBe(true)
-  }),
-)
+for (const finish of ["stop", "unknown"] as const) {
+  it.instance(`bounds ${finish} empty-response recovery and persists exhaustion across resumes`, () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({ title: "Recovery budget" })
+      for (const _ of [0, 1, 2]) yield* llm.push(finish === "stop" ? reply().stop() : reply())
+      const result = yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        parts: [{ type: "text", text: "hello" }],
+      })
+      expect(yield* llm.calls).toBe(3)
+      expect(JSON.stringify(result.info.role === "assistant" && result.info.error)).toContain(
+        "after 2 recovery attempts",
+      )
+      yield* prompt.loop({ sessionID: chat.id })
+      expect(yield* llm.calls).toBe(3)
+      yield* llm.text("New answer")
+      const next = yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        parts: [{ type: "text", text: "new instruction" }],
+      })
+      expect(next.parts.some((p) => p.type === "text" && p.text === "New answer")).toBe(true)
+    }),
+  )
+}
 
 it.instance("does not correct tool unavailability when every tool is denied", () =>
   Effect.gen(function* () {
