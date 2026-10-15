@@ -19,7 +19,6 @@ import { SessionRetry } from "./retry"
 import { SessionStatus } from "./status"
 import { SessionSummary } from "./summary"
 import type { Provider } from "@/provider/provider"
-import { Question } from "@/question"
 import { errorMessage } from "@/util/error"
 import { isRecord } from "@/util/record"
 import { EventV2Bridge } from "@/event-v2-bridge"
@@ -70,7 +69,7 @@ type ToolCall = {
 
 interface ProcessorContext extends Input {
   toolcalls: Record<string, ToolCall>
-  shouldBreak: boolean
+  stopOnPermissionRejection: boolean
   snapshot: string | undefined
   blocked: boolean
   needsCompaction: boolean
@@ -109,7 +108,7 @@ const layer = Layer.effect(
         sessionID: input.sessionID,
         model: input.model,
         toolcalls: {},
-        shouldBreak: false,
+        stopOnPermissionRejection: false,
         snapshot: initialSnapshot,
         blocked: false,
         needsCompaction: false,
@@ -201,8 +200,10 @@ const layer = Layer.effect(
             time: { start: match.part.state.time.start, end: Date.now() },
           },
         })
-        if (error instanceof PermissionV1.RejectedError || error instanceof Question.RejectedError) {
-          ctx.blocked = ctx.shouldBreak
+        // Only a typed permission rejection can stop the loop; `tool-calls`
+        // and other provider finish reasons are not permission decisions.
+        if (error instanceof PermissionV1.RejectedError) {
+          ctx.blocked = ctx.stopOnPermissionRejection
         }
         yield* settleToolCall(toolCallID)
         return true
@@ -649,7 +650,7 @@ const layer = Layer.effect(
           messageID: input.assistantMessage.id,
         })
         ctx.needsCompaction = false
-        ctx.shouldBreak = (yield* config.get()).experimental?.continue_loop_on_deny !== true
+        ctx.stopOnPermissionRejection = (yield* config.get()).continueAfterPermissionRejection === false
 
         return yield* Effect.gen(function* () {
           yield* Effect.gen(function* () {

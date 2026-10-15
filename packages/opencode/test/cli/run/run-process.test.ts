@@ -269,7 +269,7 @@ describe("opencode run (non-interactive subprocess)", () => {
         const denied = yield* opencode.run("request permission", { permission: { bash: "ask" } })
         opencode.expectExit(denied, 0)
         expect(denied.stderr).toContain("permission requested: bash")
-        expect(denied.stdout).toBe("")
+        expect(denied.stdout).toBe("continued after rejection\n")
 
         yield* llm.reset
         yield* llm.tool("bash", { command: "rm -f allowed-file", description: "Remove a test file" })

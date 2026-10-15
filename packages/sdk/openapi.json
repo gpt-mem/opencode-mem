@@ -21061,8 +21061,7 @@
             }
           },
           "authProviderID": {
-            "type": "string",
-            "description": "Provider ID whose API key is sent as a Bearer token"
+            "type": "string"
           },
           "oauth": {
             "anyOf": [
@@ -21293,6 +21292,9 @@
           "subagent_depth": {
             "type": "integer",
             "minimum": 0
+          },
+          "continueAfterPermissionRejection": {
+            "type": "boolean"
           },
           "username": {
             "type": "string"
@@ -21550,12 +21552,16 @@
                   "type": "string"
                 }
               },
-              "continue_loop_on_deny": {
-                "type": "boolean"
-              },
               "mcp_timeout": {
                 "type": "integer",
                 "exclusiveMinimum": 0
+              },
+              "ladder_retry": {
+                "type": "boolean"
+              },
+              "ladder_retry_delay": {
+                "type": "integer",
+                "minimum": 0
               },
               "policies": {
                 "type": "array",

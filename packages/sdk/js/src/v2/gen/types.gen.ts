@@ -1863,7 +1863,6 @@ export type McpRemoteConfig = {
   headers?: {
     [key: string]: string
   }
-  /** Provider ID whose API key is sent as a Bearer token */
   authProviderID?: string
   /**
    * OAuth authentication configuration for the MCP server. Set to false to disable OAuth auto-detection.
@@ -1938,6 +1937,7 @@ export type Config = {
   small_model?: string
   default_agent?: string
   subagent_depth?: number
+  continueAfterPermissionRejection?: boolean
   username?: string
   mode?: {
     build?: AgentConfig
@@ -2028,8 +2028,9 @@ export type Config = {
     batch_tool?: boolean
     openTelemetry?: boolean
     primary_tools?: Array<string>
-    continue_loop_on_deny?: boolean
     mcp_timeout?: number
+    ladder_retry?: boolean
+    ladder_retry_delay?: number
     policies?: Array<ConfigV2ExperimentalPolicy>
   }
 }
