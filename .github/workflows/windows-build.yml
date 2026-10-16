@@ -1,0 +1,83 @@
+name: windows-build
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version label for this Windows build (optional)"
+        required: false
+        type: string
+      create_release:
+        description: "Create or update a GitHub release with the Windows zip"
+        required: false
+        type: boolean
+        default: false
+      baseline:
+        description: "Also build the no-AVX2 baseline binary"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    name: Build Windows CLI
+    runs-on: windows-latest
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: ./.github/actions/setup-bun
+
+      - name: Build Windows CLI
+        env:
+          OPENCODE_VERSION: ${{ inputs.version || '1.18.34-windows-son' }}
+        run: |
+          cd packages/opencode
+          if [ "${{ inputs.baseline }}" = "true" ]; then
+            bun run script/build.ts --single --baseline
+          else
+            bun run script/build.ts --single
+          fi
+
+      - name: Smoke test binary
+        run: |
+          ./packages/opencode/dist/opencode-windows-x64/bin/opencode.exe --version
+
+      - name: Package Windows zip
+        shell: pwsh
+        run: |
+          $dir = "packages/opencode/dist/opencode-windows-x64"
+          $zip = "$dir/opencode-windows-x64.zip"
+          if (Test-Path $zip) { Remove-Item $zip -Force }
+          Compress-Archive -Path "$dir/bin/*" -DestinationPath $zip -Force
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: opencode-windows-x64
+          path: packages/opencode/dist/opencode-windows-x64
+          if-no-files-found: error
+
+      - name: Create or update release
+        if: ${{ inputs.create_release == true }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          version="${{ inputs.version || '1.18.34-windows-son' }}"
+          tag="v${version}"
+          zip="packages/opencode/dist/opencode-windows-x64/opencode-windows-x64.zip"
+          if gh release view "$tag" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            gh release upload "$tag" "$zip" --repo "${{ github.repository }}" --clobber
+          else
+            gh release create "$tag" "$zip" --repo "${{ github.repository }}" --title "$tag" --notes "Windows CLI build for ${{ github.repository }}" --draft
+          fi
