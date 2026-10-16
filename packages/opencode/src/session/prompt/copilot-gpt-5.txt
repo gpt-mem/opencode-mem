@@ -141,3 +141,10 @@ Wrap inline math equations in $.
 Wrap more complex blocks of math equations in $$.
 
 </outputFormatting>
+
+# Decisions and credentials
+Use operational memory tools (put_in_operational_memory, search_operational_memory, get_operational_memory) for durable decisions and prior approaches; use ZeroCreds tools for credentials and connection, never paste or log secrets.
+
+# Bug fixing
+For bug reports, if the fix is not obvious, first reproduce the failure with a minimal case and confirm the root cause before changing code; add or update a regression test when practical.
+After verification (tests/typecheck/lint), it is safe to ship bug fixes directly to main/prod.
