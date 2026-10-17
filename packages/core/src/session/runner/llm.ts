@@ -181,8 +181,6 @@ const layer = Layer.effect(
         return yield* Effect.interrupt
       const agent = yield* agents.select(session.agent)
       const initialized = yield* SessionContextEpoch.initialize(db, loadSystemContext(agent), session.id)
-      const toolFibers = yield* FiberSet.make<void, ToolOutputStore.Error>()
-      let needsContinuation = false
       let currentStep = step
       if (promotion) {
         const cutoff = yield* EventV2.latestSequence(db, session.id)
@@ -224,7 +222,11 @@ const layer = Layer.effect(
       if (yield* compaction.compactIfNeeded({ sessionID: session.id, entries, model, request }))
         return yield* Effect.die(continueAfterCompaction(currentStep))
       const startSnapshot = yield* snapshots.capture()
-      const publisher = createLLMEventPublisher(events, {
+      let emptyCompletionRetries = 0
+      while (true) {
+        const toolFibers = yield* FiberSet.make<void, ToolOutputStore.Error>()
+        let needsContinuation = false
+        const publisher = createLLMEventPublisher(events, {
         sessionID: session.id,
         agent: agent.id,
         model: {
@@ -283,7 +285,7 @@ const layer = Layer.effect(
         Effect.ensuring(withPublication(publisher.flush())),
       )
 
-      return yield* Effect.uninterruptibleMask((restore) =>
+      const attempt = yield* Effect.uninterruptibleMask((restore) =>
         Effect.gen(function* () {
           const stream = yield* restore(providerStream).pipe(Effect.exit)
           const failure =
@@ -323,6 +325,15 @@ const layer = Layer.effect(
             yield* withPublication(publisher.failUnsettledTools(`Tool execution failed: ${message}`))
           }
           const stepSettlement = publisher.stepSettlement()
+          const isEmptyCompletion =
+            stream._tag === "Success" &&
+            !publisher.hasProviderError() &&
+            !publisher.hasOutput() &&
+            stepSettlement !== undefined &&
+            !["tool-calls", "unknown"].includes(stepSettlement.finish)
+          if (isEmptyCompletion) {
+            return { empty: true as const, needsContinuation: false, step: currentStep }
+          }
           if (stepSettlement && !publisher.hasProviderError()) {
             const endSnapshot = yield* snapshots.capture()
             const files =
@@ -351,9 +362,19 @@ const layer = Layer.effect(
           if (stream._tag === "Failure") return yield* Effect.failCause(stream.cause)
           if (settled._tag === "Failure" && Cause.hasInterrupts(settled.cause))
             return yield* Effect.failCause(settled.cause)
-          return { needsContinuation: !publisher.hasProviderError() && needsContinuation, step: currentStep }
+          return { empty: false as const, needsContinuation: !publisher.hasProviderError() && needsContinuation, step: currentStep }
         }),
       )
+      if (attempt.empty && emptyCompletionRetries < 5) {
+        emptyCompletionRetries++
+        continue
+      }
+      if (attempt.empty) {
+        yield* withPublication(publisher.failAssistant("Model returned an empty response"))
+        return { needsContinuation: false, step: currentStep }
+      }
+      return { needsContinuation: attempt.needsContinuation, step: attempt.step }
+      }
     }, Effect.scoped)
     type RunTurn = (
       sessionID: SessionSchema.ID,
