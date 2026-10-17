@@ -56,7 +56,7 @@ export function cronToCalendar(cron: string): Array<Record<string, number>> {
   return result
 }
 
-export function generateLaunchdPlist(job: Job, uid: number): string {
+export function generateLaunchdPlist(job: Job, uid: number = 0, scope: string = "default"): string {
   const calendars = cronToCalendar(job.schedule)
   const calXml = calendars
     .map((c) => {
@@ -66,7 +66,7 @@ export function generateLaunchdPlist(job: Job, uid: number): string {
       return `    <dict>\n${keys}\n    </dict>`
     })
     .join("\n")
-  const label = `com.opencode.job.default.${job.id}`
+  const label = `com.opencode.job.${scope}.${job.id}`
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
