@@ -1298,6 +1298,7 @@ const layer = Layer.effect(
             }
             const format = lastUser.format ?? { type: "text" as const }
             if (format.type === "json_schema") system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
+            let availableTools: string[] = []
             const result = yield* handle.process({
               user: lastUser,
               agent,
@@ -1312,6 +1313,9 @@ const layer = Layer.effect(
               tools,
               model,
               toolChoice: format.type === "json_schema" ? "required" : undefined,
+              onTools: (names) => {
+                availableTools = names
+              },
             })
 
             if (structured !== undefined) {
@@ -1344,6 +1348,134 @@ const layer = Layer.effect(
                 return "break" as const
               }
             }
+
+            // A successful provider stop is not necessarily a delivered answer.
+            // Retry only the model turn, retaining all completed tool results.
+            if (!handle.message.error && result !== "compact" && format.type !== "json_schema") {
+              const parts = yield* MessageV2.parts(handle.message.id).pipe(
+                Effect.provideService(Database.Service, database),
+              )
+              const text = parts
+                .flatMap((p) => (p.type === "text" && !p.synthetic ? [p.text] : []))
+                .join("\n")
+                .trim()
+              const hasTools = parts.some((p) => p.type === "tool")
+              const unavailable =
+                availableTools.length > 0 &&
+                !hasTools &&
+                (/^(?:I\b[^.!?\n]{0,180}\b(?:no tools (?:are )?available|(?:do not|don't|cannot|can't|can’t) have access to (?:any )?(?:\w+[ /-])*tools|tools (?:are |were )?not (?:available|provided))|No tools (?:are )?available\b)/i.test(
+                  text,
+                ) ||
+                  /^(?:(?:Я|В этой сессии|В текущей сессии)[^.!?\n]{0,180})?(?:нет доступа к [^.!?\n]{0,40}(?:инструмент|tool|shell)|(?:инструменты|тулы) (?:мне )?(?:не предоставлены|недоступны)|нет (?:доступных )?(?:инструментов|тулов))/i.test(
+                    text,
+                  ))
+              const reason =
+                !text && !hasTools && !parts.some((p) => p.type === "file")
+                  ? "empty_response"
+                  : unavailable
+                    ? "tools_unavailable"
+                    : undefined
+              if (reason) {
+                const isRecovery = (m: (typeof msgs)[number]) =>
+                  m.info.role === "user" &&
+                  m.parts.some((p) => p.type === "text" && p.metadata?.response_recovery === true)
+                const lastRealUser = msgs.findLastIndex(
+                  (m) =>
+                    m.info.role === "user" &&
+                    !isRecovery(m) &&
+                    !m.parts.some((p) => p.type === "text" && p.metadata?.ladder_auto_continue === true),
+                )
+                const attempts = msgs.slice(lastRealUser + 1).filter(isRecovery).length
+                yield* Effect.logWarning("response requires recovery", { "session.id": sessionID, reason, attempts })
+                if (attempts < 2) {
+                  const retry = yield* sessions.updateMessage({
+                    ...lastUser,
+                    id: MessageID.ascending(),
+                    time: { created: Date.now() },
+                  })
+                  yield* sessions.updatePart({
+                    id: PartID.ascending(),
+                    messageID: retry.id,
+                    sessionID,
+                    type: "text",
+                    text:
+                      reason === "empty_response"
+                        ? "Your last turn ended without a visible answer. Continue the authorized task using the existing tool results, then give the user a visible answer. Do not repeat completed actions."
+                        : `Your last answer incorrectly claimed tools were unavailable. The runtime supplied these tools: ${availableTools.join(", ")}. Continue the authorized task using them; preserve completed actions and report actual invocation errors if any.`,
+                    synthetic: true,
+                    metadata: { response_recovery: true, reason },
+                    time: { start: Date.now(), end: Date.now() },
+                  })
+                  return "continue" as const
+                }
+                handle.message.error = new NamedError.Unknown({
+                  message: `Model failed to deliver a usable response after ${attempts} recovery attempts (${reason}).`,
+                }).toObject()
+                handle.message.finish = "error"
+                yield* sessions.updateMessage(handle.message)
+                yield* events.publish(Session.Event.Error, { sessionID, error: handle.message.error })
+                return "break" as const
+              }
+            }
+
+            // Issue #39 (all rungs failed): the provider ladder gateway is
+            // down and SessionRetry's fast in-request retries are spent.
+            // Re-prompt the same user turn after a longer backoff instead of
+            // ending the session; on exhaustion the loop breaks with the
+            // error attached — an explicit failure, not silence. Attempts
+            // are counted from durable synthetic continue messages, so a
+            // resumed session finishes the budget instead of restarting it.
+            if (result === "stop" && handle.message.error && SessionProcessor.isLadderError(handle.message.error)) {
+              const cfg = yield* config.get()
+              if (cfg.experimental?.ladder_retry !== false) {
+                const isLadderAuto = (m: (typeof msgs)[number]) =>
+                  m.info.role === "user" &&
+                  m.parts.some((p) => p.type === "text" && p.metadata?.ladder_auto_continue === true)
+                const lastRealUser = msgs.findLastIndex((m) => m.info.role === "user" && !isLadderAuto(m))
+                const attempts = msgs.slice(lastRealUser + 1).filter(isLadderAuto).length
+                if (attempts < LADDER_AUTO_CONTINUE_LIMIT) {
+                  const backoffMs = ladderBackoffMs(attempts, cfg.experimental?.ladder_retry_delay)
+                  yield* Effect.logWarning("ladder error, auto-continue with backoff", {
+                    "session.id": sessionID,
+                    attempt: attempts + 1,
+                    backoffMs,
+                    message: handle.message.error.data.message,
+                  })
+                  yield* status.set(sessionID, {
+                    type: "retry",
+                    attempt: attempts + 1,
+                    message: "Provider ladder exhausted; retrying",
+                    next: Date.now() + backoffMs,
+                  })
+                  yield* Effect.sleep(Duration.millis(backoffMs))
+                  const continueMsg = yield* sessions.updateMessage({
+                    id: MessageID.ascending(),
+                    role: "user",
+                    sessionID,
+                    time: { created: Date.now() },
+                    agent: lastUser.agent,
+                    model: lastUser.model,
+                  })
+                  yield* sessions.updatePart({
+                    id: PartID.ascending(),
+                    messageID: continueMsg.id,
+                    sessionID,
+                    type: "text" as const,
+                    text: "The model provider ladder is exhausted. Please retry.",
+                    synthetic: true,
+                    metadata: { ladder_auto_continue: true },
+                    time: { start: Date.now(), end: Date.now() },
+                  })
+                  return "continue" as const
+                }
+                yield* Effect.logError("ladder error: max auto-continue attempts reached", {
+                  "session.id": sessionID,
+                  attempts,
+                })
+              }
+              yield* events.publish(Session.Event.Error, { sessionID, error: handle.message.error })
+            }
+
 
             if (result === "stop") return "break" as const
             if (result === "compact") {

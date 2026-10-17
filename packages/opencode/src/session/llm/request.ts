@@ -96,6 +96,18 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
     delete options.reasoningSummary
     delete options.include
   }
+  const tools = resolveTools(input)
+  const names = Object.keys(tools)
+    .filter((name) => name !== "invalid")
+    .sort()
+  if (names.length) {
+    system.push(
+      `Runtime tools available for this request: ${names.join(", ")}. ` +
+        "These tool definitions are supplied with this request, including after context compaction. " +
+        "Use them to continue authorized work. Do not infer tool availability from summaries or previous assistant claims. " +
+        "If an invocation fails, report the actual tool error.",
+    )
+  }
   if (isOpenaiOauth) options.instructions = system.join("\n")
 
   const messages =
@@ -145,7 +157,6 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
     },
   )
 
-  const tools = resolveTools(input)
   // Codex parity: OpenAI Responses-family providers hardcode `strict: false`
   // on every function tool so MCP-sourced and dynamic schemas that don't
   // satisfy OpenAI's structured-outputs constraints still register.
