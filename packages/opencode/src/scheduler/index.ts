@@ -6,26 +6,43 @@ export type Job = {
   timeoutSeconds?: number
 }
 
+function escapeXml(value: string): string {
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;")
+}
+
+export function sanitizeId(value: string): string {
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(value)) throw new Error("invalid id")
+  return value
+}
+
 export function cronToCalendar(cron: string): Array<Record<string, number>> {
   const parts = cron.trim().split(/\s+/)
   if (parts.length !== 5) throw new Error("cron must have 5 fields")
   const [min, hour, day, month, weekday] = parts
+  const inRange = (n: number, max: number) => Number.isInteger(n) && n >= 0 && n <= max
   const expand = (field: string, max: number): number[] => {
     if (field === "*") return []
     const out: number[] = []
     for (const chunk of field.split(",")) {
       if (chunk.includes("-")) {
-        const [a, b] = chunk.split("-").map(Number)
-        for (let i = a; i <= b; i++) out.push(i)
+        const [a, b, step] = chunk.split(/[-/]/).map(Number)
+        if (!inRange(a, max) || !inRange(b, max)) throw new Error("cron value out of range")
+        const inc = step && step > 0 ? step : 1
+        for (let i = a; i <= b; i += inc) out.push(i)
       } else if (chunk.includes("/")) {
         const [base, step] = chunk.split("/")
         const start = base === "*" ? 0 : Number(base)
-        for (let i = start; i <= max; i += Number(step)) out.push(i)
+        if (!inRange(start, max)) throw new Error("cron value out of range")
+        const inc = Number(step)
+        if (!Number.isInteger(inc) || inc <= 0) throw new Error("invalid cron step")
+        for (let i = start; i <= max; i += inc) out.push(i)
       } else {
-        out.push(Number(chunk))
+        const n = Number(chunk)
+        if (!inRange(n, max)) throw new Error("cron value out of range")
+        out.push(n)
       }
     }
-    return out
+    return [...new Set(out)]
   }
   const mins = expand(min, 59)
   const hours = expand(hour, 23)
@@ -57,6 +74,8 @@ export function cronToCalendar(cron: string): Array<Record<string, number>> {
 }
 
 export function generateLaunchdPlist(job: Job, uid: number = 0, scope: string = "default"): string {
+  const safeScope = sanitizeId(scope)
+  const safeId = sanitizeId(job.id)
   const calendars = cronToCalendar(job.schedule)
   const calXml = calendars
     .map((c) => {
@@ -66,7 +85,9 @@ export function generateLaunchdPlist(job: Job, uid: number = 0, scope: string = 
       return `    <dict>\n${keys}\n    </dict>`
     })
     .join("\n")
-  const label = `com.opencode.job.${scope}.${job.id}`
+  const label = `com.opencode.job.${safeScope}.${safeId}`
+  const command = escapeXml(job.command)
+  const workdir = job.workdir ? escapeXml(job.workdir) : ""
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -77,9 +98,9 @@ export function generateLaunchdPlist(job: Job, uid: number = 0, scope: string = 
   <array>
     <string>/bin/sh</string>
     <string>-c</string>
-    <string>${job.command}</string>
+    <string>${command}</string>
   </array>
-  ${job.workdir ? `<key>WorkingDirectory</key>\n  <string>${job.workdir}</string>` : ""}
+  ${workdir ? `<key>WorkingDirectory</key>\n  <string>${workdir}</string>` : ""}
   <key>StartCalendarInterval</key>
   <array>
 ${calXml}

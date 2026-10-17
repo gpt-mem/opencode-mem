@@ -13,12 +13,16 @@ export async function runSupervised(opts: {
   const lock = acquireLock(opts.lockFile)
   if (!lock.acquired) return { status: "error", exitCode: null, error: "already running" }
 
+  const isWin = process.platform === "win32"
   return await new Promise<SupervisedResult>((resolve) => {
-    const child = spawn("/bin/sh", ["-c", opts.command], { cwd: opts.workdir, stdio: ["ignore", "pipe", "pipe"] })
+    const child = spawn(isWin ? "cmd.exe" : "/bin/sh", isWin ? ["/c", opts.command] : ["-c", opts.command], { cwd: opts.workdir, stdio: ["ignore", "pipe", "pipe"], detached: !isWin })
     let timedOut = false
     const timer = setTimeout(() => {
       timedOut = true
-      try { child.kill("SIGTERM") } catch {}
+      try {
+        if (child.pid && !isWin) process.kill(-child.pid, "SIGTERM")
+        else child.kill("SIGTERM")
+      } catch { try { child.kill("SIGTERM") } catch {} }
     }, opts.timeoutMs)
 
     child.stdout?.on("data", (d) => opts.onOutput?.(d.toString()))

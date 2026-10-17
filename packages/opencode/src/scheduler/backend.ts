@@ -1,22 +1,44 @@
 import { platform } from "node:os"
-import * as launchd from "./launchd"
-import * as systemd from "./systemd"
-import * as cron from "./cron"
-import * as schtasks from "./schtasks"
+import { installLaunchd, uninstallLaunchd } from "./launchd"
+import { installSystemd, uninstallSystemd } from "./systemd"
+import { installCron, uninstallCron } from "./cron"
+import { installSchtasks, uninstallSchtasks } from "./schtasks"
 
 export type JobLike = { id: string; schedule: string; command: string; workdir?: string }
 
 export function installJob(job: JobLike, scope = "default"): void {
-  if (platform() === "darwin") { launchd.installLaunchd(job as any, scope); return }
-  if (platform() === "linux") {
-    try { return systemd.installSystemd(job) } catch { return cron.installCron(job.schedule, job.command) }
+  if (platform() === "darwin") {
+    installLaunchd(job as any, scope)
+    return
   }
-  if (platform() === "win32") return schtasks.installSchtasks(job.id, job.schedule, job.command)
+  if (platform() === "linux") {
+    try {
+      installSystemd(job)
+      return
+    } catch {
+      installCron(job.id, job.schedule, job.command)
+      return
+    }
+  }
+  if (platform() === "win32") {
+    installSchtasks(job.id, job.schedule, job.command)
+    return
+  }
   throw new Error(`unsupported platform ${platform()}`)
 }
 
 export function uninstallJob(id: string, scope = "default"): void {
-  if (platform() === "darwin") return launchd.uninstallLaunchd(scope, id)
-  if (platform() === "linux") return systemd.uninstallSystemd(id)
-  if (platform() === "win32") return schtasks.uninstallSchtasks(id)
+  if (platform() === "darwin") {
+    uninstallLaunchd(scope, id)
+    return
+  }
+  if (platform() === "linux") {
+    uninstallSystemd(id)
+    uninstallCron(id)
+    return
+  }
+  if (platform() === "win32") {
+    uninstallSchtasks(id)
+    return
+  }
 }

@@ -2,13 +2,13 @@ import { execFileSync } from "node:child_process"
 import { mkdirSync, writeFileSync, rmSync, existsSync } from "node:fs"
 import { homedir } from "node:os"
 import path from "node:path"
-import { generateLaunchdPlist } from "./index"
+import { generateLaunchdPlist, sanitizeId } from "./index"
 import type { Job } from "./index"
 
 export type Scope = string
 
 export function launchdLabel(scope: Scope, id: string) {
-  return `com.opencode.job.${scope}.${id}`
+  return `com.opencode.job.${sanitizeId(scope)}.${sanitizeId(id)}`
 }
 
 export function launchdPlistPath(scope: Scope, id: string) {

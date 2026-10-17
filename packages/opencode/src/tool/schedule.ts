@@ -1,6 +1,7 @@
 import { Effect, Schema } from "effect"
 import * as Tool from "./tool"
 import { installJob, uninstallJob } from "../scheduler/backend"
+import { sanitizeId } from "../scheduler"
 
 export const Parameters = Schema.Struct({
   action: Schema.Literals(["add", "remove"]),
@@ -14,17 +15,27 @@ export const ScheduleTool = Tool.define<typeof Parameters, { id: string }, never
   "schedule_job",
   Effect.gen(function* () {
     return {
-      description: "Install or remove an OS-level scheduled job (launchd/systemd/schtasks/cron).",
+      description: "Install or remove an OS-level scheduled job (launchd/systemd/cron/schtasks).",
       parameters: Parameters,
-      execute: (params, _ctx) =>
-        Effect.sync(() => {
+      execute: (params, ctx) =>
+        Effect.gen(function* () {
+          yield* ctx.ask({
+            permission: "schedule_job",
+            patterns: ["*"],
+            always: ["*"],
+            metadata: {},
+          })
+
+          const id = sanitizeId(params.id)
           if (params.action === "add") {
-            if (!params.schedule || !params.command) throw new Error("schedule and command required")
-            installJob({ id: params.id, schedule: params.schedule, command: params.command, workdir: params.workdir })
-            return { title: `scheduled ${params.id}`, output: `installed ${params.id}`, metadata: { id: params.id } }
+            if (!params.schedule || !params.command) {
+              return yield* Effect.die(new Error("schedule and command required"))
+            }
+            installJob({ id, schedule: params.schedule, command: params.command, workdir: params.workdir })
+            return { title: `scheduled ${id}`, output: `installed ${id}`, metadata: { id } }
           }
-          uninstallJob(params.id)
-          return { title: `removed ${params.id}`, output: `removed ${params.id}`, metadata: { id: params.id } }
+          uninstallJob(id)
+          return { title: `removed ${id}`, output: `removed ${id}`, metadata: { id } }
         }),
     } satisfies Tool.DefWithoutID<typeof Parameters, { id: string }>
   }),

@@ -2,9 +2,10 @@ import { writeFileSync, mkdirSync, rmSync, existsSync } from "node:fs"
 import path from "node:path"
 import { homedir } from "node:os"
 import { execFileSync } from "node:child_process"
+import { sanitizeId } from "./index"
 
 export function systemdUnitPath(name: string) {
-  return path.join(homedir(), ".config", "systemd", "user", `${name}.service`)
+  return path.join(homedir(), ".config", "systemd", "user", `${sanitizeId(name)}.service`)
 }
 
 export function generateSystemdUnit(job: { id: string; schedule: string; command: string; workdir?: string }) {
@@ -15,12 +16,12 @@ Description=OpenCode job ${job.id}
 [Service]
 Type=oneshot
 ExecStart=/bin/sh -c ${JSON.stringify(job.command)}
-${job.workdir ? `WorkingDirectory=${job.workdir}` : ""}
+${job.workdir ? `WorkingDirectory=${job.workdir.replace(/[\r\n]/g, "")}` : ""}
 `
 }
 
 export function systemdTimerPath(name: string) {
-  return path.join(homedir(), ".config", "systemd", "user", `${name}.timer`)
+  return path.join(homedir(), ".config", "systemd", "user", `${sanitizeId(name)}.timer`)
 }
 
 export function generateSystemdTimer(job: { id: string; schedule: string }) {
@@ -44,11 +45,11 @@ export function installSystemd(job: { id: string; schedule: string; command: str
   writeFileSync(systemdUnitPath(job.id), generateSystemdUnit(job), "utf8")
   writeFileSync(systemdTimerPath(job.id), generateSystemdTimer(job), "utf8")
   execFileSync("systemctl", ["--user", "daemon-reload"], { stdio: "ignore" })
-  execFileSync("systemctl", ["--user", "enable", "--now", `${job.id}.timer`], { stdio: "ignore" })
+  execFileSync("systemctl", ["--user", "enable", "--now", `${sanitizeId(job.id)}.timer`], { stdio: "ignore" })
 }
 
 export function uninstallSystemd(id: string) {
-  try { execFileSync("systemctl", ["--user", "disable", "--now", `${id}.timer`], { stdio: "ignore" }) } catch {}
+  try { execFileSync("systemctl", ["--user", "disable", "--now", `${sanitizeId(id)}.timer`], { stdio: "ignore" }) } catch {}
   const unit = systemdUnitPath(id)
   const timer = systemdTimerPath(id)
   if (existsSync(unit)) rmSync(unit)
