@@ -45,6 +45,9 @@ export type StreamInput = {
   tools: Record<string, Tool>
   retries?: number
   toolChoice?: "auto" | "required" | "none"
+  onTools?: (names: string[]) => void
+  ladderVariant?: { rung: string; scope: string; messages: ModelMessage[] }
+  ladderResponse?: (response: LadderTransport.Response) => void
 }
 
 export type StreamRequest = StreamInput & {
@@ -111,6 +114,9 @@ const live: Layer.Layer<
         flags,
         isWorkflow,
       })
+      const toolNames = Object.keys(prepared.tools).filter((name) => name !== "_noop" && name !== "invalid")
+      input.onTools?.(toolNames)
+      yield* Effect.logInfo("request tools", { "session.id": input.sessionID, tools: toolNames })
 
       // Wire up toolExecutor for DWS workflow models so that tool calls
       // from the workflow service are executed via opencode's tool system

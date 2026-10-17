@@ -245,14 +245,17 @@ Agent behavior and tool-access policy. Review together because agent configurati
 | `default_agent` | Choose default primary agent                        | remove   | Do not retain a separate top-level selector; default choice should be designed with the v2 agent configuration model.       |
 | `mode`          | Legacy agent configuration alias                    | remove   | Do not port deprecated alias; configure agents through the v2 agent surface only.                                           |
 | `agent`         | Configure primary, subagent, and specialized agents | redesign | Rename to plural `agents`; retain a named map of built-in overrides and custom agent definitions.                           |
-| `permission`    | Tool permission rules                               | redesign | Rename to plural `permissions`; replace legacy map shorthand with an ordered array of `{ action, resource, effect }` rules. |
-| `tools`         | Legacy tool enable/disable map                      | remove   | Do not port boolean enable/disable alias; express tool access through permissions.                                          |
+| `permission`                       | Tool permission rules                                   | redesign | Rename to plural `permissions`; replace legacy map shorthand with an ordered array of `{ action, resource, effect }` rules. |
+| `continueAfterPermissionRejection` | Continue after a user rejects a tool permission request | keep     | Keep as a stable session behavior setting; default to `true`, and stop only when explicitly set to `false`.                |
+| `tools`                            | Legacy tool enable/disable map                         | remove   | Do not port boolean enable/disable alias; express tool access through permissions.                                         |
 
 Do not port `default_agent` ahead of the v2 agent design. The legacy runtime uses it to choose a visible, non-subagent fallback instead of `build`, but exposing that selection as an isolated top-level field would pre-commit v2 to the legacy agent model before agents and their policy surface are defined together.
 
 Do not port `mode`. The legacy loader already merges this deprecated alias into `agent`, and v2 should expose only one authoring surface for agent definitions.
 
 Rename legacy `agent` to `agents` because the setting is a collection keyed by agent name. It should continue to support overriding built-in agents such as `build`, `plan`, and `title`, as well as declaring named custom agents. The nested entry schema remains open until agent-local `permission` and deprecated `tools` behavior are decided.
+
+A provider finish reason such as `tool-calls` does not mean permission was denied. Continue the prompt loop after ordinary tool calls and provider `unknown` finishes. Apply `continueAfterPermissionRejection` only when a tool failure is specifically a user permission rejection; after a rejection, let the model see the failure and provide a user-facing response.
 
 Keep nested `agents.<name>.mode` with values `"primary"`, `"subagent"`, or `"all"`. This identifies an agent's runtime role and is separate from the removed top-level legacy `mode` alias, which was an alternate container for agent definitions.
 
@@ -379,7 +382,6 @@ Fields that should not be ported by inertia; each needs an explicit justificatio
 | `experimental.batch_tool`            | Enable batch tool                       | remove   | Do not port; batch tool is no longer a supported feature.                                                                   |
 | `experimental.openTelemetry`         | Enable AI SDK telemetry spans           | remove   | Do not port; observability is process-level and should use standard OpenTelemetry environment or declarative configuration. |
 | `experimental.primary_tools`         | Restrict tools to primary agents        | remove   | Do not port obsolete gating; agent tool access is configured through permissions.                                           |
-| `experimental.continue_loop_on_deny` | Continue loop after denied tool call    | remove   | Do not port legacy denied-tool loop behavior.                                                                               |
 | `experimental.mcp_timeout`           | MCP request timeout                     | redesign | Move to `mcp.timeout.request` for the default and `mcp.servers.<name>.timeout.request` for per-server overrides.            |
 
 ## Review Order
