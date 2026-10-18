@@ -1418,65 +1418,6 @@ const layer = Layer.effect(
               }
             }
 
-            // Issue #39 (all rungs failed): the provider ladder gateway is
-            // down and SessionRetry's fast in-request retries are spent.
-            // Re-prompt the same user turn after a longer backoff instead of
-            // ending the session; on exhaustion the loop breaks with the
-            // error attached — an explicit failure, not silence. Attempts
-            // are counted from durable synthetic continue messages, so a
-            // resumed session finishes the budget instead of restarting it.
-            if (result === "stop" && handle.message.error && SessionProcessor.isLadderError(handle.message.error)) {
-              const cfg = yield* config.get()
-              if (cfg.experimental?.ladder_retry !== false) {
-                const isLadderAuto = (m: (typeof msgs)[number]) =>
-                  m.info.role === "user" &&
-                  m.parts.some((p) => p.type === "text" && p.metadata?.ladder_auto_continue === true)
-                const lastRealUser = msgs.findLastIndex((m) => m.info.role === "user" && !isLadderAuto(m))
-                const attempts = msgs.slice(lastRealUser + 1).filter(isLadderAuto).length
-                if (attempts < LADDER_AUTO_CONTINUE_LIMIT) {
-                  const backoffMs = ladderBackoffMs(attempts, cfg.experimental?.ladder_retry_delay)
-                  yield* Effect.logWarning("ladder error, auto-continue with backoff", {
-                    "session.id": sessionID,
-                    attempt: attempts + 1,
-                    backoffMs,
-                    message: handle.message.error.data.message,
-                  })
-                  yield* status.set(sessionID, {
-                    type: "retry",
-                    attempt: attempts + 1,
-                    message: "Provider ladder exhausted; retrying",
-                    next: Date.now() + backoffMs,
-                  })
-                  yield* Effect.sleep(Duration.millis(backoffMs))
-                  const continueMsg = yield* sessions.updateMessage({
-                    id: MessageID.ascending(),
-                    role: "user",
-                    sessionID,
-                    time: { created: Date.now() },
-                    agent: lastUser.agent,
-                    model: lastUser.model,
-                  })
-                  yield* sessions.updatePart({
-                    id: PartID.ascending(),
-                    messageID: continueMsg.id,
-                    sessionID,
-                    type: "text" as const,
-                    text: "The model provider ladder is exhausted. Please retry.",
-                    synthetic: true,
-                    metadata: { ladder_auto_continue: true },
-                    time: { start: Date.now(), end: Date.now() },
-                  })
-                  return "continue" as const
-                }
-                yield* Effect.logError("ladder error: max auto-continue attempts reached", {
-                  "session.id": sessionID,
-                  attempts,
-                })
-              }
-              yield* events.publish(Session.Event.Error, { sessionID, error: handle.message.error })
-            }
-
-
             if (result === "stop") return "break" as const
             if (result === "compact") {
               yield* compaction.create({
