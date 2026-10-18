@@ -15,14 +15,7 @@ jobs:
               - '**/*.ps1'
   unit:
     needs: changes
-    if: ${{ matrix.settings.name != 'windows' || needs.changes.outputs.windows == 'true' }}
-    strategy:
-      matrix:
-        settings:
-          - name: linux
-            host: ubuntu-latest
-          - name: windows
-            host: windows-latest
-    runs-on: ${{ matrix.settings.host }}
+    if: ${{ needs.changes.outputs.windows == 'true' }}
+    runs-on: ubuntu-latest
     steps:
       - run: echo ok
