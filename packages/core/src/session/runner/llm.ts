@@ -222,7 +222,6 @@ const layer = Layer.effect(
       if (yield* compaction.compactIfNeeded({ sessionID: session.id, entries, model, request }))
         return yield* Effect.die(continueAfterCompaction(currentStep))
       const startSnapshot = yield* snapshots.capture()
-      let emptyCompletionRetries = 0
       while (true) {
         const toolFibers = yield* FiberSet.make<void, ToolOutputStore.Error>()
         let needsContinuation = false
@@ -325,15 +324,6 @@ const layer = Layer.effect(
             yield* withPublication(publisher.failUnsettledTools(`Tool execution failed: ${message}`))
           }
           const stepSettlement = publisher.stepSettlement()
-          const isEmptyCompletion =
-            stream._tag === "Success" &&
-            !publisher.hasProviderError() &&
-            !publisher.hasOutput() &&
-            stepSettlement !== undefined &&
-            !["tool-calls", "unknown"].includes(stepSettlement.finish)
-          if (isEmptyCompletion) {
-            return { empty: true as const, needsContinuation: false, step: currentStep }
-          }
           if (stepSettlement && !publisher.hasProviderError()) {
             const endSnapshot = yield* snapshots.capture()
             const files =
@@ -365,14 +355,6 @@ const layer = Layer.effect(
           return { empty: false as const, needsContinuation: !publisher.hasProviderError() && needsContinuation, step: currentStep }
         }),
       )
-      if (attempt.empty && emptyCompletionRetries < 5) {
-        emptyCompletionRetries++
-        continue
-      }
-      if (attempt.empty) {
-        yield* withPublication(publisher.failAssistant("Model returned an empty response"))
-        return { needsContinuation: false, step: currentStep }
-      }
       return { needsContinuation: attempt.needsContinuation, step: attempt.step }
       }
     }, Effect.scoped)
