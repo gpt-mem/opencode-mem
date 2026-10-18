@@ -46,7 +46,7 @@ import { Discovery } from "@/skill/discovery"
 import { Snapshot } from "@/snapshot"
 import { Storage } from "@/storage/storage"
 import { ToolRegistry } from "@/tool/registry"
-import { Truncate } from "@/tool/truncate"
+
 import { Worktree } from "@/worktree"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { MoveSession } from "@opencode-ai/core/control-plane/move-session"
@@ -250,7 +250,7 @@ const app = LayerNode.group([
   MCP.node,
   McpAuth.node,
   Command.node,
-  Truncate.node,
+
   ToolRegistry.node,
   Format.node,
   Project.node,

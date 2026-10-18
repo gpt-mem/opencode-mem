@@ -12,7 +12,6 @@ import { SessionProcessor } from "@/session/processor"
 import { SessionTools } from "@/session/tools"
 import { Tool } from "@/tool/tool"
 import { ToolRegistry } from "@/tool/registry"
-import { Truncate } from "@/tool/truncate"
 import { Plugin } from "@/plugin"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Effect, Layer, Schema } from "effect"
@@ -54,18 +53,10 @@ const fakePermission = Permission.Service.of({
   list: () => Effect.succeed([]),
 } satisfies Permission.Interface)
 
-const fakeTruncate = Truncate.Service.of({
-  cleanup: () => Effect.void,
-  write: () => Effect.succeed("output.txt"),
-  output: (text: string) => Effect.succeed({ content: text, truncated: false }),
-  limits: () => Effect.succeed({ maxLines: 2000, maxBytes: 50 * 1024 }),
-} satisfies Truncate.Interface)
-
 const layer = Layer.mergeAll(
   Layer.succeed(Plugin.Service, fakePlugin),
   Layer.succeed(Permission.Service, fakePermission),
   Layer.succeed(MCP.Service, fakeMcp()),
-  Layer.succeed(Truncate.Service, fakeTruncate),
   RuntimeFlags.layer(),
   Layer.succeed(
     ToolRegistry.Service,

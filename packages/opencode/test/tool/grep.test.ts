@@ -10,7 +10,6 @@ import { provideInstance, testInstanceStoreLayer, TestInstance, tmpdirScoped } f
 import { SessionID, MessageID } from "../../src/session/schema"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { Global } from "@opencode-ai/core/global"
-import { Truncate } from "@/tool/truncate"
 import { Agent } from "../../src/agent/agent"
 import { Ripgrep } from "@opencode-ai/core/ripgrep"
 import { FSUtil } from "@opencode-ai/core/fs-util"
@@ -24,7 +23,7 @@ import { Filesystem } from "@/util/filesystem"
 
 const toolLayer = (flags: Partial<RuntimeFlags.Info> = {}) =>
   LayerNode.compile(
-    LayerNode.group([CrossSpawnSpawner.node, FSUtil.node, Ripgrep.node, Truncate.node, Agent.node, Git.node]),
+    LayerNode.group([CrossSpawnSpawner.node, FSUtil.node, Ripgrep.node, Agent.node, Git.node]),
   )
 
 const it = testEffect(toolLayer())
