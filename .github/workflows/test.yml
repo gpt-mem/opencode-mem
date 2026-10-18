@@ -21,8 +21,29 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
+  changes:
+    name: changes
+    runs-on: ubuntu-latest
+    outputs:
+      windows: ${{ steps.filter.outputs.windows }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - name: Detect Windows-relevant changes
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            windows:
+              - '.github/workflows/test.yml'
+              - '.github/workflows/windows-build.yml'
+              - '**/*windows*'
+              - '**/*.ps1'
+
   unit:
     name: unit (${{ matrix.settings.name }})
+    needs: changes
+    if: ${{ matrix.settings.name != 'windows' || needs.changes.outputs.windows == 'true' || github.event_name == 'workflow_dispatch' }}
     strategy:
       fail-fast: false
       matrix:
@@ -90,6 +111,8 @@ jobs:
 
   unit-opencode:
     name: unit-opencode (${{ matrix.settings.name }}, shard ${{ matrix.shard }}/${{ matrix.total }})
+    needs: changes
+    if: ${{ matrix.settings.name != 'windows' || needs.changes.outputs.windows == 'true' || github.event_name == 'workflow_dispatch' }}
     strategy:
       fail-fast: false
       matrix:
@@ -132,6 +155,8 @@ jobs:
 
   e2e:
     name: e2e (${{ matrix.settings.name }})
+    needs: changes
+    if: ${{ matrix.settings.name != 'windows' || needs.changes.outputs.windows == 'true' || github.event_name == 'workflow_dispatch' }}
     strategy:
       fail-fast: false
       matrix:
