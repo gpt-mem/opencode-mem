@@ -2,7 +2,7 @@
 import { $ } from "bun"
 import { readdir, rm } from "node:fs/promises"
 
-await rm("dist", { recursive: true, force: true })
+await Bun.$`rm -rf dist`.quiet()
 await $`bunx tsc --emitDeclarationOnly`
 
 const build = await Bun.build({
@@ -16,5 +16,5 @@ if (!build.success) throw new AggregateError(build.logs, "Failed to build @openc
 
 const publicFiles = new Set(["index.js", "index.d.ts", "effect.d.ts", "socket.d.ts", "types.d.ts"])
 await Promise.all(
-  (await readdir("dist")).filter((file) => !publicFiles.has(file)).map((file) => rm(`dist/${file}`, { force: true })),
+  (await readdir("dist")).filter((file) => !publicFiles.has(file)).map((file) => rm(`dist/${file}`, { force: true, maxRetries: 10, retryDelay: 100 })),
 )
