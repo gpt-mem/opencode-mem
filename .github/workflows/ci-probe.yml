@@ -1,0 +1,28 @@
+name: ci-probe
+on: push
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      windows: ${{ steps.filter.outputs.windows }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            windows:
+              - '**/*.ps1'
+  unit:
+    needs: changes
+    if: ${{ matrix.settings.name != 'windows' || needs.changes.outputs.windows == 'true' }}
+    strategy:
+      matrix:
+        settings:
+          - name: linux
+            host: ubuntu-latest
+          - name: windows
+            host: windows-latest
+    runs-on: ${{ matrix.settings.host }}
+    steps:
+      - run: echo ok
