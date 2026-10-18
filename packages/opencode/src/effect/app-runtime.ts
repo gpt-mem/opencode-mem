@@ -36,7 +36,6 @@ import { MCP } from "@/mcp"
 import { McpAuth } from "@/mcp/auth"
 import { Command } from "@/command"
 
-import { ToolRegistry } from "@/tool/registry"
 import { Format } from "@/format"
 import { InstanceStore } from "@/project/instance-store"
 import { Project } from "@/project/project"
@@ -95,7 +94,6 @@ export const AppLayer = AppNodeBuilderV1.build(
     McpAuth.node,
     Command.node,
 
-    ToolRegistry.node,
     Format.node,
     InstanceStore.node,
     Project.node,

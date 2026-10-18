@@ -92,20 +92,19 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
     })
 
     const tool = Effect.fn("ExperimentalHttpApi.tool")(function* (ctx: { query: typeof ToolListQuery.Type }) {
-      const list = yield* registry.tools({
-        providerID: ctx.query.provider,
-        modelID: ctx.query.model,
-        agent: yield* agents.defaultInfo(),
-      })
+      const agent = yield* agents.defaultInfo()
+      const materialization = yield* registry.materialize(agent.permission as any)
+      const list = materialization.definitions
       return list.map((item) => ({
-        id: item.id,
+        id: item.name,
         description: item.description,
-        parameters: ToolJsonSchema.fromTool(item),
+        parameters: item.inputSchema,
       }))
     })
 
     const toolIDs = Effect.fn("ExperimentalHttpApi.toolIDs")(function* () {
-      return yield* registry.ids()
+      const materialization = yield* registry.materialize()
+      return materialization.definitions.map((item) => item.name)
     })
 
     const worktree = Effect.fn("ExperimentalHttpApi.worktree")(function* () {

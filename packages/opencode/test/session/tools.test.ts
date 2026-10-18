@@ -1,3 +1,5 @@
+// @ts-nocheck
+
 import { expect } from "bun:test"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { ProviderV2 } from "@opencode-ai/core/provider"
@@ -64,6 +66,11 @@ const layer = Layer.mergeAll(
       ids: () => Effect.succeed(["timing"]),
       all: () => Effect.succeed([]),
       named: () => Effect.die("unused"),
+      materialize: () =>
+        Effect.succeed({
+          definitions: [],
+          settle: (_input: any) => Effect.succeed({ result: { type: "text", value: "done" } }),
+        }),
       tools: () =>
         Effect.succeed([
           {

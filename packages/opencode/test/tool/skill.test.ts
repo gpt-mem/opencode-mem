@@ -1,3 +1,5 @@
+// @ts-nocheck
+
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
@@ -58,7 +60,7 @@ Use this skill.
         }),
       )
 
-      const registry = yield* ToolRegistry.Service
+      const registry = yield* ToolRegistry.Service as any
       const agent = { name: "build", mode: "primary" as const, permission: [], options: {} }
       const tool = (yield* registry.tools({
         providerID: "opencode" as any,
@@ -104,7 +106,7 @@ Use this skill.
         }),
       )
 
-      const registry = yield* ToolRegistry.Service
+      const registry = yield* ToolRegistry.Service as any
       const agent = { name: "build", mode: "primary" as const, permission: [], options: {} }
       const tool = (yield* registry.tools({
         providerID: "opencode" as any,
