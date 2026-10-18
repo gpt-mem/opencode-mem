@@ -459,7 +459,7 @@ export function withCliFixture<A, E>(
           }),
         receive: Queue.take(responses),
         // proc.stdin.end() is idempotent in Bun; no try/catch needed.
-        close: () => proc.stdin.end(),
+        close: () => { try { proc.stdin.flush?.() } catch {}; proc.stdin.end() },
         exited: proc.exited as Promise<number>,
       } satisfies AcpHandle
     })
