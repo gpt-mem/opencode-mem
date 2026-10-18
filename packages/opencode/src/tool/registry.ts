@@ -32,6 +32,7 @@ import { LspTool } from "./lsp"
 import { ApplyPatchTool } from "./apply_patch"
 import { Glob } from "@opencode-ai/core/util/glob"
 import path from "path"
+import fs from "fs"
 import { pathToFileURL } from "url"
 import { Effect, Layer, Context } from "effect"
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
@@ -55,6 +56,35 @@ import { ModelV2 } from "@opencode-ai/core/model"
 import { MCP } from "@/mcp"
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { McpCatalog } from "@/mcp/catalog"
+
+const TRUNCATE_INLINE_LINES = 100
+const TRUNCATE_INLINE_BYTES = 4 * 1024
+const TRUNCATE_MAX_LINES = 2000
+const TRUNCATE_MAX_BYTES = 50 * 1024
+const TRUNCATE_PREVIEW_LINES = 40
+const TRUNCATE_PREVIEW_BYTES = 2 * 1024
+
+function truncateToolOutput(output: string): string {
+  const lines = output.split("\n")
+  const lineCount = lines.length
+  const byteLength = Buffer.byteLength(output, "utf-8")
+  if (lineCount <= TRUNCATE_INLINE_LINES && byteLength <= TRUNCATE_INLINE_BYTES) return output
+
+  const dir = path.join(process.env.HOME || "", ".local", "share", "opencode", "tool-output")
+  try { fs.mkdirSync(dir, { recursive: true }) } catch {}
+  const file = path.join(dir, `tool_${Date.now()}_${Math.random().toString(36).slice(2)}`)
+  try { fs.writeFileSync(file, output) } catch {}
+
+  const headLines = Math.ceil(TRUNCATE_PREVIEW_LINES / 2)
+  const tailLines = Math.floor(TRUNCATE_PREVIEW_LINES / 2)
+  const head = lines.slice(0, headLines).join("\n")
+  const tail = tailLines > 0 ? lines.slice(lines.length - tailLines).join("\n") : ""
+  let preview = tail ? `${head}\n\n... output truncated; full content saved to ${file} ...\n\n${tail}` : `${head}\n\n... output truncated; full content saved to ${file} ...`
+  if (Buffer.byteLength(preview, "utf-8") > TRUNCATE_PREVIEW_BYTES) {
+    preview = preview.slice(0, TRUNCATE_PREVIEW_BYTES)
+  }
+  return preview
+}
 
 export function webSearchEnabled(providerID: ProviderV2.ID, flags = { exa: false, parallel: false }) {
   return (
@@ -328,7 +358,16 @@ const layer = Layer.effect(
               .join("\n"),
             parameters: output.parameters,
             jsonSchema,
-            execute: tool.execute,
+            execute: (args: unknown, ctx: Tool.Context) =>
+              tool.execute(args as any, ctx).pipe(
+                Effect.map((result) => {
+                  if (typeof result.output !== "string") return result
+                  const lineCount = result.output.split("\n").length
+                  const byteLength = Buffer.byteLength(result.output, "utf-8")
+                  if (lineCount <= TRUNCATE_INLINE_LINES && byteLength <= TRUNCATE_INLINE_BYTES) return result
+                  return { ...result, output: truncateToolOutput(result.output) }
+                }),
+              ),
             formatValidationError: tool.formatValidationError,
           }
         }),

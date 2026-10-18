@@ -78,7 +78,7 @@ jobs:
 
       - name: Run unit tests
         timeout-minutes: 20
-        run: GITHUB_ACTIONS=false bun turbo test
+        run: GITHUB_ACTIONS=false bun turbo test --filter='!opencode'
         env:
           OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER: ${{ runner.os == 'Windows' && 'true' || 'false' }}
 
@@ -87,6 +87,48 @@ jobs:
         working-directory: packages/client
         run: bun run check:generated
 
+
+  unit-opencode:
+    name: unit-opencode (${{ matrix.settings.name }}, shard ${{ matrix.shard }}/${{ matrix.total }})
+    strategy:
+      fail-fast: false
+      matrix:
+        settings:
+          - name: linux
+            host: blacksmith-4vcpu-ubuntu-2404
+          - name: windows
+            host: blacksmith-4vcpu-windows-2025
+        shard: [1, 2, 3, 4]
+        total: [4]
+    runs-on: ${{ matrix.settings.host }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+
+      - name: Setup Bun
+        uses: ./.github/actions/setup-bun
+
+      - name: Configure git identity
+        run: |
+          git config --global user.email "bot@opencode.ai"
+          git config --global user.name "opencode"
+
+      - name: Run opencode unit tests (shard)
+        timeout-minutes: 20
+        working-directory: packages/opencode
+        run: GITHUB_ACTIONS=false bun test --shard=${{ matrix.shard }}/${{ matrix.total }} --timeout 30000 --only-failures
+        env:
+          OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER: ${{ matrix.settings.name == 'windows' && 'true' || 'false' }}
 
   e2e:
     name: e2e (${{ matrix.settings.name }})
