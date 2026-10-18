@@ -12,7 +12,6 @@ import { Filesystem } from "@/util/filesystem"
 import { provideInstance, testInstanceStoreLayer, tmpdirScoped } from "../fixture/fixture"
 import type { Permission } from "../../src/permission"
 import { Agent } from "../../src/agent/agent"
-import { Truncate } from "@/tool/truncate"
 import { SessionID, MessageID } from "../../src/session/schema"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { FSUtil } from "@opencode-ai/core/fs-util"
@@ -28,7 +27,6 @@ const shellLayer = Layer.mergeAll(
       CrossSpawnSpawner.node,
       FSUtil.node,
       Plugin.node,
-      Truncate.node,
       Config.node,
       Agent.node,
       RuntimeFlags.node,
@@ -1136,7 +1134,7 @@ describe("tool.shell truncation", () => {
     runIn(
       projectRoot,
       Effect.gen(function* () {
-        const lineCount = Truncate.MAX_LINES + 500
+        const lineCount = 2000 + 500
         const result = yield* run({
           command: fill("lines", lineCount),
         })
@@ -1151,7 +1149,7 @@ describe("tool.shell truncation", () => {
     runIn(
       projectRoot,
       Effect.gen(function* () {
-        const byteCount = Truncate.MAX_BYTES + 10000
+        const byteCount = (50 * 1024) + 10000
         const result = yield* run({
           command: fill("bytes", byteCount),
         })
@@ -1179,7 +1177,7 @@ describe("tool.shell truncation", () => {
     runIn(
       projectRoot,
       Effect.gen(function* () {
-        const lineCount = Truncate.MAX_LINES + 100
+        const lineCount = 2000 + 100
         const result = yield* run({
           command: fill("lines", lineCount),
         })

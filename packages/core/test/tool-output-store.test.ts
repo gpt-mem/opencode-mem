@@ -134,7 +134,7 @@ describe("ToolOutputStore", () => {
   it.live("does not double-count structured data duplicated in projected text", () =>
     withStore(({ store }) =>
       Effect.gen(function* () {
-        const text = "x".repeat(30_000)
+        const text = "x".repeat(1_000)
         const output = { structured: { output: text }, content: [{ type: "text" as const, text }] }
         expect(yield* store.bound({ sessionID, toolCallID: "call-duplicated", output })).toEqual({
           output,
@@ -217,7 +217,7 @@ describe("ToolOutputStore", () => {
           const result = yield* store.bound({
             sessionID,
             toolCallID: "call-config",
-            output: { structured: {}, content: [{ type: "text", text: "one\ntwo\nthree" }] },
+            output: { structured: {}, content: [{ type: "text", text: Array.from({ length: 200 }, (_, i) => `line${i}`).join("\n") }] },
           })
           expect(result.outputPaths).toHaveLength(1)
         }),

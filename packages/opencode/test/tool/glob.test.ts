@@ -9,7 +9,6 @@ import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { Ripgrep } from "@opencode-ai/core/ripgrep"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { Global } from "@opencode-ai/core/global"
-import { Truncate } from "@/tool/truncate"
 import { Agent } from "../../src/agent/agent"
 import { TestInstance, tmpdirScoped } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
@@ -22,7 +21,7 @@ import type * as Tool from "../../src/tool/tool"
 
 const toolLayer = (flags: Partial<RuntimeFlags.Info> = {}) =>
   LayerNode.compile(
-    LayerNode.group([CrossSpawnSpawner.node, FSUtil.node, Ripgrep.node, Truncate.node, Agent.node, Git.node]),
+    LayerNode.group([CrossSpawnSpawner.node, FSUtil.node, Ripgrep.node, Agent.node, Git.node]),
   )
 
 const it = testEffect(toolLayer())

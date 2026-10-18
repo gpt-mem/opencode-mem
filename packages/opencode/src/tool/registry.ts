@@ -28,7 +28,7 @@ import { Provider } from "@/provider/provider"
 
 import { WebSearchTool } from "./websearch"
 import { LspTool } from "./lsp"
-import * as Truncate from "./truncate"
+
 import { ApplyPatchTool } from "./apply_patch"
 import { Glob } from "@opencode-ai/core/util/glob"
 import path from "path"
@@ -95,7 +95,6 @@ const layer = Layer.effect(
     const config = yield* Config.Service
     const plugin = yield* Plugin.Service
     const agents = yield* Agent.Service
-    const truncate = yield* Truncate.Service
     const flags = yield* RuntimeFlags.Service
     const mcp = yield* MCP.Service
 
@@ -157,17 +156,11 @@ const layer = Layer.effect(
                 const output = typeof result === "string" ? result : result.output
                 const metadata = typeof result === "string" ? {} : (result.metadata ?? {})
                 const attachments = typeof result === "string" ? undefined : result.attachments
-                const info = yield* agent.get(toolCtx.agent)
-                const out = yield* truncate.output(output, {}, info)
                 return {
                   title: typeof result === "string" ? "" : (result.title ?? ""),
-                  output: out.truncated ? out.content : output,
+                  output,
                   attachments,
-                  metadata: {
-                    ...metadata,
-                    truncated: out.truncated,
-                    ...(out.truncated && { outputPath: out.outputPath }),
-                  },
+                  metadata,
                 }
               }).pipe(
                 Effect.withSpan("Tool.execute", {
@@ -448,7 +441,7 @@ export const node = LayerNode.make({
     httpClient,
     CrossSpawnSpawner.node,
     Format.node,
-    Truncate.node,
+
     RuntimeFlags.node,
     MCP.node,
     Database.node,

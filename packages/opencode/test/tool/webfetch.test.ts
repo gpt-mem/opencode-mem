@@ -4,14 +4,13 @@ import { httpClient } from "@opencode-ai/core/effect/app-node-platform"
 import { Effect, Layer } from "effect"
 import { FetchHttpClient, HttpClient } from "effect/unstable/http"
 import { Agent } from "../../src/agent/agent"
-import { Truncate } from "@/tool/truncate"
 import { WebFetchTool } from "../../src/tool/webfetch"
 import { SessionID, MessageID } from "../../src/session/schema"
 import { Tool } from "@/tool/tool"
 import { testEffect } from "../lib/effect"
 
 const it = testEffect(
-  LayerNode.compile(LayerNode.group([httpClient, Truncate.node, Agent.node]), [
+  LayerNode.compile(LayerNode.group([httpClient, Agent.node]), [
     [httpClient, FetchHttpClient.layer as Layer.Layer<HttpClient.HttpClient>],
   ]),
 )

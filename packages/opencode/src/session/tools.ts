@@ -8,7 +8,7 @@ import { Permission } from "@/permission"
 import { Tool } from "@/tool/tool"
 import { ToolJsonSchema } from "@/tool/json-schema"
 import { ToolRegistry } from "@/tool/registry"
-import { Truncate } from "@/tool/truncate"
+
 
 import { Plugin } from "@/plugin"
 import type { TaskPromptOps } from "@/tool/task"
@@ -53,7 +53,6 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
   const permission = yield* Permission.Service
   const registry = yield* ToolRegistry.Service
   const mcp = yield* MCP.Service
-  const truncate = yield* Truncate.Service
   const flags = yield* RuntimeFlags.Service
 
   const context = (args: Record<string, unknown>, options: ToolExecutionOptions): Tool.Context => ({
@@ -193,7 +192,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
                 ),
               )
             const content = JSON.stringify({ resources: filtered.map(formatMcpResource) }, null, 2)
-            const truncated = yield* truncate.output(content, {}, input.agent)
+            const truncated = { content, truncated: false, outputPath: undefined }
             const output = {
               title: parsed.server ? `MCP resources: ${parsed.server}` : "MCP resources",
               metadata: {
@@ -276,7 +275,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
                 ),
               )
             const content = JSON.stringify({ resourceTemplates: filtered.map(formatMcpResourceTemplate) }, null, 2)
-            const truncated = yield* truncate.output(content, {}, input.agent)
+            const truncated = { content, truncated: false, outputPath: undefined }
             const output = {
               title: parsed.server ? `MCP resource templates: ${parsed.server}` : "MCP resource templates",
               metadata: {
@@ -351,7 +350,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
             if (!content) throw new Error(`Failed to read MCP resource: ${parsed.server}/${parsed.uri}`)
 
             const formatted = formatMcpResourceContent(parsed.server, parsed.uri, content)
-            const truncated = yield* truncate.output(formatted.text, {}, input.agent)
+            const truncated = { content: formatted.text, truncated: false, outputPath: undefined }
             const output = {
               title: `MCP resource: ${parsed.uri}`,
               metadata: {
@@ -461,7 +460,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
             }
           }
 
-          const truncated = yield* truncate.output(textParts.join("\n\n"), {}, input.agent)
+           const truncated = { content: textParts.join("\n\n"), truncated: false, outputPath: undefined }
           const metadata = {
             ...result.metadata,
             truncated: truncated.truncated,

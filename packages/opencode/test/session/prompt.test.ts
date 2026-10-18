@@ -46,7 +46,6 @@ import { SystemPrompt } from "../../src/session/system"
 import { Shell } from "@opencode-ai/core/shell"
 import { Snapshot } from "../../src/snapshot"
 import { ToolRegistry } from "@/tool/registry"
-import { Truncate } from "@/tool/truncate"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { Ripgrep } from "@opencode-ai/core/ripgrep"
 import { Format } from "../../src/format"
@@ -197,7 +196,6 @@ const promptRoot = LayerNode.group([
   Git.node,
   Ripgrep.node,
   Format.node,
-  Truncate.node,
   SessionProcessor.node,
   Image.node,
   SessionCompaction.node,

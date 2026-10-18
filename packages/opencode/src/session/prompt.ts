@@ -38,7 +38,7 @@ import { LLM } from "./llm"
 import { Shell } from "@opencode-ai/core/shell"
 import { ShellID } from "@/tool/shell/id"
 import { FSUtil } from "@opencode-ai/core/fs-util"
-import { Truncate } from "@/tool/truncate"
+
 import { Image } from "@/image/image"
 import { decodeDataUrl } from "@/util/data-url"
 import { Process } from "@/util/process"
@@ -128,7 +128,6 @@ const layer = Layer.effect(
     const mcp = yield* MCP.Service
     const lsp = yield* LSP.Service
     const registry = yield* ToolRegistry.Service
-    const truncate = yield* Truncate.Service
     const image = yield* Image.Service
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
     const scope = yield* Scope.Scope
@@ -1254,7 +1253,7 @@ const layer = Layer.effect(
               Effect.provideService(Permission.Service, permission),
               Effect.provideService(ToolRegistry.Service, registry),
               Effect.provideService(MCP.Service, mcp),
-              Effect.provideService(Truncate.Service, truncate),
+
               Effect.provideService(RuntimeFlags.Service, flags),
             )
 
@@ -1774,7 +1773,6 @@ export const node = LayerNode.make({
     MCP.node,
     LSP.node,
     ToolRegistry.node,
-    Truncate.node,
     Image.node,
     CrossSpawnSpawner.node,
     Instruction.node,

@@ -15,7 +15,6 @@ import { Permission } from "../../src/permission"
 import { SessionID, MessageID } from "../../src/session/schema"
 import { Instruction } from "../../src/session/instruction"
 import { ReadTool } from "../../src/tool/read"
-import { Truncate } from "@/tool/truncate"
 import { Tool } from "@/tool/tool"
 import { Filesystem } from "@/util/filesystem"
 import {
@@ -53,7 +52,6 @@ const readLayer = (flags: Partial<RuntimeFlags.Info> = {}) =>
       Instruction.node,
       LSP.node,
       Ripgrep.node,
-      Truncate.node,
     ]),
   )
 

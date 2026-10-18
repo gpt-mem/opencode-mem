@@ -12,6 +12,10 @@ import type { ToolOutput } from "@opencode-ai/llm"
 
 export const MAX_LINES = 2_000
 export const MAX_BYTES = 50 * 1024
+export const INLINE_LINES = 100
+export const INLINE_BYTES = 4 * 1024
+export const PREVIEW_LINES = 40
+export const PREVIEW_BYTES = 2 * 1024
 export const RETENTION = Duration.days(7)
 
 export const MANAGED_DIRECTORY = "tool-output"
@@ -41,6 +45,8 @@ export type Error = StorageError
 
 export interface Interface {
   readonly limits: () => Effect.Effect<{ readonly maxLines: number; readonly maxBytes: number }>
+  readonly inlineLimits: () => Effect.Effect<{ readonly maxLines: number; readonly maxBytes: number }>
+  readonly previewLimits: () => Effect.Effect<{ readonly maxLines: number; readonly maxBytes: number }>
   readonly bound: (input: BoundInput) => Effect.Effect<BoundResult, Error>
   readonly cleanup: () => Effect.Effect<void>
 }
@@ -116,14 +122,32 @@ const layer = Layer.effect(
     const global = yield* Global.Service
     const config = yield* Effect.serviceOption(Config.Service)
     const directory = path.join(global.data, MANAGED_DIRECTORY)
-    const limits = Effect.fn("ToolOutputStore.limits")(function* () {
-      if (Option.isNone(config)) return { maxLines: MAX_LINES, maxBytes: MAX_BYTES }
+    const readConfig = Effect.fn("ToolOutputStore.readConfig")(function* () {
+      if (Option.isNone(config)) return {}
       const entries = yield* config.value.entries().pipe(Effect.catch(() => Effect.succeed([] as Config.Entry[])))
-      const configured = Object.assign(
+      return Object.assign(
         {},
         ...entries.flatMap((entry) => (entry.type === "document" ? [entry.info.tool_output ?? {}] : [])),
       )
+    })
+
+    const limits = Effect.fn("ToolOutputStore.limits")(function* () {
+      const configured = yield* readConfig()
       return { maxLines: configured.max_lines ?? MAX_LINES, maxBytes: configured.max_bytes ?? MAX_BYTES }
+    })
+
+    const inlineLimits = Effect.fn("ToolOutputStore.inlineLimits")(function* () {
+      const configured = yield* readConfig()
+      return { maxLines: configured.inline_lines ?? INLINE_LINES, maxBytes: configured.inline_bytes ?? INLINE_BYTES }
+    })
+
+    const previewLimits = Effect.fn("ToolOutputStore.previewLimits")(function* () {
+      const configured = yield* readConfig()
+      const max = yield* limits()
+      return {
+        maxLines: Math.min(configured.preview_lines ?? PREVIEW_LINES, max.maxLines),
+        maxBytes: Math.min(configured.preview_bytes ?? PREVIEW_BYTES, max.maxBytes),
+      }
     })
 
     const write = Effect.fn("ToolOutputStore.write")(function* (content: string) {
@@ -137,6 +161,8 @@ const layer = Layer.effect(
 
     const bound = Effect.fn("ToolOutputStore.bound")(function* (input: BoundInput) {
       const outputLimits = yield* limits()
+      const inline = yield* inlineLimits()
+      const preview = yield* previewLimits()
       const media = input.output.content.filter((item) => item.type === "file")
       const text = input.output.content.filter((item) => item.type === "text")
       const contextual =
@@ -146,17 +172,26 @@ const layer = Layer.effect(
               catch: (cause) => new StorageError({ operation: "encode", cause }),
             })
           : text.map((item) => item.text).join("")
-      if (
-        lineCount(contextual) <= outputLimits.maxLines &&
-        Buffer.byteLength(contextual, "utf-8") <= outputLimits.maxBytes
-      )
+
+      // Small results stay fully in context.
+      if (lineCount(contextual) <= inline.maxLines && Buffer.byteLength(contextual, "utf-8") <= inline.maxBytes) {
         return {
           output: input.output,
           outputPaths: [],
         }
+      }
 
+      // Oversized results are spilled to disk; keep only a bounded head preview (or none).
       const outputPath = yield* write(contextual)
       const marker = `... output truncated; full content saved to ${outputPath} ...`
+
+      const previewText =
+        preview.maxBytes <= 0 || preview.maxLines <= 0
+          ? ""
+          : takePrefix(contextual.split("\n").slice(0, preview.maxLines).join("\n"), preview.maxBytes)
+
+      const contentText =
+        previewText.length > 0 ? `${previewText}\n\n${marker}` : marker
 
       return {
         output: {
@@ -164,7 +199,7 @@ const layer = Layer.effect(
           content: [
             {
               type: "text" as const,
-              text: boundedPreview(contextual, marker, outputLimits.maxLines, outputLimits.maxBytes),
+              text: contentText,
             },
             ...media,
           ],
@@ -188,7 +223,7 @@ const layer = Layer.effect(
       }
     })
 
-    return Service.of({ limits, bound, cleanup })
+    return Service.of({ limits, inlineLimits, previewLimits, bound, cleanup })
   }),
 )
 
