@@ -45,15 +45,12 @@ function normalize(text: string): string {
 const TOP_LEVEL = [
   "acp",
   "mcp",
-  "attach",
   "run",
   "debug",
   "providers", // aliased to `auth`
   "agent",
   "upgrade",
   "uninstall",
-  "serve",
-  "web",
   "models",
   "stats",
   "export",
