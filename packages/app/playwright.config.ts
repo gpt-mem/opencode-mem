@@ -9,7 +9,21 @@ const reuse = !process.env.CI
 const workers = Number(process.env.PLAYWRIGHT_WORKERS ?? (process.env.CI ? 5 : 0)) || undefined
 export default defineConfig({
   testDir: "./e2e",
-  testIgnore: process.env.OPENCODE_PERFORMANCE === "1" ? "performance/**/*.test.ts" : "performance/**",
+  testIgnore: [
+    ...(process.env.OPENCODE_PERFORMANCE === "1" ? ["performance/**/*.test.ts"] : ["performance/**"]),
+    ...(process.env.CI_PRUNE_E2E === "1"
+      ? [
+          "regression/session-timeline-collapse-state.spec.ts",
+          "regression/session-timeline-context-resize.spec.ts",
+          "regression/review-terminal-stacked.spec.ts",
+          "regression/review-image-flash.spec.ts",
+          "regression/session-timeline-accessibility.spec.ts",
+          "regression/session-timeline-locale-projection.spec.ts",
+          "regression/new-session-panel-corner.spec.ts",
+          "regression/tab-navigate-mousedown.spec.ts",
+        ]
+      : []),
+  ],
   outputDir: "./e2e/test-results",
   timeout: 60_000,
   expect: {
