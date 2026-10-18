@@ -7,7 +7,7 @@ import { McpCatalog } from "@/mcp/catalog"
 import { Permission } from "@/permission"
 import { Tool } from "@/tool/tool"
 import { ToolJsonSchema } from "@/tool/json-schema"
-import { ToolRegistry } from "@/tool/registry"
+import { ToolRegistry, truncateToolOutput } from "@/tool/registry"
 
 
 import { Plugin } from "@/plugin"
@@ -192,7 +192,8 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
                 ),
               )
             const content = JSON.stringify({ resources: filtered.map(formatMcpResource) }, null, 2)
-            const truncated = { content, truncated: false, outputPath: undefined }
+            const truncatedContent = truncateToolOutput(content)
+            const truncated = { content: truncatedContent, truncated: truncatedContent !== content, outputPath: undefined }
             const output = {
               title: parsed.server ? `MCP resources: ${parsed.server}` : "MCP resources",
               metadata: {
@@ -275,7 +276,8 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
                 ),
               )
             const content = JSON.stringify({ resourceTemplates: filtered.map(formatMcpResourceTemplate) }, null, 2)
-            const truncated = { content, truncated: false, outputPath: undefined }
+            const truncatedContent = truncateToolOutput(content)
+            const truncated = { content: truncatedContent, truncated: truncatedContent !== content, outputPath: undefined }
             const output = {
               title: parsed.server ? `MCP resource templates: ${parsed.server}` : "MCP resource templates",
               metadata: {
@@ -350,7 +352,9 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
             if (!content) throw new Error(`Failed to read MCP resource: ${parsed.server}/${parsed.uri}`)
 
             const formatted = formatMcpResourceContent(parsed.server, parsed.uri, content)
-            const truncated = { content: formatted.text, truncated: false, outputPath: undefined }
+            const joined = formatted.text
+            const truncatedContent = truncateToolOutput(joined)
+            const truncated = { content: truncatedContent, truncated: truncatedContent !== joined, outputPath: undefined }
             const output = {
               title: `MCP resource: ${parsed.uri}`,
               metadata: {
@@ -460,7 +464,9 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
             }
           }
 
-           const truncated = { content: textParts.join("\n\n"), truncated: false, outputPath: undefined }
+           const joined = textParts.join("\n\n")
+           const truncatedContent = truncateToolOutput(joined)
+           const truncated = { content: truncatedContent, truncated: truncatedContent !== joined, outputPath: undefined }
           const metadata = {
             ...result.metadata,
             truncated: truncated.truncated,

@@ -64,7 +64,7 @@ const TRUNCATE_MAX_BYTES = 50 * 1024
 const TRUNCATE_PREVIEW_LINES = 40
 const TRUNCATE_PREVIEW_BYTES = 2 * 1024
 
-function truncateToolOutput(output: string): string {
+export function truncateToolOutput(output: string): string {
   const lines = output.split("\n")
   const lineCount = lines.length
   const byteLength = Buffer.byteLength(output, "utf-8")
@@ -182,16 +182,17 @@ const layer = Layer.effect(
                   directory: ctx.directory,
                   worktree: ctx.worktree,
                 }
-                const result = yield* Effect.promise(() => def.execute(args as any, pluginCtx))
-                const output = typeof result === "string" ? result : result.output
-                const metadata = typeof result === "string" ? {} : (result.metadata ?? {})
-                const attachments = typeof result === "string" ? undefined : result.attachments
-                return {
-                  title: typeof result === "string" ? "" : (result.title ?? ""),
-                  output,
-                  attachments,
-                  metadata,
-                }
+                 const result = yield* Effect.promise(() => def.execute(args as any, pluginCtx))
+                 const rawOutput = typeof result === "string" ? result : result.output
+                 const output = typeof rawOutput === "string" ? truncateToolOutput(rawOutput) : rawOutput
+                 const metadata = typeof result === "string" ? {} : (result.metadata ?? {})
+                 const attachments = typeof result === "string" ? undefined : result.attachments
+                 return {
+                   title: typeof result === "string" ? "" : (result.title ?? ""),
+                   output,
+                   attachments,
+                   metadata,
+                 }
               }).pipe(
                 Effect.withSpan("Tool.execute", {
                   attributes: {
