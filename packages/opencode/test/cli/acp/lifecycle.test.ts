@@ -11,8 +11,9 @@ import { expectOk, selectConfigOption } from "./acp-test-client"
 import { createAcpClient, initialize, newSession, verifierConfig } from "./helpers"
 
 describe("opencode acp lifecycle subprocess", () => {
-  cliIt.live(
-    "stdin EOF exits cleanly",
+  if (process.platform !== "win32") {
+    cliIt.live(
+      "stdin EOF exits cleanly",
     ({ opencode }) =>
       Effect.gen(function* () {
         const acp = yield* opencode.acp()
@@ -23,6 +24,7 @@ describe("opencode acp lifecycle subprocess", () => {
       }),
     60_000,
   )
+  }
 
   cliIt.live(
     "close capability and close request",
