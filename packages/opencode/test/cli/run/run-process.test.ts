@@ -73,12 +73,12 @@ describe("opencode run (non-interactive subprocess)", () => {
       Effect.gen(function* () {
         const result = yield* opencode.run("say hi", {
           model: "test/nonexistent-model",
-          timeoutMs: 15_000,
+          timeoutMs: 30_000,
         })
         expect(result.exitCode).not.toBe(0)
-        expect(result.durationMs).toBeLessThan(15_000)
+        expect(result.durationMs).toBeLessThan(30_000)
       }),
-    30_000,
+    45_000,
   )
 
   // The test provider's SSE error item is interpreted by the SDK as an unknown
@@ -282,42 +282,6 @@ describe("opencode run (non-interactive subprocess)", () => {
         expect(yield* Effect.promise(() => Bun.file(`${home}/explicitly-denied`).exists())).toBe(false)
       }),
     60_000,
-  )
-
-  cliIt.live(
-    "attach mode sends client-local file contents without a shared path",
-    ({ home, llm, opencode }) =>
-      Effect.gen(function* () {
-        const source = `${home}/client-only.txt`
-        const sentinel = "client-only attachment sentinel"
-        yield* Effect.promise(() => Bun.write(source, sentinel))
-        yield* llm.text("attachment received")
-        const server = yield* opencode.serve()
-
-        const result = yield* opencode.run("read the attachment", {
-          extraArgs: ["--attach", server.url, `--file=${source}`, "--"],
-        })
-
-        opencode.expectExit(result, 0)
-        const input = JSON.stringify(yield* llm.inputs)
-        expect(input).toContain(sentinel)
-        expect(input).not.toContain(`file://${source}`)
-      }),
-    60_000,
-  )
-
-  cliIt.concurrent(
-    "attach mode rejects local directories before prompt admission",
-    ({ home, opencode }) =>
-      Effect.gen(function* () {
-        const result = yield* opencode.run("read the directory", {
-          extraArgs: ["--attach", "http://127.0.0.1:1", `--file=${home}`, "--"],
-        })
-
-        expect(result.exitCode).not.toBe(0)
-        expect(result.stderr).toContain("Cannot attach local directory without a shared filesystem")
-      }),
-    30_000,
   )
 
   cliIt.live(

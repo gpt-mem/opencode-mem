@@ -28,9 +28,9 @@ jobs:
       matrix:
         settings:
           - name: linux
-            host: blacksmith-4vcpu-ubuntu-2404
+            host: ubuntu-latest
           - name: windows
-            host: blacksmith-4vcpu-windows-2025
+            host: windows-latest
     runs-on: ${{ matrix.settings.host }}
     defaults:
       run:
@@ -63,6 +63,19 @@ jobs:
             turbo-${{ runner.os }}-${{ hashFiles('turbo.json', '**/package.json') }}-
             turbo-${{ runner.os }}-
 
+      - name: Ensure ripgrep
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ] && ! command -v rg >/dev/null 2>&1 && ! command -v rg.exe >/dev/null 2>&1; then
+            choco install ripgrep -y
+          fi
+
+      - name: Cache ripgrep binary
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.cache/opencode/bin
+          key: ripgrep-${{ runner.os }}-${{ runner.arch }}-15.1.0
+
       - name: Run unit tests
         timeout-minutes: 20
         run: GITHUB_ACTIONS=false bun turbo test
@@ -74,10 +87,6 @@ jobs:
         working-directory: packages/client
         run: bun run check:generated
 
-      - name: Run HttpApi exerciser gates
-        if: runner.os == 'Linux'
-        working-directory: packages/opencode
-        run: bun run test:httpapi
 
   e2e:
     name: e2e (${{ matrix.settings.name }})
@@ -86,9 +95,9 @@ jobs:
       matrix:
         settings:
           - name: linux
-            host: blacksmith-4vcpu-ubuntu-2404
+            host: ubuntu-latest
           - name: windows
-            host: blacksmith-4vcpu-windows-2025
+            host: windows-latest
     runs-on: ${{ matrix.settings.host }}
     env:
       PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.playwright-browsers

@@ -46,8 +46,6 @@ export type StreamInput = {
   retries?: number
   toolChoice?: "auto" | "required" | "none"
   onTools?: (names: string[]) => void
-  ladderVariant?: { rung: string; scope: string; messages: ModelMessage[] }
-  ladderResponse?: (response: LadderTransport.Response) => void
 }
 
 export type StreamRequest = StreamInput & {

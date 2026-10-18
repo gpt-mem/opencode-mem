@@ -223,7 +223,6 @@ const layer = Layer.effect(
       if (yield* compaction.compactIfNeeded({ sessionID: session.id, entries, model, request }))
         return yield* Effect.die(continueAfterCompaction(currentStep))
       const startSnapshot = yield* snapshots.capture()
-      let emptyCompletionRetries = 0
       while (true) {
         const toolFibers = yield* FiberSet.make<void, ToolOutputStore.Error>()
         let needsContinuation = false
@@ -372,14 +371,6 @@ const layer = Layer.effect(
           return { empty: false as const, needsContinuation: !publisher.hasProviderError() && needsContinuation, step: currentStep }
         }),
       )
-      if (attempt.empty && emptyCompletionRetries < 5) {
-        emptyCompletionRetries++
-        continue
-      }
-      if (attempt.empty) {
-        yield* withPublication(publisher.failAssistant("Model returned an empty response"))
-        return { needsContinuation: false, step: currentStep }
-      }
       return { needsContinuation: attempt.needsContinuation, step: attempt.step }
       }
     }, Effect.scoped)
