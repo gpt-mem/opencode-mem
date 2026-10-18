@@ -197,6 +197,7 @@ const layer = Layer.effect(
       const model = yield* models.resolve(session)
       const entries = yield* SessionHistory.entriesForRunner(db, session.id, system.baselineSeq)
       const context = entries.map((entry) => entry.message)
+      const hasPriorAssistant = entries.some((entry) => entry.message.type === "assistant")
       const isLastStep = agent.info?.steps !== undefined && currentStep >= agent.info.steps
       const toolMaterialization = isLastStep ? undefined : yield* tools.materialize(agent.info?.permissions)
       const promptCacheKey = /^ses_[0-9a-f]{64}$/.test(session.id) ? session.id.slice(4) : session.id
@@ -324,6 +325,21 @@ const layer = Layer.effect(
             yield* withPublication(publisher.failUnsettledTools(`Tool execution failed: ${message}`))
           }
           const stepSettlement = publisher.stepSettlement()
+          const steerPending = yield* SessionInput.hasPending(db, session.id, "steer")
+          const queuePending = yield* SessionInput.hasPending(db, session.id, "queue")
+          const isEmptyCompletion =
+            stream._tag === "Success" &&
+            !publisher.hasProviderError() &&
+            !publisher.hasOutput() &&
+            stepSettlement !== undefined &&
+            !["tool-calls", "unknown"].includes(stepSettlement.finish) &&
+            !hasPriorAssistant &&
+            !steerPending &&
+            !queuePending &&
+            promotion === undefined
+          if (isEmptyCompletion) {
+            return { empty: true as const, needsContinuation: false, step: currentStep }
+          }
           if (stepSettlement && !publisher.hasProviderError()) {
             const endSnapshot = yield* snapshots.capture()
             const files =
