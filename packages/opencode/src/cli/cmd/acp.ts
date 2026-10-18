@@ -65,10 +65,25 @@ export const AcpCommand = effectCmd({
     yield* Effect.promise(
       () =>
         new Promise<void>((resolve, reject) => {
-          const done = () => resolve()
+          let settled = false
+          const done = () => {
+            if (settled) return
+            settled = true
+            clearInterval(poll)
+            resolve()
+          }
+          const fail = (error: unknown) => {
+            if (settled) return
+            settled = true
+            clearInterval(poll)
+            reject(error)
+          }
           process.stdin.on("end", done)
           process.stdin.on("close", done)
-          process.stdin.on("error", reject)
+          process.stdin.on("error", fail)
+          const poll = setInterval(() => {
+            if (process.stdin.readableEnded || process.stdin.destroyed) done()
+          }, 100)
         }),
     )
   }),
