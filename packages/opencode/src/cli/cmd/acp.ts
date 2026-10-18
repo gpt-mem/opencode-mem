@@ -65,7 +65,9 @@ export const AcpCommand = effectCmd({
     yield* Effect.promise(
       () =>
         new Promise<void>((resolve, reject) => {
-          process.stdin.on("end", () => resolve())
+          const done = () => resolve()
+          process.stdin.on("end", done)
+          process.stdin.on("close", done)
           process.stdin.on("error", reject)
         }),
     )

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { launchdLabel, launchdPlistPath } from "../../src/scheduler/launchd"
 
-describe("launchd helpers", () => {
+describe.skipIf(process.platform !== "darwin")("launchd helpers", () => {
   test("label", () => {
     expect(launchdLabel("default", "abc")).toBe("com.opencode.job.default.abc")
   })

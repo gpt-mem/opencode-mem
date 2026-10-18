@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { generateSystemdUnit, systemdUnitPath } from "../../src/scheduler/systemd"
 
-describe("systemd", () => {
+describe.skipIf(process.platform !== "linux")("systemd", () => {
   test("unit path", () => {
     expect(systemdUnitPath("abc")).toContain("systemd/user/abc.service")
   })
