@@ -104,7 +104,7 @@ Usage notes:
     - Edit files: Use Edit (NOT sed/awk)
     - Write files: Use Write (NOT echo >/cat <<EOF)
     - Communication: Output text directly (NOT echo/printf)
-  - To avoid looping after the second or third similar tool call in a row, first write out a list of the commands/tasks/searches you plan to run, then execute them; do not re-run a similar search more than twice in a row.
+  - To avoid looping after the second or third similar tool call in a row, first write out a list of the commands/tasks/searches you plan to run, then execute them; do not re-run a similar search more than twice in a row. If three similar commands/searches produce no new result, stop and ask the user instead of continuing.
   - When issuing multiple commands:
     - If the commands are independent and can run in parallel, make multiple bash tool calls in a single message. For example, if you need to run "git status" and "git diff", send a single message with two bash tool calls in parallel.
     - ${chain}
