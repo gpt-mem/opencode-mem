@@ -244,7 +244,7 @@ const layer = () =>
           const total = (yield* require(info.id)).newlines + (page.output.endsWith("\n") ? 0 : 1)
           const shown = Math.min(lines.length, maxLines)
           const notice = truncated
-            ? `\n\n[showing lines ${total - shown + 1}-${total} of ${total}; full output saved to ${info.file}]`
+            ? `\n\n[showing lines ${total - shown + 1}-${total} of ${total}; full output saved to ${info.file} — read or grep that file instead of re-running the command]`
             : ""
           return { output: `${text || "(no output)"}${notice}`, truncated }
         }).pipe(Effect.catchTag("Shell.NotFoundError", () => Effect.succeed(undefined)))

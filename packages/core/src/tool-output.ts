@@ -11,7 +11,9 @@ import { FileRetention } from "./file-retention.js"
 import { State } from "./state.js"
 
 export const MAX_LINES = 2_000
-export const MAX_BYTES = 50 * 1024 // 50 KiB
+// Tool output above this budget leaves the model context and lands in a file instead,
+// so a large result costs a pointer rather than its full payload on every later step.
+export const MAX_BYTES = 2 * 1024 // 2 KiB
 export const RETENTION = Duration.days(7)
 export const DIRECTORY = "tool-output"
 
@@ -87,7 +89,7 @@ const layer = Layer.effect(
       yield* fs.ensureDir(directory).pipe(Effect.orDie)
       yield* fs.writeFileString(file, text).pipe(Effect.orDie)
       const shown = kept.length > 0 ? `lines 1-${kept.length}` : "0 lines"
-      const marker = `[showing ${shown} of ${lines.length}; full output saved to ${file}]`
+      const marker = `[showing ${shown} of ${lines.length}; full output saved to ${file} — read or grep that file instead of re-running the command]`
       const bounded: Tool.Content[] = []
       let remaining = kept.join("\n").length
       let seenText = false
