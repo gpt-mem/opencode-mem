@@ -8,6 +8,16 @@ Use `${tmp}` for temporary work outside the workspace. This directory has alread
 
 IMPORTANT: This tool is for terminal operations like git, npm, docker, etc. DO NOT use it for file operations (reading, writing, editing, searching, finding files) - use the specialized tools for this instead.
 
+Always use the dedicated tools instead of Bash for file operations:
+- File search: Use Glob (NOT find or ls)
+- Content search: Use Grep (NOT grep or rg)
+- Read files: Use Read (NOT cat/head/tail)
+- Edit files: Use Edit (NOT sed/awk)
+- Write files: Use Write (NOT echo >/cat <<EOF)
+- Communication: Output text directly (NOT echo/printf)
+
+To avoid looping after the second or third similar tool call in a row, first write out a list of the commands/tasks/searches you plan to run, then execute them; do not re-run a similar search more than twice in a row.
+
 ${commandSection}
 
 # Git and GitHub
