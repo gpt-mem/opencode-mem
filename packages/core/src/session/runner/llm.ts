@@ -1,6 +1,6 @@
 export * as SessionRunnerLLM from "./llm.js"
 
-import { Message } from "@opencode/ai"
+import { Message, SystemPart } from "@opencode/ai"
 import { and, desc, eq, inArray, sql } from "drizzle-orm"
 import { Cause, Effect, Exit, FiberMap, Layer } from "effect"
 import { Database } from "../../database/database.js"
@@ -31,6 +31,7 @@ import { SessionStep } from "./step.js"
 import { ToolOutput } from "../../tool-output.js"
 import { Plugin } from "../../plugin.js"
 import { MAX_STEPS_PROMPT } from "./max-steps.js"
+import { SessionDoomLoop } from "./doom-loop.js"
 
 const CONTINUE_AFTER_INCOMPLETE_STREAM =
   "The previous response was interrupted. Continue from where you left off without repeating completed content."
@@ -231,12 +232,21 @@ const layer = Layer.effect(
           initial: loaded.initial,
           messages: loaded.messages,
         })
+        // A session that keeps making the same call is a doom loop. The warning
+        // is advisory: it tells the model to change the approach, and the
+        // session keeps running.
+        const doomLoop = SessionDoomLoop.warning(loaded.messages)
+        if (doomLoop)
+          yield* Effect.logWarning("doom loop suspected across steps", {
+            sessionID,
+            step,
+          })
         const prepared = yield* context.request.primary({
           session: loaded.session,
           agent: loaded.agent.id,
           model: loaded.model,
           tools: loaded.tools,
-          system: transcript.system,
+          system: doomLoop ? [...transcript.system, SystemPart.make(doomLoop)] : transcript.system,
           messages: stepLimitReached
             ? [...transcript.messages, Message.assistant(MAX_STEPS_PROMPT)]
             : transcript.messages,
