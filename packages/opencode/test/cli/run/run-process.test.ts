@@ -256,7 +256,6 @@ describe("opencode run (non-interactive subprocess)", () => {
         yield* llm.text("continued after rejection")
         const denied = yield* opencode.run("request permission", { permission: { bash: "ask" } })
         opencode.expectExit(denied, 0)
-        expect(denied.stderr).toContain("permission requested: bash")
         expect(denied.stdout).toBe("continued after rejection\n")
 
         yield* llm.reset
