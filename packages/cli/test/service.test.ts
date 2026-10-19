@@ -232,10 +232,7 @@ test("managed service loads configured environment", async () => {
   )
   try {
     const info = await waitForInfo(registration)
-    const url = new URL("/api/config", info.url)
-    url.searchParams.set("location[directory]", root)
-    const response = await fetch(url, { headers: { authorization: "Basic " + btoa(`opencode:${info.password}`) } })
-    expect(response.status).toBe(200)
+    const response = await waitForConfig(info, root)
     expect((await response.json())[0].info.mcp.servers.env.environment).toEqual({
       configured: "configured",
       empty: "",
@@ -769,6 +766,25 @@ async function waitForInfo(file: string, accept: (info: Info) => boolean = () =>
     await Bun.sleep(50)
   }
   throw new Error("Timed out waiting for service registration")
+}
+
+/**
+ * The service registers itself before its API answers: the registration file
+ * appears while the location behind it is still loading. The test waits for
+ * the API, not for the registration.
+ */
+async function waitForConfig(info: Info, directory: string) {
+  const url = new URL("/api/config", info.url)
+  url.searchParams.set("location[directory]", directory)
+  const deadline = Date.now() + 30_000
+  while (true) {
+    const response = await fetch(url, {
+      headers: { authorization: "Basic " + btoa(`opencode:${info.password}`) },
+    }).catch(() => undefined)
+    if (response?.status === 200) return response
+    if (Date.now() >= deadline) throw new Error("Timed out waiting for the service API")
+    await Bun.sleep(50)
+  }
 }
 
 async function waitForFailed(info: Info) {
