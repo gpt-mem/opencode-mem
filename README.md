@@ -123,6 +123,36 @@ chmod +x "$HOME/.opencode/bin/opencode.new"
 mv -f "$HOME/.opencode/bin/opencode.new" "$HOME/.opencode/bin/opencode"
 ```
 
+#### What gets installed, and where
+
+Installing a fork build touches these paths. Nothing else is written, and nothing outside them is modified:
+
+| Path                                | What it is                                                                             |
+| ----------------------------------- | -------------------------------------------------------------------------------------- |
+| `~/.opencode/bin/opencode`          | the executable your shell runs                                                          |
+| `~/.opencode/bin/opencode.stock-backup` | the upstream binary, copied aside before the first fork install so the fork can be undone |
+| `~/.opencode/builds/<sha12>/opencode` | one directory per installed fork build; `<sha12>` is the commit it was built from        |
+| `~/.opencode/builds/current`        | symlink to the **last** installed build (the file, not the directory)                    |
+| `~/.opencode/builds/previous`       | symlink to the build installed before `current`                                          |
+| `~/.opencode/builds/order.txt`      | the build queue, oldest first; `rollback` walks strictly backwards through it             |
+| `~/.opencode/forever-install.json`  | manifest of the active build: repository, revision, version, platform, sha256, install time |
+
+Keeping every build in its own directory is what makes "last" and "previous" selectable at the same time:
+`current` and `previous` are two pointers into the same queue, so switching between them never rebuilds or
+reinstalls anything.
+
+```bash
+# after building (see above), install the result and shift the pointers
+~/.opencode/scripts/mem-builds.sh install packages/cli/dist/cli-darwin-arm64/bin/opencode
+~/.opencode/scripts/mem-builds.sh status     # current / previous, with versions
+~/.opencode/scripts/mem-builds.sh rollback   # current ← the build before it, previous ← the one before that
+~/.opencode/scripts/mem-builds.sh list       # every build on disk, the queue and the pointers
+```
+
+`install` derives the SHA from `opencode --version` (`fork-at-<sha>`), so a binary built with
+`OPENCODE_VERSION` names its own commit. The Session Manager registers the two pointers as
+`OpenCode last` and `OpenCode previous`, and the agent dropdown lists them between Codex and Claude.
+
 #### Verify that the fork is installed
 
 ```bash
