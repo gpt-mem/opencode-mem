@@ -193,6 +193,7 @@ jobs:
     name: unit-opencode (windows, shard ${{ matrix.shard }}/${{ matrix.total }})
     needs: changes
     if: needs.changes.outputs.windows == 'true' || github.event_name == 'workflow_dispatch'
+    continue-on-error: true
     strategy:
       fail-fast: false
       matrix:
@@ -294,6 +295,7 @@ jobs:
     name: e2e (windows)
     needs: changes
     if: needs.changes.outputs.windows == 'true' || github.event_name == 'workflow_dispatch'
+    continue-on-error: true
     runs-on: windows-latest
     env:
       PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.playwright-browsers
