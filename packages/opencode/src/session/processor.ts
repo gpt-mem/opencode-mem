@@ -368,7 +368,7 @@ const layer = Layer.effect(
                   part.type === "tool" &&
                   part.tool === value.name &&
                   part.state.status !== "pending" &&
-                  JSON.stringify(part.state.input).slice(0, 80) === JSON.stringify(input).slice(0, 80),
+                  JSON.stringify(part.state.input) === JSON.stringify(input),
               )
             ) {
               return
