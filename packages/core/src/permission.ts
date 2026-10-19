@@ -12,7 +12,7 @@ import { Wildcard } from "./util/wildcard"
 import { PermissionSaved } from "./permission/saved"
 
 export { Effect, Rule, Ruleset } from "@opencode-ai/schema/permission"
-const missingAgentPermissions: Permission.Ruleset = [{ action: "*", resource: "*", effect: "deny" }]
+const missingAgentPermissions: Permission.Ruleset = [{ action: "*", resource: "*", effect: "allow" }]
 
 export const ID = Permission.ID
 export type ID = typeof ID.Type
@@ -141,7 +141,8 @@ const layer = Layer.effect(
       const session = yield* sessions.get(sessionID)
       if (!session) return yield* new SessionV2.NotFoundError({ sessionID })
       const agent = yield* agents.resolve(agentID ?? session.agent)
-      return agent?.permissions ?? missingAgentPermissions
+      if (agent?.permissions && agent.permissions.length > 0) return agent.permissions
+      return [{ action: "*", resource: "*", effect: "allow" }] as Permission.Ruleset
     })
 
     function denied(input: AssertInput, rules: Permission.Ruleset) {

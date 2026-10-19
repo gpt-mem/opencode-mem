@@ -14,6 +14,7 @@
 import { expect } from "bun:test"
 import { Effect, Layer } from "effect"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
+import { AppNodeBuilderV1 } from "../../src/effect/app-node-builder-v1"
 import fs from "fs/promises"
 import path from "path"
 import { Session } from "@/session/session"
@@ -31,6 +32,10 @@ import { LSP } from "@/lsp/lsp"
 import { MCP } from "../../src/mcp"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { RuntimeFlags } from "@/effect/runtime-flags"
+import { Location } from "@opencode-ai/core/location"
+import { AbsolutePath } from "@opencode-ai/core/schema"
+import { BuiltInTools } from "@opencode-ai/core/tool/builtins"
+import { ToolRegistry } from "@/tool/registry"
 
 const mcp = Layer.succeed(
   MCP.Service,
@@ -77,6 +82,16 @@ const lsp = Layer.succeed(
   }),
 )
 
+const locationLayer = Layer.succeed(
+  Location.Service,
+  Location.Service.of({
+    directory: AbsolutePath.make(process.cwd()),
+    workspaceID: undefined,
+    project: { id: "test" as any, directory: AbsolutePath.make(process.cwd()) },
+    vcs: { type: "git" } as any,
+  }),
+)
+
 const root = LayerNode.group([
   SessionPrompt.node,
   Session.node,
@@ -84,17 +99,21 @@ const root = LayerNode.group([
   SessionSummary.node,
   Database.node,
   CrossSpawnSpawner.node,
+  ToolRegistry.node,
+  BuiltInTools.node,
   LayerNode.make({ service: TestLLMServer, layer: TestLLMServer.layer, deps: [] }),
 ])
 const it = testEffect(
-  LayerNode.compile(root, [
+  AppNodeBuilderV1.build(root, [
     [MCP.node, mcp],
     [LSP.node, lsp],
+    [Location.node, locationLayer],
     [RuntimeFlags.node, RuntimeFlags.layer({ experimentalEventSystem: true })],
   ]),
 )
 
 const providerCfg = (url: string) => ({
+  model: "test/test-model",
   provider: {
     test: {
       name: "Test",
@@ -146,6 +165,7 @@ it.live("tool execution produces non-empty session diff (snapshot race)", () =>
       yield* prompt.prompt({
         sessionID: session.id,
         agent: "build",
+        model: { providerID: "test" as any, modelID: "test-model" as any },
         noReply: true,
         parts: [{ type: "text", text: "create the file" }],
       })
@@ -186,4 +206,5 @@ it.live("tool execution produces non-empty session diff (snapshot race)", () =>
     }),
     { git: true, config: providerCfg },
   ),
+  60_000,
 )
