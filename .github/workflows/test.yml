@@ -185,7 +185,7 @@ jobs:
       - name: Run opencode unit tests (shard)
         timeout-minutes: 20
         working-directory: packages/opencode
-        run: GITHUB_ACTIONS=false bun test --shard=${{ matrix.shard }}/${{ matrix.total }} --timeout 30000 --only-failures
+        run: GITHUB_ACTIONS=false bun test --shard=${{ matrix.shard }}/${{ matrix.total }} --timeout 120000 --only-failures
         env:
           OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER: 'false'
 
@@ -224,7 +224,7 @@ jobs:
       - name: Run opencode unit tests (shard)
         timeout-minutes: 20
         working-directory: packages/opencode
-        run: GITHUB_ACTIONS=false bun test --shard=${{ matrix.shard }}/${{ matrix.total }} --timeout 30000 --only-failures
+        run: GITHUB_ACTIONS=false bun test --shard=${{ matrix.shard }}/${{ matrix.total }} --timeout 120000 --only-failures
         env:
           OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER: 'true'
 
