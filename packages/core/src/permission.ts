@@ -10,6 +10,9 @@ import { SessionV2 } from "./session"
 import { SessionStore } from "./session/store"
 import { Wildcard } from "./util/wildcard"
 import { PermissionSaved } from "./permission/saved"
+import { Database } from "./database/database"
+import { SessionTable } from "./session/sql"
+import { eq } from "drizzle-orm"
 
 export { Effect, Rule, Ruleset } from "@opencode-ai/schema/permission"
 const missingAgentPermissions: Permission.Ruleset = [{ action: "*", resource: "*", effect: "deny" }]
@@ -114,6 +117,7 @@ const layer = Layer.effect(
     const agents = yield* AgentV2.Service
     const sessions = yield* SessionStore.Service
     const saved = yield* PermissionSaved.Service
+    const { db } = yield* Database.Service
     const pending = new Map<ID, Pending>()
 
     yield* EffectRuntime.addFinalizer(() =>
@@ -141,7 +145,22 @@ const layer = Layer.effect(
       const session = yield* sessions.get(sessionID)
       if (!session) return yield* new SessionV2.NotFoundError({ sessionID })
       const agent = yield* agents.resolve(agentID ?? session.agent)
-      return agent?.permissions ?? missingAgentPermissions
+      if (agent) return agent.permissions ?? missingAgentPermissions
+      const row = yield* db
+        .select()
+        .from(SessionTable)
+        .where(eq(SessionTable.id, sessionID))
+        .get()
+        .pipe(EffectRuntime.orDie)
+      const v1 = row?.permission
+      if (Array.isArray(v1) && v1.length > 0) {
+        return v1.map((rule) => ({
+          action: rule.permission,
+          resource: rule.pattern,
+          effect: rule.action,
+        }))
+      }
+      return missingAgentPermissions
     })
 
     function denied(input: AssertInput, rules: Permission.Ruleset) {
@@ -157,7 +176,11 @@ const layer = Layer.effect(
       if (denied(input, rules)) return { effect: "deny" as const, rules }
       const all = [...rules, ...(yield* savedRules())]
       const effects = input.resources.map((resource) => evaluate(input.action, resource, all).effect)
-      const effect: Permission.Effect = effects.includes("deny") ? "deny" : effects.includes("ask") ? "ask" : "allow"
+      const effect: Permission.Effect = effects.includes("deny")
+        ? "deny"
+        : effects.includes("ask")
+          ? "ask"
+          : "allow"
       return { effect, rules: all }
     })
 
@@ -306,5 +329,5 @@ export const locationLayer = layer.pipe(Layer.provideMerge(AgentV2.locationLayer
 export const node = makeLocationNode({
   service: Service,
   layer,
-  deps: [EventV2.node, Location.node, AgentV2.node, SessionStore.node, PermissionSaved.node],
+  deps: [EventV2.node, Location.node, AgentV2.node, SessionStore.node, PermissionSaved.node, Database.node],
 })
