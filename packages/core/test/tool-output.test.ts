@@ -45,10 +45,33 @@ describe("ToolOutput", () => {
           expect(yield* fs.readFileString(outputPath)).toBe("one\ntwo\nthree")
           expect(result.content).toEqual([
             { type: "text", text: "one\ntwo" },
-            { type: "text", text: `[showing lines 1-2 of 3; full output saved to ${outputPath}]` },
+            {
+              type: "text",
+              text: `[showing lines 1-2 of 3; full output saved to ${outputPath} — read or grep that file instead of re-running the command]`,
+            },
           ])
         }),
       { maxLines: 2, maxBytes: 1_000 },
+    ),
+  )
+
+  it.live("keeps the default context budget at 2 KiB and spills the rest to a file", () =>
+    withStore(
+      (service, fs) =>
+        Effect.gen(function* () {
+          const text = Array.from({ length: 200 }, (_, index) => `line ${index} ${"x".repeat(30)}`).join("\n")
+          const result = yield* service.truncate({ content: [{ type: "text", text }] })
+          expect(result.metadata).toMatchObject({ truncated: true })
+          const outputPath = result.metadata?.outputPath
+          if (typeof outputPath !== "string") return
+          expect(yield* fs.readFileString(outputPath)).toBe(text)
+          const preview = result.content
+            .flatMap((item) => (item.type === "text" ? [item.text] : []))
+            .filter((value) => !value.startsWith("[showing"))
+            .join("")
+          expect(Buffer.byteLength(preview)).toBeLessThanOrEqual(ToolOutput.MAX_BYTES)
+          expect(ToolOutput.MAX_BYTES).toBe(2 * 1024)
+        }),
     ),
   )
 
@@ -61,7 +84,9 @@ describe("ToolOutput", () => {
             { type: "text", text: "one" },
             {
               type: "text",
-              text: expect.stringMatching(/^\[showing lines 1-1 of 2; full output saved to .+\]$/),
+              text: expect.stringMatching(
+                /^\[showing lines 1-1 of 2; full output saved to .+ — read or grep that file instead of re-running the command\]$/,
+              ),
             },
           ])
         }),
@@ -81,7 +106,7 @@ describe("ToolOutput", () => {
             { type: "text", text: "before" },
             file,
             { type: "text", text: "after" },
-            { type: "text", text: expect.stringMatching(/^\[showing lines 1-2 of 3; full output saved to /) },
+            { type: "text", text: expect.stringMatching(/^\[showing lines 1-2 of 3; full output saved to .+ — read or grep/) },
           ])
         }),
       { maxLines: 2, maxBytes: 1_000 },
@@ -129,7 +154,7 @@ describe("ToolOutput", () => {
           const result = yield* output.truncate({ content: [{ type: "text", text: "one\n" }] })
           expect(result.content).toEqual([
             { type: "text", text: "one" },
-            { type: "text", text: expect.stringMatching(/^\[showing lines 1-1 of 1; full output saved to /) },
+            { type: "text", text: expect.stringMatching(/^\[showing lines 1-1 of 1; full output saved to .+ — read or grep/) },
           ])
         }),
       { maxLines: 2, maxBytes: 3 },
