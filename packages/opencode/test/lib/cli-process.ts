@@ -206,7 +206,9 @@ export function withCliFixture<A, E>(
 
     const spawn = Effect.fn("opencode.spawn")(function* (args: string[], opts?: SpawnOpts) {
       const start = Date.now()
-      const timeoutMs = opts?.timeoutMs ?? 30_000
+      // The CLI retries provider errors with backoff before giving up, so a failing
+      // run needs more than the default 30s to report the final error.
+      const timeoutMs = opts?.timeoutMs ?? 90_000
       // stdin: "ignore" so the child doesn't see a piped stdin and block
       // on `Bun.stdin.text()` (see src/cli/cmd/run.ts — non-TTY stdin is
       // consumed as the prompt). The old Process.run wrapper defaulted to
@@ -459,7 +461,12 @@ export function withCliFixture<A, E>(
           }),
         receive: Queue.take(responses),
         // proc.stdin.end() is idempotent in Bun; no try/catch needed.
-        close: () => { try { proc.stdin.flush?.() } catch {}; proc.stdin.end() },
+        close: () => {
+          try {
+            proc.stdin.flush?.()
+          } catch {}
+          proc.stdin.end()
+        },
         exited: proc.exited as Promise<number>,
       } satisfies AcpHandle
     })

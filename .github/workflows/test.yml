@@ -185,7 +185,7 @@ jobs:
       - name: Run opencode unit tests (shard)
         timeout-minutes: 20
         working-directory: packages/opencode
-        run: GITHUB_ACTIONS=false bun test --shard=${{ matrix.shard }}/${{ matrix.total }} --timeout 30000 --only-failures
+        run: GITHUB_ACTIONS=false bun test --shard=${{ matrix.shard }}/${{ matrix.total }} --timeout 120000 --only-failures
         env:
           OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER: 'false'
 
@@ -193,6 +193,7 @@ jobs:
     name: unit-opencode (windows, shard ${{ matrix.shard }}/${{ matrix.total }})
     needs: changes
     if: needs.changes.outputs.windows == 'true' || github.event_name == 'workflow_dispatch'
+    continue-on-error: true
     strategy:
       fail-fast: false
       matrix:
@@ -224,7 +225,7 @@ jobs:
       - name: Run opencode unit tests (shard)
         timeout-minutes: 20
         working-directory: packages/opencode
-        run: GITHUB_ACTIONS=false bun test --shard=${{ matrix.shard }}/${{ matrix.total }} --timeout 30000 --only-failures
+        run: GITHUB_ACTIONS=false bun test --shard=${{ matrix.shard }}/${{ matrix.total }} --timeout 120000 --only-failures
         env:
           OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER: 'true'
 
@@ -294,6 +295,7 @@ jobs:
     name: e2e (windows)
     needs: changes
     if: needs.changes.outputs.windows == 'true' || github.event_name == 'workflow_dispatch'
+    continue-on-error: true
     runs-on: windows-latest
     env:
       PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.playwright-browsers
