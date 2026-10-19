@@ -95,6 +95,7 @@ git checkout v2-base
 bun install
 
 cd packages/cli
+OPENCODE_CHANNEL=latest \
 OPENCODE_VERSION="0.0.0-fork-at-$(git rev-parse --short=12 HEAD)" \
   bun run script/build.ts --single --skip-install --skip-web-ui
 ```
@@ -103,6 +104,17 @@ The executable lands in `packages/cli/dist/cli-<os>-<arch>/bin/opencode`
 (`cli-darwin-arm64`, `cli-linux-x64`, `cli-windows-x64.exe`).
 `OPENCODE_VERSION` embeds the built commit into the binary so `--version` names the exact build; without it the
 version is taken from `packages/cli/package.json`.
+`OPENCODE_CHANNEL` decides which **database file** the binary opens (`packages/cli/src/database-path.ts`):
+`opencode.db` for the `latest|dev|beta|next|prod` channels, `opencode-<channel>.db` for anything else. Left unset,
+the channel is taken from the branch name, so a build of `v2-base` opens `opencode-v2-base.db` — a database of its
+own, with none of your credentials and none of your sessions in it. A fork build that **replaces** the upstream
+binary has to share the upstream database, hence `OPENCODE_CHANNEL=latest`.
+Check what a binary opens with:
+
+```bash
+opencode debug paths | grep ^db   # db …/opencode.db — the same file the upstream build opens
+```
+
 `--skip-web-ui` only skips the bundled web UI; `--target=opencode-linux-x64` builds a single foreign target.
 
 #### Install a specific version, and roll back
