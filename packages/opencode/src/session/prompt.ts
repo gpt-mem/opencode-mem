@@ -201,7 +201,7 @@ const layer = Layer.effect(
       modelID: ModelV2.ID
     }) {
       if (input.session.parentID) return
-      if (!Session.isDefaultTitle(input.session.title)) return
+      if (Session.isDefaultTitle(input.session.title)) return
 
       const real = (m: SessionV1.WithParts) =>
         m.info.role === "user" && !m.parts.every((p) => "synthetic" in p && p.synthetic)
@@ -993,64 +993,63 @@ const layer = Layer.effect(
         }
 
         return [{ ...part, messageID: info.id, sessionID: input.sessionID }]
-      })
+      })(
+        const resolvedParts = yield* Effect.forEach(input.parts, resolvePart, { concurrency: "unbounded" }).pipe(
+          Effect.map((x) => x.flat().map(assign)),
+        )
 
-      const resolvedParts = yield* Effect.forEach(input.parts, resolvePart, { concurrency: "unbounded" }).pipe(
-        Effect.map((x) => x.flat().map(assign)),
-      )
+        yield* plugin.trigger(
+          "chat.message",
+          {
+            sessionID: input.sessionID,
+            agent: input.agent,
+            model: input.model,
+            messageID: input.messageID,
+            variant: input.variant,
+          },
+          { message: info, parts: resolvedParts },
+        )
 
-      yield* plugin.trigger(
-        "chat.message",
-        {
-          sessionID: input.sessionID,
-          agent: input.agent,
-          model: input.model,
-          messageID: input.messageID,
-          variant: input.variant,
-        },
-        { message: info, parts: resolvedParts },
-      )
+        const parts = yield* Effect.forEach(resolvedParts, (part) =>
+          part.type === "file" && part.mime.startsWith("image/")
+            ? image.normalize(part).pipe(
+                Effect.catchIf(
+                  (error) => error instanceof Image.ResizerUnavailableError,
+                  () => Effect.succeed(part),
+                ),
+              )
+            : Effect.succeed(part),
+        )
 
-      const parts = yield* Effect.forEach(resolvedParts, (part) =>
-        part.type === "file" && part.mime.startsWith("image/")
-          ? image.normalize(part).pipe(
-              Effect.catchIf(
-                (error) => error instanceof Image.ResizerUnavailableError,
-                () => Effect.succeed(part),
-              ),
-            )
-          : Effect.succeed(part),
-      )
+        const parsed = decodeMessageInfo(info, { errors: "all", propertyOrder: "original" })
+        if (Exit.isFailure(parsed)) {
+          yield* Effect.logError("invalid user message before save", {
+            sessionID: input.sessionID,
+            messageID: info.id,
+            agent: info.agent,
+            model: info.model,
+            cause: Cause.pretty(parsed.cause),
+          })
+        }
+        for (const [index, part] of parts.entries()) {
+          const p = decodeMessagePart(part, { errors: "all", propertyOrder: "original" })
+          if (Exit.isSuccess(p)) continue
+          yield* Effect.logError("invalid user part before save", {
+            sessionID: input.sessionID,
+            messageID: info.id,
+            partID: part.id,
+            partType: part.type,
+            index,
+            cause: Cause.pretty(p.cause),
+            part,
+          })
+        }
 
-      const parsed = decodeMessageInfo(info, { errors: "all", propertyOrder: "original" })
-      if (Exit.isFailure(parsed)) {
-        yield* Effect.logError("invalid user message before save", {
-          sessionID: input.sessionID,
-          messageID: info.id,
-          agent: info.agent,
-          model: info.model,
-          cause: Cause.pretty(parsed.cause),
-        })
-      }
-      for (const [index, part] of parts.entries()) {
-        const p = decodeMessagePart(part, { errors: "all", propertyOrder: "original" })
-        if (Exit.isSuccess(p)) continue
-        yield* Effect.logError("invalid user part before save", {
-          sessionID: input.sessionID,
-          messageID: info.id,
-          partID: part.id,
-          partType: part.type,
-          index,
-          cause: Cause.pretty(p.cause),
-          part,
-        })
-      }
+        yield* sessions.updateMessage(info)
+        for (const part of parts) yield* sessions.updatePart(part)
 
-      yield* sessions.updateMessage(info)
-      for (const part of parts) yield* sessions.updatePart(part)
-
-      return { info, parts }
-    }, Effect.scoped)
+        return { info, parts }
+      }, Effect.scoped)
 
     const prompt: (input: PromptInput) => Effect.Effect<SessionV1.WithParts, Image.Error> = Effect.fn(
       "SessionPrompt.prompt",
@@ -1086,11 +1085,13 @@ const layer = Layer.effect(
         const ctx = yield* InstanceState.context
         let structured: unknown
         let step = 0
+        let doomLoopWarning: string | undefined
         let todoContinuationCount = 0
         let resumePendingTodo = false
         const session = yield* sessions.get(sessionID).pipe(Effect.orDie)
 
         while (true) {
+          doomLoopWarning = undefined
           yield* status.set(sessionID, { type: "busy" })
           yield* Effect.logInfo("loop", { "session.id": sessionID, step })
 
@@ -1104,31 +1105,34 @@ const layer = Layer.effect(
 
           // Detect doom loops across steps: repeated similar tool calls that the
           // in-turn detector (processor.ts) cannot catch because each call lives
-          // in its own assistant message.
-          const recentToolCalls: { tool: string; input: string }[] = []
+          // in its own assistant message. Keep this advisory: warn the model
+          // instead of stopping the session.
+          const recentToolCalls: { tool: string; input: string; output: string }[] = []
           for (const m of msgs) {
             if (m.info.role !== "assistant") continue
             for (const part of m.parts) {
-              if (part.type === "tool") {
-                recentToolCalls.push({ tool: part.tool, input: JSON.stringify(part.state?.input ?? {}) })
+              if (part.type === "tool" && part.state?.status && part.state.status !== "pending") {
+                recentToolCalls.push({
+                  tool: part.tool,
+                  input: JSON.stringify(part.state?.input ?? {}),
+                  output: String(part.state?.output ?? "").slice(0, 200),
+                })
               }
             }
           }
-          const doomTail = recentToolCalls.slice(-3)
+          const doomThreshold = 4
+          const doomTail = recentToolCalls.slice(-doomThreshold)
           if (
-            doomTail.length === 3 &&
+            doomTail.length === doomThreshold &&
             doomTail.every((c) => c.tool === doomTail[0].tool) &&
-            doomTail.every((c) => c.input.slice(0, 80) === doomTail[0].input.slice(0, 80))
+            doomTail.every((c) => c.input === doomTail[0].input) &&
+            doomTail.every((c) => c.output === doomTail[0].output)
           ) {
-            yield* Effect.logWarning("doom loop detected across steps", {
+            doomLoopWarning = `Doom loop suspected: the last ${doomThreshold} tool calls were identical (${doomTail[0].tool}) with the same input and output. Avoid repeating the same call; change the approach or arguments.`
+            yield* Effect.logWarning("doom loop suspected across steps", {
               "session.id": sessionID,
               tool: doomTail[0].tool,
             })
-            const error = new NamedError.Unknown({
-              message: `Doom loop detected: repeated ${doomTail[0].tool} calls. Stopping.`,
-            })
-            yield* events.publish(Session.Event.Error, { sessionID, error: error.toObject() })
-            break
           }
 
           const lastAssistantMsg = msgs.findLast(
@@ -1314,17 +1318,8 @@ const layer = Layer.effect(
               ...(mcpInstructions ? [mcpInstructions] : []),
               ...(skills ? [skills] : []),
             ]
-            if (resumePendingTodo) {
-              const pending = (yield* todos.get(sessionID)).filter(
-                (todo) => todo.status !== "completed" && todo.status !== "cancelled",
-              )
-              resumePendingTodo = false
-              if (pending.length > 0) {
-                system.push(
-                  `<session-continuation> The previous response stopped with ${pending.length} unfinished checklist item(s). Continue from the first unfinished item. Preserve completed work and do not repeat completed actions. Finish the checklist, or explain the concrete blocker if you cannot proceed.</session-continuation>`,
-                )
-              }
-            }
+            if (doomLoopWarning) system.push(doomLoopWarning)
+
             const format = lastUser.format ?? { type: "text" as const }
             if (format.type === "json_schema") system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
             const result = yield* handle.process({
@@ -1475,7 +1470,6 @@ const layer = Layer.effect(
         if (input.model) return Provider.parseModel(input.model)
         return yield* currentModel(input.sessionID)
       })
-
       yield* getModel(taskModel.providerID, taskModel.modelID, input.sessionID)
 
       const agent = agentName ? yield* agents.get(agentName) : yield* agents.defaultInfo()
