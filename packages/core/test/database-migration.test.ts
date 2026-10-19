@@ -21,6 +21,7 @@ import executionClaimsMigration from "@opencode/core/database/migration/20260811
 import sessionInboxMigration from "@opencode/core/database/migration/20260812181746_session_inbox"
 import sessionViewedStateMigration from "@opencode/core/database/migration/20260819222447_session_viewed_state"
 import azureCliCredentialMigration from "@opencode/core/database/migration/20261007190000_azure_cli_external_credential"
+import cacheMarkMigration from "@opencode/core/database/migration/20261019172723_colossal_sue_storm"
 import { Global } from "@opencode/util/global"
 
 const run = <A, E>(
@@ -637,6 +638,33 @@ describe("DatabaseMigration", () => {
         yield* db.run(sql`UPDATE __drizzle_migrations SET name = 'ignored'`)
         yield* DatabaseMigration.applyOnly(db, [])
         expect(yield* db.all(sql`SELECT id FROM migration ORDER BY id`)).toEqual([{ id: "existing" }, { id: "legacy" }])
+      }),
+    )
+  })
+
+  test("applies the cache-mark migration on a database that already carries the ledger table", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* db.run(sql`CREATE TABLE session (id text PRIMARY KEY)`)
+        // An earlier build of this line created the table under another migration id
+        // (20261011014246_damp_diamondback), so the table is there but the migration
+        // is not recorded. The migration has to accept that state instead of dying
+        // on "table provider_cache_mark already exists".
+        yield* db.run(sql`CREATE TABLE provider_cache_mark (
+          provider_id text PRIMARY KEY,
+          mark_tokens integer DEFAULT 0 NOT NULL,
+          mark_index integer DEFAULT 0 NOT NULL,
+          prefix_hash text,
+          last_used_at integer NOT NULL
+        )`)
+
+        yield* DatabaseMigration.applyOnly(db, [cacheMarkMigration])
+
+        expect(yield* db.get(sql`SELECT id FROM migration WHERE id = ${cacheMarkMigration.id}`)).toBeDefined()
+        expect(
+          yield* db.get(sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'provider_cache_mark'`),
+        ).toEqual({ name: "provider_cache_mark" })
       }),
     )
   })
