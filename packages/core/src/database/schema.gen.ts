@@ -145,6 +145,15 @@ const schema: Omit<DatabaseMigration.Migration, "id"> = {
         );
       `)
       yield* tx.run(`
+        CREATE TABLE \`provider_cache_mark\` (
+          \`provider_id\` text PRIMARY KEY,
+          \`mark_tokens\` integer DEFAULT 0 NOT NULL,
+          \`mark_index\` integer DEFAULT 0 NOT NULL,
+          \`prefix_hash\` text,
+          \`last_used_at\` integer NOT NULL
+        );
+      `)
+      yield* tx.run(`
         CREATE TABLE \`session_inbox\` (
           \`id\` text PRIMARY KEY,
           \`session_id\` text NOT NULL,

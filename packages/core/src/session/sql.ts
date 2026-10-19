@@ -174,3 +174,15 @@ export const InstructionStateTable = sqliteTable("instruction_state", {
   initial_values: text({ mode: "json" }).notNull().$type<Instruction.Values>(),
   current_values: text({ mode: "json" }).notNull().$type<Instruction.Values>(),
 })
+
+// Provider cache-mark ledger. One row per provider/model string — how much of
+// the projected prefix that provider confirmed via usage.cache_read (plus
+// cache_write) in its last response. Cross-session by design: the prefix cache
+// belongs to the provider, not to a session.
+export const ProviderCacheMarkTable = sqliteTable("provider_cache_mark", {
+  provider_id: text().primaryKey(),
+  mark_tokens: integer().notNull().default(0),
+  mark_index: integer().notNull().default(0),
+  prefix_hash: text(),
+  last_used_at: integer().notNull(),
+})
