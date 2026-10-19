@@ -49,10 +49,14 @@ export function installSystemd(job: { id: string; schedule: string; command: str
 }
 
 export function uninstallSystemd(id: string) {
-  try { execFileSync("systemctl", ["--user", "disable", "--now", `${sanitizeId(id)}.timer`], { stdio: "ignore" }) } catch {}
+  try {
+    execFileSync("systemctl", ["--user", "disable", "--now", `${sanitizeId(id)}.timer`], { stdio: "ignore" })
+  } catch {}
   const unit = systemdUnitPath(id)
   const timer = systemdTimerPath(id)
   if (existsSync(unit)) rmSync(unit)
   if (existsSync(timer)) rmSync(timer)
-  try { execFileSync("systemctl", ["--user", "daemon-reload"], { stdio: "ignore" }) } catch {}
+  try {
+    execFileSync("systemctl", ["--user", "daemon-reload"], { stdio: "ignore" })
+  } catch {}
 }

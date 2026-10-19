@@ -54,12 +54,14 @@ const run = Effect.fn("Cli.debug.agent.body")(function* (
     const toolCtx = yield* createToolContext(agent, ctx)
     const registry = yield* ToolRegistry.Service
     const materialization = yield* registry.materialize(agent.permission as any)
-    const settlement = yield* materialization.settle({
-      sessionID: toolCtx.sessionID as any,
-      agent: agent.name as any,
-      assistantMessageID: toolCtx.messageID as any,
-      call: { id: toolID, name: toolID, input: params } as any,
-    }).pipe(Effect.orDie)
+    const settlement = yield* materialization
+      .settle({
+        sessionID: toolCtx.sessionID as any,
+        agent: agent.name as any,
+        assistantMessageID: toolCtx.messageID as any,
+        call: { id: toolID, name: toolID, input: params } as any,
+      })
+      .pipe(Effect.orDie)
     const result = settlement.result
     process.stdout.write(JSON.stringify({ tool: toolID, input: params, result }, null, 2) + EOL)
     return

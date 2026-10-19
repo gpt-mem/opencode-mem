@@ -45,14 +45,7 @@ const ctx = {
 
 const readLayer = (flags: Partial<RuntimeFlags.Info> = {}) =>
   LayerNode.compile(
-    LayerNode.group([
-      Agent.node,
-      FSUtil.node,
-      CrossSpawnSpawner.node,
-      Instruction.node,
-      LSP.node,
-      Ripgrep.node,
-    ]),
+    LayerNode.group([Agent.node, FSUtil.node, CrossSpawnSpawner.node, Instruction.node, LSP.node, Ripgrep.node]),
   )
 
 const it = testEffect(Layer.mergeAll(readLayer(), testInstanceStoreLayer))

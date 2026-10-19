@@ -62,7 +62,7 @@ The generated config uses:
 
 ```jsonc
 {
-  "permission": "allow"
+  "permission": "allow",
 }
 ```
 

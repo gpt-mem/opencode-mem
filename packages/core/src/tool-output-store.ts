@@ -190,8 +190,7 @@ const layer = Layer.effect(
           ? ""
           : takePrefix(contextual.split("\n").slice(0, preview.maxLines).join("\n"), preview.maxBytes)
 
-      const contentText =
-        previewText.length > 0 ? `${previewText}\n\n${marker}` : marker
+      const contentText = previewText.length > 0 ? `${previewText}\n\n${marker}` : marker
 
       return {
         output: {

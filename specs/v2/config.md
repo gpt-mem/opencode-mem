@@ -240,14 +240,14 @@ Do not port legacy provider model `reasoning`, `temperature`, or `interleaved` f
 
 Agent behavior and tool-access policy. Review together because agent configuration can contain permissions and model choices.
 
-| Field           | Current Purpose                                     | Status   | Notes                                                                                                                       |
-| --------------- | --------------------------------------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `default_agent` | Choose default primary agent                        | remove   | Do not retain a separate top-level selector; default choice should be designed with the v2 agent configuration model.       |
-| `mode`          | Legacy agent configuration alias                    | remove   | Do not port deprecated alias; configure agents through the v2 agent surface only.                                           |
-| `agent`         | Configure primary, subagent, and specialized agents | redesign | Rename to plural `agents`; retain a named map of built-in overrides and custom agent definitions.                           |
+| Field                              | Current Purpose                                         | Status   | Notes                                                                                                                       |
+| ---------------------------------- | ------------------------------------------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `default_agent`                    | Choose default primary agent                            | remove   | Do not retain a separate top-level selector; default choice should be designed with the v2 agent configuration model.       |
+| `mode`                             | Legacy agent configuration alias                        | remove   | Do not port deprecated alias; configure agents through the v2 agent surface only.                                           |
+| `agent`                            | Configure primary, subagent, and specialized agents     | redesign | Rename to plural `agents`; retain a named map of built-in overrides and custom agent definitions.                           |
 | `permission`                       | Tool permission rules                                   | redesign | Rename to plural `permissions`; replace legacy map shorthand with an ordered array of `{ action, resource, effect }` rules. |
-| `continueAfterPermissionRejection` | Continue after a user rejects a tool permission request | keep     | Keep as a stable session behavior setting; default to `true`, and stop only when explicitly set to `false`.                |
-| `tools`                            | Legacy tool enable/disable map                         | remove   | Do not port boolean enable/disable alias; express tool access through permissions.                                         |
+| `continueAfterPermissionRejection` | Continue after a user rejects a tool permission request | keep     | Keep as a stable session behavior setting; default to `true`, and stop only when explicitly set to `false`.                 |
+| `tools`                            | Legacy tool enable/disable map                          | remove   | Do not port boolean enable/disable alias; express tool access through permissions.                                          |
 
 Do not port `default_agent` ahead of the v2 agent design. The legacy runtime uses it to choose a visible, non-subagent fallback instead of `build`, but exposing that selection as an isolated top-level field would pre-commit v2 to the legacy agent model before agents and their policy surface are defined together.
 

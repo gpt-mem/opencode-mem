@@ -32,14 +32,7 @@ afterEach(async () => {
 
 const it = testEffect(
   LayerNode.compile(
-    LayerNode.group([
-      LSP.node,
-      FSUtil.node,
-      EventV2Bridge.node,
-      Format.node,
-      CrossSpawnSpawner.node,
-      Agent.node,
-    ]),
+    LayerNode.group([LSP.node, FSUtil.node, EventV2Bridge.node, Format.node, CrossSpawnSpawner.node, Agent.node]),
   ),
 )
 

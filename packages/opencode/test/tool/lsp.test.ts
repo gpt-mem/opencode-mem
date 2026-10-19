@@ -56,9 +56,7 @@ const lsp = Layer.succeed(
 )
 
 const it = testEffect(
-  LayerNode.compile(LayerNode.group([Agent.node, FSUtil.node, CrossSpawnSpawner.node, LSP.node]), [
-    [LSP.node, lsp],
-  ]),
+  LayerNode.compile(LayerNode.group([Agent.node, FSUtil.node, CrossSpawnSpawner.node, LSP.node]), [[LSP.node, lsp]]),
 )
 
 const init = Effect.fn("LspToolTest.init")(function* () {

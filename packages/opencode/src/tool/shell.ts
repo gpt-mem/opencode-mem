@@ -598,7 +598,7 @@ export const ShellTool = Tool.define(
         const cfg = yield* config.get()
         const shell = Shell.acceptable(cfg.shell)
         const name = Shell.name(shell)
-const limits = { maxLines: 2000, maxBytes: 50 * 1024 }
+        const limits = { maxLines: 2000, maxBytes: 50 * 1024 }
         const prompt = ShellPrompt.render(name, process.platform, limits, defaultTimeoutMs)
         yield* Effect.logInfo("shell tool using shell", { shell })
 

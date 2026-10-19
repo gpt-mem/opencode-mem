@@ -105,8 +105,8 @@ const layer = Layer.effect(
               return (yield* (yield* Reference.Service).list()).map((reference) => reference.path)
             }).pipe(Effect.provide(locations.get(Location.Ref.make({ directory: AbsolutePath.make(ctx.directory) }))))
           : []
-  const whitelistedDirs = [
-           path.join(Global.Path.tmp, "*"),
+        const whitelistedDirs = [
+          path.join(Global.Path.tmp, "*"),
           ...skillDirs.map((dir) => path.join(dir, "*")),
           ...referenceDirs.map((dir) => path.join(dir, "*")),
         ]
@@ -291,8 +291,6 @@ const layer = Layer.effect(
           item.options = mergeDeep(item.options, value.options ?? {})
           item.permission = Permission.merge(item.permission, Permission.fromConfig(value.permission ?? {}))
         }
-
-
 
         const get = Effect.fnUntraced(function* (agent: string) {
           return agents[agent]

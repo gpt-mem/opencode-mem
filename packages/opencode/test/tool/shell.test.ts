@@ -23,14 +23,7 @@ import { InstanceStore } from "@/project/instance-store"
 
 const shellLayer = Layer.mergeAll(
   LayerNode.compile(
-    LayerNode.group([
-      CrossSpawnSpawner.node,
-      FSUtil.node,
-      Plugin.node,
-      Config.node,
-      Agent.node,
-      RuntimeFlags.node,
-    ]),
+    LayerNode.group([CrossSpawnSpawner.node, FSUtil.node, Plugin.node, Config.node, Agent.node, RuntimeFlags.node]),
   ),
   testInstanceStoreLayer,
 )
@@ -1149,7 +1142,7 @@ describe("tool.shell truncation", () => {
     runIn(
       projectRoot,
       Effect.gen(function* () {
-        const byteCount = (50 * 1024) + 10000
+        const byteCount = 50 * 1024 + 10000
         const result = yield* run({
           command: fill("bytes", byteCount),
         })

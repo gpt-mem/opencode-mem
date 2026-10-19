@@ -30,9 +30,7 @@ afterEach(async () => {
   await disposeAllInstances()
 })
 
-const layer = LayerNode.compile(
-  LayerNode.group([LSP.node, FSUtil.node, Format.node, EventV2Bridge.node, Agent.node]),
-)
+const layer = LayerNode.compile(LayerNode.group([LSP.node, FSUtil.node, Format.node, EventV2Bridge.node, Agent.node]))
 
 const it = testEffect(layer)
 

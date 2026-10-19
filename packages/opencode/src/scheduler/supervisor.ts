@@ -15,7 +15,9 @@ export function acquireLock(lockFile: string): { acquired: boolean; stale: boole
         unlinkSync(lockFile)
       }
     } catch {
-      try { unlinkSync(lockFile) } catch {}
+      try {
+        unlinkSync(lockFile)
+      } catch {}
     }
   }
   writeFileSync(lockFile, JSON.stringify({ pid: process.pid, startedAt: Date.now() }), "utf8")
@@ -23,5 +25,7 @@ export function acquireLock(lockFile: string): { acquired: boolean; stale: boole
 }
 
 export function releaseLock(lockFile: string): void {
-  try { if (existsSync(lockFile)) unlinkSync(lockFile) } catch {}
+  try {
+    if (existsSync(lockFile)) unlinkSync(lockFile)
+  } catch {}
 }

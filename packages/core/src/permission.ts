@@ -176,11 +176,7 @@ const layer = Layer.effect(
       if (denied(input, rules)) return { effect: "deny" as const, rules }
       const all = [...rules, ...(yield* savedRules())]
       const effects = input.resources.map((resource) => evaluate(input.action, resource, all).effect)
-      const effect: Permission.Effect = effects.includes("deny")
-        ? "deny"
-        : effects.includes("ask")
-          ? "ask"
-          : "allow"
+      const effect: Permission.Effect = effects.includes("deny") ? "deny" : effects.includes("ask") ? "ask" : "allow"
       return { effect, rules: all }
     })
 

@@ -217,7 +217,10 @@ describe("ToolOutputStore", () => {
           const result = yield* store.bound({
             sessionID,
             toolCallID: "call-config",
-            output: { structured: {}, content: [{ type: "text", text: Array.from({ length: 200 }, (_, i) => `line${i}`).join("\n") }] },
+            output: {
+              structured: {},
+              content: [{ type: "text", text: Array.from({ length: 200 }, (_, i) => `line${i}`).join("\n") }],
+            },
           })
           expect(result.outputPaths).toHaveLength(1)
         }),

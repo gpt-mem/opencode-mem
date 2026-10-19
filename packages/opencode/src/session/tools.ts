@@ -9,7 +9,6 @@ import { Tool } from "@/tool/tool"
 import { ToolJsonSchema } from "@/tool/json-schema"
 import { ToolRegistry } from "@/tool/registry"
 
-
 import { Plugin } from "@/plugin"
 import type { TaskPromptOps } from "@/tool/task"
 import { type Tool as AITool, tool, jsonSchema, type ToolExecutionOptions, asSchema } from "ai"
@@ -122,7 +121,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
                 : resultValue.type === "text"
                   ? String(resultValue.value)
                   : resultValue.type === "json"
-                    ? JSON.stringify(resultValue.value) ?? ""
+                    ? (JSON.stringify(resultValue.value) ?? "")
                     : resultValue.type === "content"
                       ? resultValue.value.map((part: any) => (part.type === "text" ? part.text : "")).join("\n")
                       : ""
@@ -478,7 +477,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
             }
           }
 
-           const truncated = { content: textParts.join("\n\n"), truncated: false, outputPath: undefined }
+          const truncated = { content: textParts.join("\n\n"), truncated: false, outputPath: undefined }
           const metadata = {
             ...result.metadata,
             truncated: truncated.truncated,

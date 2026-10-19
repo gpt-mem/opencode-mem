@@ -14,16 +14,16 @@ describe("opencode acp lifecycle subprocess", () => {
   if (process.platform !== "win32") {
     cliIt.live(
       "stdin EOF exits cleanly",
-    ({ opencode }) =>
-      Effect.gen(function* () {
-        const acp = yield* opencode.acp()
-        acp.close()
+      ({ opencode }) =>
+        Effect.gen(function* () {
+          const acp = yield* opencode.acp()
+          acp.close()
 
-        const code = yield* Effect.promise(() => acp.exited).pipe(Effect.timeout(Duration.seconds(5)))
-        expect(code).toBe(0)
-      }),
-    60_000,
-  )
+          const code = yield* Effect.promise(() => acp.exited).pipe(Effect.timeout(Duration.seconds(5)))
+          expect(code).toBe(0)
+        }),
+      60_000,
+    )
   }
 
   cliIt.live(

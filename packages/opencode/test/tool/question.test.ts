@@ -19,9 +19,7 @@ const ctx = {
   ask: () => Effect.void,
 }
 
-const it = testEffect(
-  LayerNode.compile(LayerNode.group([Question.node, EventV2Bridge.node, Agent.node])),
-)
+const it = testEffect(LayerNode.compile(LayerNode.group([Question.node, EventV2Bridge.node, Agent.node])))
 
 const pending = Effect.fn("QuestionToolTest.pending")(function* (question: Question.Interface) {
   const events = yield* EventV2Bridge.Service

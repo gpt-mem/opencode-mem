@@ -71,7 +71,12 @@ const summary = Layer.succeed(
 
 const locationLayer = Layer.succeed(
   Location.Service,
-  Location.Service.of({ directory: process.cwd(), workspaceID: undefined, project: { id: "test" as any, directory: process.cwd() }, vcs: undefined }),
+  Location.Service.of({
+    directory: process.cwd(),
+    workspaceID: undefined,
+    project: { id: "test" as any, directory: process.cwd() },
+    vcs: undefined,
+  }),
 )
 
 const ref = {
@@ -1373,7 +1378,7 @@ noLLMServer.instance.skip(
       const ready = yield* Deferred.make<void>()
       const aborted = yield* Deferred.make<void>()
       const registry = yield* ToolRegistry.Service
-      const { task } = yield* ((registry as any).named() as Effect.Effect<{ task: any; read: any }, never, never>)
+      const { task } = yield* (registry as any).named() as Effect.Effect<{ task: any; read: any }, never, never>
       const original = task.execute
       task.execute = (_args: any, ctx: any) =>
         Effect.callback<never>((_resume) => {
@@ -2142,7 +2147,7 @@ noLLMServer.instance.skip(
     Effect.gen(function* () {
       const { directory: dir } = yield* TestInstance
       const registry = yield* ToolRegistry.Service
-      const { read } = yield* ((registry as any).named() as Effect.Effect<{ task: any; read: any }, never, never>)
+      const { read } = yield* (registry as any).named() as Effect.Effect<{ task: any; read: any }, never, never>
       const { ready, restore } = yield* hangUntilAborted(read)
       yield* restore
 
@@ -2180,7 +2185,7 @@ noLLMServer.instance.skip(
     Effect.gen(function* () {
       const { directory: dir } = yield* TestInstance
       const registry = yield* ToolRegistry.Service
-      const { read } = yield* ((registry as any).named() as Effect.Effect<{ task: any; read: any }, never, never>)
+      const { read } = yield* (registry as any).named() as Effect.Effect<{ task: any; read: any }, never, never>
       const { ready, restore } = yield* hangUntilAborted(read)
       yield* restore
 

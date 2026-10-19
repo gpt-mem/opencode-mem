@@ -125,8 +125,8 @@ function wrap<Parameters extends Schema.Decoder<unknown>, Result extends Metadat
                 }),
             ),
           )
-           const result = yield* execute(decoded as Schema.Schema.Type<Parameters>, ctx)
-           return result
+          const result = yield* execute(decoded as Schema.Schema.Type<Parameters>, ctx)
+          return result
         }).pipe(Effect.orDie, Effect.withSpan("Tool.execute", { attributes: attrs }))
       }
       return toolInfo
