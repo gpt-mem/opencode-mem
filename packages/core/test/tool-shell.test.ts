@@ -262,6 +262,7 @@ const runPermissionCommand = (
   command: string,
   marker: string,
   replies: ReadonlyArray<Permission.Reply>,
+  timeout = Duration.seconds(5),
 ) =>
   Effect.gen(function* () {
     const permission = yield* Permission.Service
@@ -287,7 +288,7 @@ const runPermissionCommand = (
     expect(yield* permission.list()).toEqual([])
     expect(yield* Queue.size(queue)).toBe(0)
     return { exit, requests }
-  }).pipe(Effect.scoped, Effect.timeout(Duration.seconds(5)))
+  }).pipe(Effect.scoped, Effect.timeout(timeout))
 
 // Directory cases still document inherited limitations; fixed scanner cases require matching behavior.
 describe("ShellTool scanner permissions", () => {
@@ -771,6 +772,9 @@ describe("ShellTool ordinary shell syntax", () => {
 
   const pwsh = process.env.SHELL_SCAN_PWSH ?? Bun.which("pwsh") ?? Bun.which("powershell")
   const test = pwsh ? permissionIt.live : permissionIt.live.skip
+  // The first PowerShell start on a runner costs about five seconds while the
+  // runtime loads, so the PowerShell cases carry a budget of their own.
+  const powershellTimeout = Duration.seconds(20)
   for (const portable of [false, true]) {
     for (const command of [
       'Write-Output "$(Write-Output hello)"',
@@ -794,7 +798,13 @@ describe("ShellTool ordinary shell syntax", () => {
                 action: "shell",
                 resources: ["Write-Output *", "Show-Value *"],
               })
-              const result = yield* runPermissionCommand(registry, command, path.join(directory.active, "marker"), [])
+              const result = yield* runPermissionCommand(
+                registry,
+                command,
+                path.join(directory.active, "marker"),
+                [],
+                powershellTimeout,
+              )
               expect(result.requests).toEqual([])
               expect(result.exit).toMatchObject({
                 _tag: "Success",
@@ -819,10 +829,10 @@ describe("ShellTool ordinary shell syntax", () => {
         (registry, directory) =>
           Effect.gen(function* () {
             const marker = path.join(directory.active, "marker")
-            const first = yield* runPermissionCommand(registry, command, marker, ["always"])
+            const first = yield* runPermissionCommand(registry, command, marker, ["always"], powershellTimeout)
             expect(first.requests).toMatchObject([{ action: "shell", resources: [command], save: [pattern] }])
             expect(first.exit).toMatchObject({ _tag: "Success", value: { status: "completed", metadata: { exit: 0 } } })
-            const repeat = yield* runPermissionCommand(registry, command, marker, [])
+            const repeat = yield* runPermissionCommand(registry, command, marker, [], powershellTimeout)
             expect(repeat.requests).toEqual([])
             expect(repeat.exit).toMatchObject({
               _tag: "Success",
@@ -835,7 +845,7 @@ describe("ShellTool ordinary shell syntax", () => {
                 agent.permissions = [{ action: "shell", resource: command, effect: "deny" }]
               }),
             )
-            const denied = yield* runPermissionCommand(registry, command, marker, [])
+            const denied = yield* runPermissionCommand(registry, command, marker, [], powershellTimeout)
             expect(denied.exit).toMatchObject({
               _tag: "Success",
               value: { status: "error", error: { message: expect.stringContaining("Permission denied: shell") } },
