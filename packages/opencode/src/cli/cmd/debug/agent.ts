@@ -1,4 +1,5 @@
 import { Effect } from "effect"
+import { CliError } from "../../effect-cmd"
 import { effectCmd } from "../../effect-cmd"
 
 export const AgentCommand = effectCmd({
@@ -22,6 +23,6 @@ export const AgentCommand = effectCmd({
   handler: (args) =>
     Effect.gen(function* () {
       const { debugAgent } = yield* Effect.promise(() => import("./agent.handler"))
-      return yield* debugAgent(args)
+      return yield* (debugAgent(args) as Effect.Effect<undefined, CliError, any>)
     }),
 })

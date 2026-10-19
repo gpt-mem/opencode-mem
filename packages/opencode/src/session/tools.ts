@@ -7,13 +7,13 @@ import { McpCatalog } from "@/mcp/catalog"
 import { Permission } from "@/permission"
 import { Tool } from "@/tool/tool"
 import { ToolJsonSchema } from "@/tool/json-schema"
-import { ToolRegistry, truncateToolOutput } from "@/tool/registry"
+import { ToolRegistry } from "@/tool/registry"
 
 
 import { Plugin } from "@/plugin"
 import type { TaskPromptOps } from "@/tool/task"
 import { type Tool as AITool, tool, jsonSchema, type ToolExecutionOptions, asSchema } from "ai"
-import { Effect } from "effect"
+import { Effect, Schema } from "effect"
 import { MessageV2 } from "./message-v2"
 import { Session } from "./session"
 import { SessionProcessor } from "./processor"
@@ -88,15 +88,17 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
         .pipe(Effect.orDie),
   })
 
-  for (const item of yield* registry.tools({
-    modelID: ModelV2.ID.make(input.model.api.id),
-    providerID: input.model.providerID,
-    agent: input.agent,
-    permission: input.session.permission,
-  })) {
+  const materialization = yield* registry.materialize()
+  for (const definition of materialization.definitions) {
+    const item = {
+      id: definition.name,
+      description: definition.description,
+      jsonSchema: definition.inputSchema,
+      parameters: Schema.Unknown,
+    } as unknown as Tool.Def
     const schema = ProviderTransform.schema(input.model, ToolJsonSchema.fromTool(item))
-    tools[item.id] = tool({
-      description: item.description,
+    tools[definition.name] = tool({
+      description: definition.description,
       inputSchema: jsonSchema(schema),
       execute(args, options) {
         return run.promise(
@@ -104,22 +106,38 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
             const ctx = context(args, options)
             yield* plugin.trigger(
               "tool.execute.before",
-              { tool: item.id, sessionID: ctx.sessionID, callID: ctx.callID },
+              { tool: definition.name, sessionID: ctx.sessionID, callID: ctx.callID },
               { args },
             )
-            const result = yield* item.execute(args, ctx)
+            const settlement = yield* materialization.settle({
+              sessionID: input.session.id as any,
+              agent: input.agent.name as any,
+              assistantMessageID: input.processor.message.id as any,
+              call: { id: options.toolCallId, name: definition.name, input: args } as any,
+            })
+            const resultValue = settlement.result
+            const outputText =
+              resultValue.type === "error"
+                ? String(resultValue.value)
+                : resultValue.type === "text"
+                  ? String(resultValue.value)
+                  : resultValue.type === "json"
+                    ? JSON.stringify(resultValue.value) ?? ""
+                    : resultValue.type === "content"
+                      ? resultValue.value.map((part: any) => (part.type === "text" ? part.text : "")).join("\n")
+                      : ""
             const output = {
-              ...result,
-              attachments: result.attachments?.map((attachment) => ({
-                ...attachment,
-                id: PartID.ascending(),
-                sessionID: ctx.sessionID,
-                messageID: input.processor.message.id,
-              })),
+              title: definition.name,
+              metadata: {},
+              output: outputText,
+              attachments: undefined,
+            }
+            if (settlement.outputPaths?.length) {
+              // keep spill paths visible to the model via output already contains marker
             }
             yield* plugin.trigger(
               "tool.execute.after",
-              { tool: item.id, sessionID: ctx.sessionID, callID: ctx.callID, args },
+              { tool: definition.name, sessionID: ctx.sessionID, callID: ctx.callID, args },
               output,
             )
             if (options.abortSignal?.aborted) {
@@ -192,9 +210,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
                 ),
               )
             const content = JSON.stringify({ resources: filtered.map(formatMcpResource) }, null, 2)
-            const truncatedContent = truncateToolOutput(content)
-            const truncatedOutputPath = truncatedContent.match(/full content saved to (.+?) \.\.\./)?.[1]
-            const truncated = { content: truncatedContent, truncated: truncatedContent !== content, outputPath: truncatedOutputPath }
+            const truncated = { content, truncated: false, outputPath: undefined }
             const output = {
               title: parsed.server ? `MCP resources: ${parsed.server}` : "MCP resources",
               metadata: {
@@ -277,9 +293,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
                 ),
               )
             const content = JSON.stringify({ resourceTemplates: filtered.map(formatMcpResourceTemplate) }, null, 2)
-            const truncatedContent = truncateToolOutput(content)
-            const truncatedOutputPath = truncatedContent.match(/full content saved to (.+?) \.\.\./)?.[1]
-            const truncated = { content: truncatedContent, truncated: truncatedContent !== content, outputPath: truncatedOutputPath }
+            const truncated = { content, truncated: false, outputPath: undefined }
             const output = {
               title: parsed.server ? `MCP resource templates: ${parsed.server}` : "MCP resource templates",
               metadata: {
@@ -354,10 +368,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
             if (!content) throw new Error(`Failed to read MCP resource: ${parsed.server}/${parsed.uri}`)
 
             const formatted = formatMcpResourceContent(parsed.server, parsed.uri, content)
-            const joined = formatted.text
-            const truncatedContent = truncateToolOutput(joined)
-            const truncatedOutputPath = truncatedContent.match(/full content saved to (.+?) \.\.\./)?.[1]
-            const truncated = { content: truncatedContent, truncated: truncatedContent !== joined, outputPath: truncatedOutputPath }
+            const truncated = { content: formatted.text, truncated: false, outputPath: undefined }
             const output = {
               title: `MCP resource: ${parsed.uri}`,
               metadata: {
@@ -467,10 +478,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
             }
           }
 
-           const joined = textParts.join("\n\n")
-           const truncatedContent = truncateToolOutput(joined)
-           const truncatedOutputPath = truncatedContent.match(/full content saved to (.+?) \.\.\./)?.[1]
-           const truncated = { content: truncatedContent, truncated: truncatedContent !== joined, outputPath: truncatedOutputPath }
+           const truncated = { content: textParts.join("\n\n"), truncated: false, outputPath: undefined }
           const metadata = {
             ...result.metadata,
             truncated: truncated.truncated,
