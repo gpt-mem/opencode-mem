@@ -201,7 +201,7 @@ const layer = Layer.effect(
       modelID: ModelV2.ID
     }) {
       if (input.session.parentID) return
-      if (Session.isDefaultTitle(input.session.title)) return
+      if (!Session.isDefaultTitle(input.session.title)) return
 
       const real = (m: SessionV1.WithParts) =>
         m.info.role === "user" && !m.parts.every((p) => "synthetic" in p && p.synthetic)
@@ -1318,6 +1318,17 @@ const layer = Layer.effect(
               ...(mcpInstructions ? [mcpInstructions] : []),
               ...(skills ? [skills] : []),
             ]
+            if (resumePendingTodo) {
+              const pending = (yield* todos.get(sessionID)).filter(
+                (todo) => todo.status !== "completed" && todo.status !== "cancelled",
+              )
+              resumePendingTodo = false
+              if (pending.length > 0) {
+                system.push(
+                  `<session-continuation> The previous response stopped with ${pending.length} unfinished checklist item(s). Continue from the first unfinished item. Preserve completed work and do not repeat completed actions. Finish the checklist, or explain the concrete blocker if you cannot proceed.</session-continuation>`,
+                )
+              }
+            }
             if (doomLoopWarning) system.push(doomLoopWarning)
 
             const format = lastUser.format ?? { type: "text" as const }
