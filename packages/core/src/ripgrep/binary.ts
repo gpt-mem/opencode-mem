@@ -55,29 +55,16 @@ export namespace RipgrepBinary {
       ) {
         const dir = yield* fs.makeTempDirectoryScoped({ directory: Global.Path.bin, prefix: "ripgrep-" })
 
-        if (config.extension === "zip") {
-          const tar = yield* Effect.sync(() => which("tar") ?? which("tar.exe"))
-          const result = tar
-            ? yield* run(tar, ["-xf", archive, "-C", dir])
-            : yield* run((yield* Effect.sync(() => which("powershell.exe") ?? which("pwsh.exe"))) ?? "powershell.exe", [
-                "-NoProfile",
-                "-NonInteractive",
-                "-Command",
-                `$global:ProgressPreference = 'SilentlyContinue'; Expand-Archive -LiteralPath '${archive.replaceAll("'", "''")}' -DestinationPath '${dir.replaceAll("'", "''")}' -Force`,
-              ])
-          if (result.code !== 0)
-            throw new Error(
-              result.stderr.trim() || result.stdout.trim() || `ripgrep extraction failed with code ${result.code}`,
-            )
-        }
-
-        if (config.extension === "tar.gz") {
-          const result = yield* run("tar", ["-xzf", archive, "-C", dir])
-          if (result.code !== 0)
-            throw new Error(
-              result.stderr.trim() || result.stdout.trim() || `ripgrep extraction failed with code ${result.code}`,
-            )
-        }
+        // Git for Windows may put GNU tar first on PATH; it treats C: as a remote archive host.
+        const tar =
+          process.platform === "win32"
+            ? path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe")
+            : "tar"
+        const result = yield* run(tar, [config.extension === "zip" ? "-xf" : "-xzf", archive, "-C", dir])
+        if (result.code !== 0)
+          throw new Error(
+            result.stderr.trim() || result.stdout.trim() || `ripgrep extraction failed with code ${result.code}`,
+          )
 
         const extracted = path.join(
           dir,
