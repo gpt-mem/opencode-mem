@@ -138,6 +138,30 @@ describe("CacheMask", () => {
     }),
   )
 
+  it.effect("sends the masked branch with the variant the service validates", () =>
+    Effect.sync(() => {
+      const messages = [Message.user("a")]
+      expect(
+        CacheMask.body({
+          sessionID: "ses_1",
+          rung: "opencode-go/gpt-5",
+          scope: SCOPE,
+          messages,
+        }),
+      ).toEqual({
+        ladder_conversation: "ses_1",
+        ladder_cache_variant: {
+          rung: "opencode-go/gpt-5",
+          cache_scope: SCOPE,
+          messages,
+          variant: "masked",
+        },
+      })
+      // Without a confirmed rung and scope there is no branch to serve.
+      expect(CacheMask.body({ sessionID: "ses_1", messages })).toEqual({ ladder_conversation: "ses_1" })
+    }),
+  )
+
   it.effect("masks the Ladder provider only", () =>
     Effect.gen(function* () {
       const db = (yield* Database.Service).db
