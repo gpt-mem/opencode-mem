@@ -1102,6 +1102,35 @@ const layer = Layer.effect(
 
           if (!lastUser) throw new Error("No user message found in stream. This should never happen.")
 
+          // Detect doom loops across steps: repeated similar tool calls that the
+          // in-turn detector (processor.ts) cannot catch because each call lives
+          // in its own assistant message.
+          const recentToolCalls: { tool: string; input: string }[] = []
+          for (const m of msgs) {
+            if (m.info.role !== "assistant") continue
+            for (const part of m.parts) {
+              if (part.type === "tool") {
+                recentToolCalls.push({ tool: part.tool, input: JSON.stringify(part.state?.input ?? {}) })
+              }
+            }
+          }
+          const doomTail = recentToolCalls.slice(-3)
+          if (
+            doomTail.length === 3 &&
+            doomTail.every((c) => c.tool === doomTail[0].tool) &&
+            doomTail.every((c) => c.input.slice(0, 80) === doomTail[0].input.slice(0, 80))
+          ) {
+            yield* Effect.logWarning("doom loop detected across steps", {
+              "session.id": sessionID,
+              tool: doomTail[0].tool,
+            })
+            const error = new NamedError.Unknown({
+              message: `Doom loop detected: repeated ${doomTail[0].tool} calls. Stopping.`,
+            })
+            yield* events.publish(Session.Event.Error, { sessionID, error: error.toObject() })
+            break
+          }
+
           const lastAssistantMsg = msgs.findLast(
             (msg) => msg.info.role === "assistant" && msg.info.id === lastAssistant?.id,
           )
