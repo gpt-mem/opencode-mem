@@ -271,6 +271,18 @@ describe("AppProcess", () => {
     )
 
     it.live(
+      "reports the exit code when the child exits before it reads stdin",
+      Effect.gen(function* () {
+        const svc = yield* AppProcess.Service
+        // The child leaves without reading: the pipe closes under the writer and the write fails with EPIPE.
+        // The child already answered, so its exit code is the outcome and the broken pipe is not a failure.
+        const result = yield* svc.run(cmd("-e", "process.exitCode = 3"), { stdin: "x".repeat(1024 * 1024) })
+        expect(result.stderr.toString("utf8")).toBe("")
+        expect(result.exitCode).toBe(3)
+      }),
+    )
+
+    it.live(
       "carries existing Command options like env",
       Effect.gen(function* () {
         const svc = yield* AppProcess.Service

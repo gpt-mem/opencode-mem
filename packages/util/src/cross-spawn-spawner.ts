@@ -21,6 +21,16 @@ import { filesystem, path } from "./effect/app-node-platform.js"
 
 const toError = (err: unknown): Error => (err instanceof globalThis.Error ? err : new globalThis.Error(String(err)))
 
+/**
+ * A child that exits before it reads its stdin closes the pipe, and the write
+ * fails with EPIPE. The child already answered, so its exit code and stderr
+ * are the outcome; the broken pipe is not a failure of the command.
+ */
+const isBrokenPipe = (cause: unknown) => {
+  const error = PlatformError.isPlatformError(cause) ? cause.cause : cause
+  return (error as NodeJS.ErrnoException | undefined)?.code === "EPIPE"
+}
+
 const toTag = (err: NodeJS.ErrnoException): PlatformError.SystemErrorTag => {
   switch (err.code) {
     case "ENOENT":
@@ -229,6 +239,13 @@ const makeCrossSpawnSpawner = Effect.gen(function* () {
     Effect.suspend(() => {
       let sink: Sink.Sink<void, unknown, never, PlatformError.PlatformError> = Sink.drain
       if (Predicate.isNotNull(proc.stdin)) {
+        // The sink's own error handler is gone once the write ends, but the
+        // child can close the pipe after that. A listener that stays keeps a
+        // late broken pipe from becoming an uncaught exception: the command has
+        // already answered with its exit code.
+        proc.stdin.on("error", (error: NodeJS.ErrnoException) => {
+          if (error.code !== "EPIPE") throw error
+        })
         sink = NodeSink.fromWritable({
           evaluate: () => proc.stdin!,
           onError: (err) => toPlatformError("fromWritable(stdin)", toError(err), command),
@@ -236,7 +253,16 @@ const makeCrossSpawnSpawner = Effect.gen(function* () {
           encoding: cfg.encoding,
         })
       }
-      if (Stream.isStream(cfg.stream)) return Effect.as(Effect.forkScoped(Stream.run(cfg.stream, sink)), sink)
+      if (Stream.isStream(cfg.stream))
+        return Effect.as(
+          Effect.forkScoped(
+            Stream.run(cfg.stream, sink).pipe(
+              Effect.catch((cause) => (isBrokenPipe(cause) ? Effect.void : Effect.fail(cause))),
+              Effect.catchDefect((defect) => (isBrokenPipe(defect) ? Effect.void : Effect.die(defect))),
+            ),
+          ),
+          sink,
+        )
       return Effect.succeed(sink)
     })
 

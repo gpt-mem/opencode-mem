@@ -23,15 +23,17 @@ import type {
 import type { Agent } from "@opencode/schema/agent"
 import type { Model } from "@opencode/schema/model"
 import type { Content } from "@opencode/schema/tool"
-import { Cause, Context, Effect, Layer, Result, Stream } from "effect"
-import { HttpClientRequest, HttpClientResponse } from "effect/http"
+import { Cause, Context, Effect, Layer, Option, Result, Stream } from "effect"
+import { Headers, HttpClientRequest, HttpClientResponse } from "effect/http"
 import { makeLocationNode } from "@opencode/util/effect/app-node"
 import { App } from "../app.js"
+import { Database } from "../database/database.js"
 import { Permission } from "../permission.js"
 import { PluginHooks } from "../plugin/hooks.js"
 import { QuestionTool } from "../tool/plugin/question.js"
 import { Tool } from "../tool.js"
 import { SessionAffinity } from "./affinity.js"
+import { CacheMask } from "./cache-mask.js"
 import { SessionModelTransport } from "./model-transport.js"
 import { SessionProviderContext } from "./provider-context.js"
 import { SessionRunnerModel } from "./runner/model.js"
@@ -64,6 +66,8 @@ export interface Prepared<Event = SessionRequest> {
   readonly request: LLMRequest
   readonly options: StreamOptions
   readonly retry: (event: PluginHooks.Domains["session"]["retry"]) => Effect.Effect<void>
+  /** The cache-mask state of this request, when the provider serves masked branches. */
+  readonly cacheMask?: CacheMask.State
   /** Runs a tool call against the tools this request advertised. */
   readonly executeTool: (
     input: Parameters<Tool.Snapshot["execute"]>[0],
@@ -233,6 +237,7 @@ export const layer = Layer.effect(
     const hooks = yield* PluginHooks.Service
     const transport = yield* SessionModelTransport.Service
     const app = yield* App.Metadata
+    const db = (yield* Database.Service).db
     const prepare = Effect.fn("SessionModelRequest.prepare")(function* <
       S extends SessionRequest & { tools?: Definitions },
     >(kind: SessionRequestKind, input: Input, shape: (draft: SessionRequest, tools: Definitions) => Effect.Effect<S>) {
@@ -334,10 +339,43 @@ export const layer = Layer.effect(
           new Error("Provider context is incompatible with the route selected by model request hooks"),
         )
 
+      // The Ladder serves two branches of the same conversation in one request: the
+      // compacted fallback and the branch floored at the confirmed cache boundary.
+      // Both are byte-identical above that boundary, so the provider's prefix cache
+      // keeps hitting whichever branch it ends up serving.
+      const mask = yield* CacheMask.apply({
+        db,
+        providerID: model.ref.providerID,
+        modelID: model.ref.id,
+        messages: request.messages,
+      })
+      const masked = mask ? LLMRequest.update(request, { messages: mask.fallback.messages }) : request
+      const variant = mask?.masked
+        ? yield* route.body
+            .from(LLMRequest.update(masked, { messages: mask.masked.messages }))
+            .pipe(Effect.orElseSucceed(() => undefined))
+        : undefined
+      const variantMessages = (variant as unknown as { readonly messages?: ReadonlyArray<unknown> } | undefined)
+        ?.messages
+      const withVariant =
+        mask?.masked && variantMessages
+          ? LLMRequest.update(masked, {
+              http: new HttpOptions({
+                ...masked.http,
+                body: CacheMask.body({
+                  sessionID: session.id,
+                  rung: mask.rung,
+                  scope: mask.scope,
+                  messages: variantMessages,
+                }),
+              }),
+            })
+          : masked
+
       const hasHttpHooks =
         (yield* hooks.has("session", "http.request", model.ref.providerID)) ||
         (yield* hooks.has("session", "http.response", model.ref.providerID))
-      const http: StreamOptions["http"] = hasHttpHooks
+      const hookHttp: StreamOptions["http"] = hasHttpHooks
         ? (req, handler) =>
             Effect.gen(function* () {
               const before = yield* hooks.trigger("session", "http.request", {
@@ -363,6 +401,23 @@ export const layer = Layer.effect(
               return HttpClientResponse.fromWeb(sent, after.response)
             }).pipe(Effect.mapError((cause) => (cause instanceof Error ? cause : new Error(String(cause)))))
         : undefined
+      // The Ladder reports which rung served the request and under which cache
+      // scope in the response headers. Capture them so the ledger can confirm
+      // the prefix the provider actually cached.
+      const http: StreamOptions["http"] =
+        hookHttp || mask
+          ? (req, handler) =>
+              Effect.gen(function* () {
+                const res = yield* hookHttp ? hookHttp(req, handler) : handler(req)
+                if (mask)
+                  mask.observation.response = CacheMask.parseHeaders({
+                    "x-ladder-model": Option.getOrUndefined(Headers.get(res.headers, "x-ladder-model")),
+                    "x-ladder-cache-scope": Option.getOrUndefined(Headers.get(res.headers, "x-ladder-cache-scope")),
+                    "x-ladder-cache-variant": Option.getOrUndefined(Headers.get(res.headers, "x-ladder-cache-variant")),
+                  })
+                return res
+              })
+          : undefined
       // HTTP hooks wrap every HTTP request, including the WebSocket fallback path. The route decides
       // which transport actually carries the request, so both hook families are always offered.
       const webSocket =
@@ -393,8 +448,9 @@ export const layer = Layer.effect(
 
       return {
         event: shaped,
-        request,
+        request: withVariant,
         options: { ...(http ? { http } : {}), ...(webSocket ? { webSocket } : {}) },
+        ...(mask ? { cacheMask: mask } : {}),
         retry: (event: Parameters<Prepared["retry"]>[0]) =>
           hooks.trigger("session", "retry", event).pipe(Effect.asVoid),
         // Permission.assert and the question tool throw declines as defects so tools cannot
@@ -435,5 +491,5 @@ export const layer = Layer.effect(
 export const node = makeLocationNode({
   service: Service,
   layer,
-  deps: [PluginHooks.node, SessionModelTransport.node, App.node],
+  deps: [PluginHooks.node, SessionModelTransport.node, App.node, Database.node],
 })
