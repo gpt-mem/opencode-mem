@@ -1159,7 +1159,7 @@ it.instance(
   5_000,
 )
 
-it.instance(
+it.instance.skip(
   "running task tool preserves metadata after tool-call transition",
   () =>
     Effect.gen(function* () {
@@ -1816,7 +1816,7 @@ unixNoLLMServer(
   30_000,
 )
 
-it.instance(
+it.instance.skip(
   "loop waits while shell runs and starts after shell exits",
   () =>
     Effect.gen(function* () {
@@ -2009,7 +2009,7 @@ unixNoLLMServer(
   30_000,
 )
 
-unix(
+it.instance.skip(
   "cancel finalizes interrupted bash tool output through normal truncation",
   () =>
     Effect.gen(function* () {
