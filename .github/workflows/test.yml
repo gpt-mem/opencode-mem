@@ -91,7 +91,7 @@ jobs:
         timeout-minutes: 20
         run: GITHUB_ACTIONS=false bun turbo test --filter='!opencode'
         env:
-          OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER: 'false'
+          OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER: "false"
 
       - name: Check generated client
         working-directory: packages/client
@@ -150,7 +150,7 @@ jobs:
         timeout-minutes: 20
         run: GITHUB_ACTIONS=false bun turbo test --filter='!opencode'
         env:
-          OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER: 'true'
+          OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER: "true"
 
   unit-opencode-linux:
     name: unit-opencode (linux, shard ${{ matrix.shard }}/${{ matrix.total }})
@@ -187,7 +187,7 @@ jobs:
         working-directory: packages/opencode
         run: GITHUB_ACTIONS=false bun test --shard=${{ matrix.shard }}/${{ matrix.total }} --timeout 120000 --only-failures
         env:
-          OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER: 'false'
+          OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER: "false"
 
   unit-opencode-windows:
     name: unit-opencode (windows, shard ${{ matrix.shard }}/${{ matrix.total }})
@@ -227,7 +227,7 @@ jobs:
         working-directory: packages/opencode
         run: GITHUB_ACTIONS=false bun test --shard=${{ matrix.shard }}/${{ matrix.total }} --timeout 120000 --only-failures
         env:
-          OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER: 'true'
+          OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER: "true"
 
   e2e-linux:
     name: e2e (linux)
