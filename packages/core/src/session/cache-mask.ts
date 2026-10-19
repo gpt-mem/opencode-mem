@@ -190,6 +190,9 @@ export const body = (input: {
           rung: input.rung,
           cache_scope: input.scope,
           messages: input.messages,
+          // The service validates the variant field and rejects the whole request
+          // with "invalid ladder_cache_variant" when it is absent.
+          variant: "masked",
         },
       }
     : {}),
