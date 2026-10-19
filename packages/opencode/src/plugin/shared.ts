@@ -285,18 +285,22 @@ export function readV1Plugin(
   const server = "server" in value ? value.server : undefined
   const tui = "tui" in value ? value.tui : undefined
   if (server !== undefined && typeof server !== "function") {
+    if (mode === "detect") return
     throw new TypeError(`Plugin ${spec} has invalid server export`)
   }
   if (tui !== undefined && typeof tui !== "function") {
+    if (mode === "detect") return
     throw new TypeError(`Plugin ${spec} has invalid tui export`)
   }
   if (server !== undefined && tui !== undefined) {
     throw new TypeError(`Plugin ${spec} must default export either server() or tui(), not both`)
   }
   if (kind === "server" && server === undefined) {
+    if (mode === "detect") return
     throw new TypeError(`Plugin ${spec} must default export an object with server()`)
   }
   if (kind === "tui" && tui === undefined) {
+    if (mode === "detect") return
     throw new TypeError(`Plugin ${spec} must default export an object with tui()`)
   }
 
