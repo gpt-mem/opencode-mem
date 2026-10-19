@@ -21,17 +21,28 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  unit:
-    name: unit (${{ matrix.settings.name }})
-    strategy:
-      fail-fast: false
-      matrix:
-        settings:
-          - name: linux
-            host: ubuntu-latest
-          - name: windows
-            host: windows-latest
-    runs-on: ${{ matrix.settings.host }}
+  changes:
+    name: changes
+    runs-on: ubuntu-latest
+    outputs:
+      windows: ${{ steps.filter.outputs.windows }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - name: Detect Windows-relevant changes
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            windows:
+              - '.github/workflows/test.yml'
+              - '.github/workflows/windows-build.yml'
+              - '**/*windows*'
+              - '**/*.ps1'
+
+  unit-linux:
+    name: unit (linux)
+    runs-on: ubuntu-latest
     defaults:
       run:
         shell: bash
@@ -58,10 +69,10 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: node_modules/.cache/turbo
-          key: turbo-${{ runner.os }}-${{ hashFiles('turbo.json', '**/package.json') }}-${{ github.sha }}
+          key: turbo-Linux-${{ hashFiles('turbo.json', '**/package.json') }}-${{ github.sha }}
           restore-keys: |
-            turbo-${{ runner.os }}-${{ hashFiles('turbo.json', '**/package.json') }}-
-            turbo-${{ runner.os }}-
+            turbo-Linux-${{ hashFiles('turbo.json', '**/package.json') }}-
+            turbo-Linux-
 
       - name: Ensure ripgrep
         shell: bash
@@ -74,33 +85,23 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/.cache/opencode/bin
-          key: ripgrep-${{ runner.os }}-${{ runner.arch }}-15.1.0
+          key: ripgrep-Linux-x64-15.1.0
 
       - name: Run unit tests
         timeout-minutes: 20
-        run: GITHUB_ACTIONS=false bun turbo test
+        run: GITHUB_ACTIONS=false bun turbo test --filter='!opencode'
         env:
-          OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER: ${{ runner.os == 'Windows' && 'true' || 'false' }}
+          OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER: 'false'
 
       - name: Check generated client
-        if: runner.os == 'Linux'
         working-directory: packages/client
         run: bun run check:generated
 
-
-  e2e:
-    name: e2e (${{ matrix.settings.name }})
-    strategy:
-      fail-fast: false
-      matrix:
-        settings:
-          - name: linux
-            host: ubuntu-latest
-          - name: windows
-            host: windows-latest
-    runs-on: ${{ matrix.settings.host }}
-    env:
-      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.playwright-browsers
+  unit-windows:
+    name: unit (windows)
+    needs: changes
+    if: needs.changes.outputs.windows == 'true' || github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
     defaults:
       run:
         shell: bash
@@ -113,7 +114,138 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          # Playwright 1.59 hangs while extracting Chromium with Node 24.16.
+          node-version: "24"
+
+      - name: Setup Bun
+        uses: ./.github/actions/setup-bun
+
+      - name: Configure git identity
+        run: |
+          git config --global user.email "bot@opencode.ai"
+          git config --global user.name "opencode"
+
+      - name: Cache Turbo
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: node_modules/.cache/turbo
+          key: turbo-Windows-${{ hashFiles('turbo.json', '**/package.json') }}-${{ github.sha }}
+          restore-keys: |
+            turbo-Windows-${{ hashFiles('turbo.json', '**/package.json') }}-
+            turbo-Windows-
+
+      - name: Ensure ripgrep
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ] && ! command -v rg >/dev/null 2>&1 && ! command -v rg.exe >/dev/null 2>&1; then
+            choco install ripgrep -y
+          fi
+
+      - name: Cache ripgrep binary
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.cache/opencode/bin
+          key: ripgrep-Windows-x64-15.1.0
+
+      - name: Run unit tests
+        timeout-minutes: 20
+        run: GITHUB_ACTIONS=false bun turbo test --filter='!opencode'
+        env:
+          OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER: 'true'
+
+  unit-opencode-linux:
+    name: unit-opencode (linux, shard ${{ matrix.shard }}/${{ matrix.total }})
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+        total: [4]
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+
+      - name: Setup Bun
+        uses: ./.github/actions/setup-bun
+
+      - name: Configure git identity
+        run: |
+          git config --global user.email "bot@opencode.ai"
+          git config --global user.name "opencode"
+
+      - name: Run opencode unit tests (shard)
+        timeout-minutes: 20
+        working-directory: packages/opencode
+        run: GITHUB_ACTIONS=false bun test --shard=${{ matrix.shard }}/${{ matrix.total }} --timeout 30000 --only-failures
+        env:
+          OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER: 'false'
+
+  unit-opencode-windows:
+    name: unit-opencode (windows, shard ${{ matrix.shard }}/${{ matrix.total }})
+    needs: changes
+    if: needs.changes.outputs.windows == 'true' || github.event_name == 'workflow_dispatch'
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+        total: [4]
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+
+      - name: Setup Bun
+        uses: ./.github/actions/setup-bun
+
+      - name: Configure git identity
+        run: |
+          git config --global user.email "bot@opencode.ai"
+          git config --global user.name "opencode"
+
+      - name: Run opencode unit tests (shard)
+        timeout-minutes: 20
+        working-directory: packages/opencode
+        run: GITHUB_ACTIONS=false bun test --shard=${{ matrix.shard }}/${{ matrix.total }} --timeout 30000 --only-failures
+        env:
+          OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER: 'true'
+
+  e2e-linux:
+    name: e2e (linux)
+    runs-on: ubuntu-latest
+    env:
+      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.playwright-browsers
+      CI_PRUNE_E2E: "1"
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
           node-version: "24.15"
 
       - name: Setup Bun
@@ -130,7 +262,71 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ${{ github.workspace }}/.playwright-browsers
-          key: ${{ runner.os }}-${{ runner.arch }}-playwright-${{ steps.playwright-version.outputs.version }}-chromium
+          key: Linux-x64-playwright-${{ steps.playwright-version.outputs.version }}-chromium
+
+      - name: Install Playwright system dependencies
+        working-directory: packages/app
+        run: bunx playwright install-deps chromium
+
+      - name: Install Playwright browsers
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        working-directory: packages/app
+        run: bunx playwright install chromium
+
+      - name: Run app e2e tests
+        run: bun --cwd packages/app test:e2e:local
+        env:
+          CI: true
+        timeout-minutes: 30
+
+      - name: Upload Playwright artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: playwright-linux-${{ github.run_attempt }}
+          if-no-files-found: ignore
+          retention-days: 7
+          path: |
+            packages/app/e2e/test-results
+            packages/app/e2e/playwright-report
+
+  e2e-windows:
+    name: e2e (windows)
+    needs: changes
+    if: needs.changes.outputs.windows == 'true' || github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+    env:
+      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.playwright-browsers
+      CI_PRUNE_E2E: "1"
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24.15"
+
+      - name: Setup Bun
+        uses: ./.github/actions/setup-bun
+
+      - name: Read Playwright version
+        id: playwright-version
+        run: |
+          version=$(node -e 'console.log(require("./package.json").workspaces.catalog["@playwright/test"])')
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ github.workspace }}/.playwright-browsers
+          key: Windows-x64-playwright-${{ steps.playwright-version.outputs.version }}-chromium
 
       - name: Install Playwright system dependencies
         if: runner.os == 'Linux'
@@ -152,7 +348,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: playwright-${{ matrix.settings.name }}-${{ github.run_attempt }}
+          name: playwright-windows-${{ github.run_attempt }}
           if-no-files-found: ignore
           retention-days: 7
           path: |

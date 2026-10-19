@@ -32,6 +32,7 @@ import { LspTool } from "./lsp"
 import { ApplyPatchTool } from "./apply_patch"
 import { Glob } from "@opencode-ai/core/util/glob"
 import path from "path"
+import fs from "fs"
 import { pathToFileURL } from "url"
 import { Effect, Layer, Context } from "effect"
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
@@ -55,6 +56,41 @@ import { ModelV2 } from "@opencode-ai/core/model"
 import { MCP } from "@/mcp"
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { McpCatalog } from "@/mcp/catalog"
+
+const TRUNCATE_INLINE_LINES = 100
+const TRUNCATE_INLINE_BYTES = 4 * 1024
+const TRUNCATE_MAX_LINES = 2000
+const TRUNCATE_MAX_BYTES = 50 * 1024
+const TRUNCATE_PREVIEW_LINES = 40
+const TRUNCATE_PREVIEW_BYTES = 2 * 1024
+
+function takePrefix(input: string, maximumBytes: number): string {
+  let bytes = 0
+  let content = ""
+  for (const char of input) {
+    const size = Buffer.byteLength(char, "utf-8")
+    if (bytes + size > maximumBytes) break
+    content += char
+    bytes += size
+  }
+  return content
+}
+
+export function truncateToolOutput(output: string): string {
+  const lines = output.split("\n")
+  const byteLength = Buffer.byteLength(output, "utf-8")
+  if (lines.length <= TRUNCATE_INLINE_LINES && byteLength <= TRUNCATE_INLINE_BYTES) return output
+
+  const dir = path.join(process.env.HOME || "", ".local", "share", "opencode", "tool-output")
+  try { fs.mkdirSync(dir, { recursive: true }) } catch {}
+  const file = path.join(dir, `tool_${Date.now()}_${Math.random().toString(36).slice(2)}`)
+  try { fs.writeFileSync(file, output) } catch {}
+
+  const previewLines = lines.slice(0, TRUNCATE_PREVIEW_LINES).join("\n")
+  const preview = takePrefix(previewLines, TRUNCATE_PREVIEW_BYTES)
+  const marker = `... output truncated; full content saved to ${file} ...`
+  return preview.length > 0 ? `${preview}\n\n${marker}` : marker
+}
 
 export function webSearchEnabled(providerID: ProviderV2.ID, flags = { exa: false, parallel: false }) {
   return (
@@ -152,16 +188,17 @@ const layer = Layer.effect(
                   directory: ctx.directory,
                   worktree: ctx.worktree,
                 }
-                const result = yield* Effect.promise(() => def.execute(args as any, pluginCtx))
-                const output = typeof result === "string" ? result : result.output
-                const metadata = typeof result === "string" ? {} : (result.metadata ?? {})
-                const attachments = typeof result === "string" ? undefined : result.attachments
-                return {
-                  title: typeof result === "string" ? "" : (result.title ?? ""),
-                  output,
-                  attachments,
-                  metadata,
-                }
+                 const result = yield* Effect.promise(() => def.execute(args as any, pluginCtx))
+                 const rawOutput = typeof result === "string" ? result : result.output
+                 const output = typeof rawOutput === "string" ? truncateToolOutput(rawOutput) : rawOutput
+                 const metadata = typeof result === "string" ? {} : (result.metadata ?? {})
+                 const attachments = typeof result === "string" ? undefined : result.attachments
+                 return {
+                   title: typeof result === "string" ? "" : (result.title ?? ""),
+                   output,
+                   attachments,
+                   metadata,
+                 }
               }).pipe(
                 Effect.withSpan("Tool.execute", {
                   attributes: {
@@ -328,7 +365,27 @@ const layer = Layer.effect(
               .join("\n"),
             parameters: output.parameters,
             jsonSchema,
-            execute: tool.execute,
+            execute: (args: unknown, ctx: Tool.Context) =>
+              tool.execute(args as any, ctx).pipe(
+                Effect.map((result) => {
+                  if (typeof result.output !== "string") return result
+                  const lineCount = result.output.split("\n").length
+                  const byteLength = Buffer.byteLength(result.output, "utf-8")
+                  if (lineCount <= TRUNCATE_INLINE_LINES && byteLength <= TRUNCATE_INLINE_BYTES) return result
+                  const truncatedOutput = truncateToolOutput(result.output)
+                  const match = truncatedOutput.match(/full content saved to (.+?) \.\.\./)
+                  const outputPath = match?.[1]
+                  return {
+                    ...result,
+                    output: truncatedOutput,
+                    metadata: {
+                      ...(result.metadata ?? {}),
+                      truncated: true,
+                      ...(outputPath ? { outputPath } : {}),
+                    },
+                  }
+                }),
+              ),
             formatValidationError: tool.formatValidationError,
           }
         }),
