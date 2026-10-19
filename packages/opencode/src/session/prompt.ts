@@ -993,63 +993,63 @@ const layer = Layer.effect(
         }
 
         return [{ ...part, messageID: info.id, sessionID: input.sessionID }]
-      })(
-        const resolvedParts = yield* Effect.forEach(input.parts, resolvePart, { concurrency: "unbounded" }).pipe(
-          Effect.map((x) => x.flat().map(assign)),
-        )
+      })
+      const resolvedParts = yield* Effect.forEach(input.parts, resolvePart, { concurrency: "unbounded" }).pipe(
+        Effect.map((x) => x.flat().map(assign)),
+      )
 
-        yield* plugin.trigger(
-          "chat.message",
-          {
-            sessionID: input.sessionID,
-            agent: input.agent,
-            model: input.model,
-            messageID: input.messageID,
-            variant: input.variant,
-          },
-          { message: info, parts: resolvedParts },
-        )
+      yield* plugin.trigger(
+        "chat.message",
+        {
+          sessionID: input.sessionID,
+          agent: input.agent,
+          model: input.model,
+          messageID: input.messageID,
+          variant: input.variant,
+        },
+        { message: info, parts: resolvedParts },
+      )
 
-        const parts = yield* Effect.forEach(resolvedParts, (part) =>
-          part.type === "file" && part.mime.startsWith("image/")
-            ? image.normalize(part).pipe(
-                Effect.catchIf(
-                  (error) => error instanceof Image.ResizerUnavailableError,
-                  () => Effect.succeed(part),
-                ),
-              )
-            : Effect.succeed(part),
-        )
+      const parts = yield* Effect.forEach(resolvedParts, (part) =>
+        part.type === "file" && part.mime.startsWith("image/")
+          ? image.normalize(part).pipe(
+              Effect.catchIf(
+                (error) => error instanceof Image.ResizerUnavailableError,
+                () => Effect.succeed(part),
+              ),
+            )
+          : Effect.succeed(part),
+      )
 
-        const parsed = decodeMessageInfo(info, { errors: "all", propertyOrder: "original" })
-        if (Exit.isFailure(parsed)) {
-          yield* Effect.logError("invalid user message before save", {
-            sessionID: input.sessionID,
-            messageID: info.id,
-            agent: info.agent,
-            model: info.model,
-            cause: Cause.pretty(parsed.cause),
-          })
-        }
-        for (const [index, part] of parts.entries()) {
-          const p = decodeMessagePart(part, { errors: "all", propertyOrder: "original" })
-          if (Exit.isSuccess(p)) continue
-          yield* Effect.logError("invalid user part before save", {
-            sessionID: input.sessionID,
-            messageID: info.id,
-            partID: part.id,
-            partType: part.type,
-            index,
-            cause: Cause.pretty(p.cause),
-            part,
-          })
-        }
+      const parsed = decodeMessageInfo(info, { errors: "all", propertyOrder: "original" })
+      if (Exit.isFailure(parsed)) {
+        yield* Effect.logError("invalid user message before save", {
+          sessionID: input.sessionID,
+          messageID: info.id,
+          agent: info.agent,
+          model: info.model,
+          cause: Cause.pretty(parsed.cause),
+        })
+      }
+      for (const [index, part] of parts.entries()) {
+        const p = decodeMessagePart(part, { errors: "all", propertyOrder: "original" })
+        if (Exit.isSuccess(p)) continue
+        yield* Effect.logError("invalid user part before save", {
+          sessionID: input.sessionID,
+          messageID: info.id,
+          partID: part.id,
+          partType: part.type,
+          index,
+          cause: Cause.pretty(p.cause),
+          part,
+        })
+      }
 
-        yield* sessions.updateMessage(info)
-        for (const part of parts) yield* sessions.updatePart(part)
+      yield* sessions.updateMessage(info)
+      for (const part of parts) yield* sessions.updatePart(part)
 
-        return { info, parts }
-      }, Effect.scoped)
+      return { info, parts }
+    }, Effect.scoped)
 
     const prompt: (input: PromptInput) => Effect.Effect<SessionV1.WithParts, Image.Error> = Effect.fn(
       "SessionPrompt.prompt",
