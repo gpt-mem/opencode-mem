@@ -85,6 +85,19 @@ jobs:
       - name: Setup Bun
         uses: ./.github/actions/setup-bun
 
+      # The search tools shell out to ripgrep. GitHub-hosted images do not ship it, and the
+      # runtime fallback that downloads it from GitHub releases fails on the runner network,
+      # so install it up front for every platform the unit suite runs on.
+      - name: Install ripgrep (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ripgrep
+
+      - name: Install ripgrep (Windows)
+        if: runner.os == 'Windows'
+        run: choco install ripgrep --yes --no-progress
+
       - name: Test Effect simplification rules
         if: runner.os == 'Linux'
         run: bun run test:effect-simplification-rules
