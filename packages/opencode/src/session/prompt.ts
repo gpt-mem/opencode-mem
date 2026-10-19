@@ -1111,11 +1111,11 @@ const layer = Layer.effect(
           for (const m of msgs) {
             if (m.info.role !== "assistant") continue
             for (const part of m.parts) {
-              if (part.type === "tool" && part.state?.status && part.state.status !== "pending") {
+              if (part.type === "tool" && part.state?.status === "completed") {
                 recentToolCalls.push({
                   tool: part.tool,
-                  input: JSON.stringify(part.state?.input ?? {}),
-                  output: String(part.state?.output ?? "").slice(0, 200),
+                  input: JSON.stringify(part.state.input),
+                  output: part.state.output.slice(0, 200),
                 })
               }
             }
