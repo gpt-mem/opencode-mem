@@ -20,6 +20,7 @@ import { LSP } from "@/lsp/lsp"
 import { MCP } from "@/mcp"
 import { McpAuth } from "@/mcp/auth"
 import { Permission } from "@/permission"
+import { PermissionV2Bridge } from "@/permission/v2-bridge"
 import { Plugin } from "@/plugin"
 import { PluginPtyEnvironment } from "@/plugin/pty-environment"
 import { InstanceStore } from "@/project/instance-store"
@@ -61,6 +62,7 @@ import { Location } from "@opencode-ai/core/location"
 import { ModelsDev } from "@opencode-ai/core/models-dev"
 import { Npm } from "@opencode-ai/core/npm"
 import { PermissionSaved } from "@opencode-ai/core/permission/saved"
+import { PermissionV2 } from "@opencode-ai/core/permission"
 import { ProjectV2 } from "@opencode-ai/core/project"
 import { ProjectCopy } from "@opencode-ai/core/project/copy"
 import { PtyTicket } from "@opencode-ai/core/pty/ticket"
@@ -307,7 +309,14 @@ export function createRoutes(
     ),
     Layer.provide(locationServiceMapV2),
 
-    Layer.provide(AppNodeBuilderV1.build(app, [[Location.node, Location.boundNode(Location.Ref.make({ directory: AbsolutePath.make(process.cwd()) }))]])),
+    Layer.provide(
+      AppNodeBuilderV1.build(app, [
+        [Location.node, Location.boundNode(Location.Ref.make({ directory: AbsolutePath.make(process.cwd()) }))],
+        // The core tools ask the V2 permission service, but only the V1 service is answered by
+        // the V1 CLI and TUI. The bridge keeps the V1 request flow in charge.
+        [PermissionV2.node, PermissionV2Bridge.node],
+      ]),
+    ),
     // Must stay last: layers provided later in this pipe build beneath earlier ones,
     // so Observability must come after every service graph. Otherwise eagerly forked
     // fibers (e.g. the ModelsDev background refresh) capture Effect's default stdout
