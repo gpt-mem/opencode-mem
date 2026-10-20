@@ -218,4 +218,41 @@ describe("operational-memory tools", () => {
       expect(listed.hint).toBeUndefined()
     }),
   )
+
+  it.effect("natural-language query finds a record on the first call", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const registry = yield* Tool.Service
+      yield* executeTool(
+        registry,
+        put({
+          entries: [
+            {
+              type: "decision",
+              subject: "migration-idempotency",
+              decision: "the mem_record migration must be idempotent",
+              reason: "the shared stock database already has the table",
+            },
+          ],
+        }),
+      )
+      // Words are in a different order than the stored text, so the regex pass
+      // misses and only the plain-text fallback finds it.
+      const found = output(yield* executeTool(registry, search({ query: "idempotent migration" })))
+      expect(found.matched).toBe(1)
+    }),
+  )
+
+  it.effect("an invalid regex query falls back to plain text instead of failing", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const registry = yield* Tool.Service
+      yield* executeTool(
+        registry,
+        put({ entries: [{ type: "constraint", subject: "cache-ledger", decision: "mark zero means free track" }] }),
+      )
+      const found = output(yield* executeTool(registry, search({ query: "cache(" })))
+      expect(found.matched).toBe(1)
+    }),
+  )
 })

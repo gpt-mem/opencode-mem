@@ -143,6 +143,43 @@ export const writeBatch = (
     return { ok: true as const, records: inserted }
   })
 
+type MemRecordRow = typeof MemRecordTable.$inferSelect
+
+const compileRegex = (query: string): RegExp | undefined => {
+  try {
+    return new RegExp(query, "i")
+  } catch {
+    return undefined
+  }
+}
+
+const haystackOf = (row: MemRecordRow) => [row.subject, row.content, row.reason ?? ""].join("\n")
+
+const regexMatches = (query: string, rows: MemRecordRow[]): MemRecordRow[] => {
+  const regex = compileRegex(query)
+  if (regex === undefined) return []
+  return rows.filter((row) => regex.test(haystackOf(row)))
+}
+
+// A natural-language query is usually not a valid regex and misses on word
+// forms ("идемпотентные" vs "идемпотентной"), so retry the query's words as
+// plain substrings and rank rows by how many distinct words they contain.
+const plainTextMatches = (query: string, rows: MemRecordRow[]): MemRecordRow[] => {
+  const terms = query
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter((term) => term.length > 0)
+  if (terms.length === 0) return []
+  return rows
+    .map((row) => {
+      const text = haystackOf(row).toLowerCase()
+      return { row, hits: terms.filter((term) => text.includes(term)).length }
+    })
+    .filter((entry) => entry.hits > 0)
+    .sort((a, b) => b.hits - a.hits)
+    .map((entry) => entry.row)
+}
+
 export type SearchResult = {
   readonly records: MemRecord.Record[]
   readonly matched: number
@@ -191,12 +228,13 @@ export const search = (
       .all()
       .pipe(Effect.orDie)
 
-    const regex = input.query === undefined ? undefined : new RegExp(input.query, "i")
-    const matched = rows.filter((row) => {
-      if (regex === undefined) return true
-      const haystack = [row.subject, row.content, row.reason ?? ""].join("\n")
-      return regex.test(haystack)
-    })
+    let matched: MemRecordRow[] = rows
+    if (input.query !== undefined) {
+      // Regex is the documented semantics; fall back to plain-text words before
+      // reporting "nothing found" so a natural-language question still hits.
+      matched = regexMatches(input.query, rows)
+      if (matched.length === 0) matched = plainTextMatches(input.query, rows)
+    }
 
     const limit = Math.max(1, Math.min(input.limit ?? 20, 100))
     // A type name like "decision" is a label, not text that appears in the
@@ -204,7 +242,7 @@ export const search = (
     // store. Say so instead of returning a bare zero.
     const hint =
       input.query !== undefined && matched.length === 0 && rows.length > 0
-        ? `query matched 0 of ${rows.length} record(s) that match the other filters — query is a regex over subject/content/reason, so a type name like "${input.query}" usually matches nothing; retry without query to list them`
+        ? `query matched 0 of ${rows.length} record(s) that match the other filters — matching tries a case-insensitive regex over subject/content/reason, then the query's words as plain text, so a type name like "${input.query}" usually matches nothing; retry without query to list them`
         : undefined
     return {
       records: matched.slice(-limit).reverse().map(toRecord),

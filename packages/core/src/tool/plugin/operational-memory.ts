@@ -38,7 +38,8 @@ const SearchInput = Schema.Struct({
     Schema.String.annotate({
       description:
         "Case-insensitive regular expression matched against subject, content and reason. " +
-        "It matches record TEXT, not the type label — to list every record of a kind use type= without query",
+        "When it finds nothing, the same words are retried as plain-text substrings, so a natural-language " +
+        "question usually still matches. It matches record TEXT, not the type label — to list every record of a kind use type= without query",
     }),
   ),
   type: Schema.optional(MemRecord.Type.annotate({ description: "Only return this record type" })),
@@ -151,7 +152,7 @@ export const Plugin = {
             "stored for this project via put_in_operational_memory. Project-scoped: finds records from earlier " +
             "sessions too. Each hit includes authority (user vs agent), decided_by, reason and source_ref so " +
             "provenance is visible. Use this to recover 'what did we decide and why' without re-reading history. " +
-            "To list every record of a kind pass type= alone; query is a text regex and usually misses the type label.",
+            "To list every record of a kind pass type= alone; query matches as a regex first, then as plain-text words.",
           input: SearchInput,
           output: SearchOutput,
           execute: (input, context) =>
