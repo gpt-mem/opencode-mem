@@ -55,19 +55,19 @@ jobs:
           bun x turbo@2.10.2 ls --affected --filter=@opencode/app --filter=@opencode/storybook --output=json > affected.json
           bun -e 'const result = await Bun.file("affected.json").json(); console.log(`app=${result.packages.count > 0}`)' >> "$GITHUB_OUTPUT"
 
-  unit:
-    name: unit (${{ matrix.settings.name }})
+  # A package suite is one bun process that runs its files in order, so a single runner waits out the
+  # slowest package (core is ~2x the next one on Windows). Every shard runs its share of each package's
+  # files (`bun test --shard`) and the shards together cover the suite exactly once, so the unit wall
+  # time becomes the slowest package divided by the shard count instead of its whole runtime.
+  # Branch rules pin the check names `unit (linux)` and `unit (windows)`, so the shards report under
+  # their own names and the `unit-*-result` jobs below keep the pinned ones.
+  unit-linux:
+    name: unit (linux, shard ${{ matrix.shard }}/4)
     strategy:
       fail-fast: false
       matrix:
-        settings:
-          - name: linux
-            host: ubuntu-latest
-          - name: windows
-            host: windows-latest
-    runs-on: ${{ matrix.settings.host }}
-    # Windows legs are flaky on GitHub-hosted runners (see issue #126); they must not block a PR.
-    continue-on-error: ${{ matrix.settings.name == 'windows' }}
+        shard: [1, 2, 3, 4]
+    runs-on: ubuntu-latest
     defaults:
       run:
         shell: bash
@@ -90,23 +90,10 @@ jobs:
       # The search tools shell out to ripgrep. GitHub-hosted images do not ship it, and the
       # runtime fallback that downloads it from GitHub releases fails on the runner network,
       # so install it up front for every platform the unit suite runs on.
-      - name: Install ripgrep (Linux)
-        if: runner.os == 'Linux'
+      - name: Install ripgrep
         run: |
           sudo apt-get update
           sudo apt-get install -y ripgrep
-
-      - name: Install ripgrep (Windows)
-        if: runner.os == 'Windows'
-        run: choco install ripgrep --yes --no-progress
-
-      - name: Test Effect simplification rules
-        if: runner.os == 'Linux'
-        run: bun run test:effect-simplification-rules
-
-      - name: Check Effect simplifications
-        if: runner.os == 'Linux'
-        run: bun run lint:effect-simplifications
 
       - name: Configure git identity
         run: |
@@ -114,26 +101,96 @@ jobs:
           git config --global user.name "opencode"
 
       - name: Run unit tests
-        timeout-minutes: 20
+        timeout-minutes: 15
         run: |
           # The runners have four vCPUs, and each Bun test process performs its own concurrent work.
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            GITHUB_ACTIONS=false bun turbo test --concurrency=3
+            GITHUB_ACTIONS=false bun turbo test --concurrency=3 -- --shard=${{ matrix.shard }}/4
             exit 0
           fi
-          GITHUB_ACTIONS=false bun turbo test --affected --concurrency=3
+          GITHUB_ACTIONS=false bun turbo test --affected --concurrency=3 -- --shard=${{ matrix.shard }}/4
         env:
-          OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER: ${{ runner.os == 'Windows' && 'true' || 'false' }}
           TURBO_SCM_BASE: ${{ github.event_name == 'pull_request' && format('{0}^1', github.sha) || github.event.before }}
           TURBO_SCM_HEAD: ${{ github.sha }}
 
+  unit-windows:
+    name: unit (windows, shard ${{ matrix.shard }}/4)
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    runs-on: windows-latest
+    # Windows legs are flaky on GitHub-hosted runners (see issue #126); they must not block a PR.
+    continue-on-error: true
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          # Pull requests diff against the merge's first parent; pushes diff against the previous dev head.
+          fetch-depth: ${{ github.event_name == 'pull_request' && 2 || 0 }}
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+
+      - name: Setup Bun
+        uses: ./.github/actions/setup-bun
+
+      - name: Install ripgrep
+        run: choco install ripgrep --yes --no-progress
+
+      - name: Configure git identity
+        run: |
+          git config --global user.email "bot@opencode.ai"
+          git config --global user.name "opencode"
+
+      - name: Run unit tests
+        timeout-minutes: 15
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            GITHUB_ACTIONS=false bun turbo test --concurrency=3 -- --shard=${{ matrix.shard }}/4
+            exit 0
+          fi
+          GITHUB_ACTIONS=false bun turbo test --affected --concurrency=3 -- --shard=${{ matrix.shard }}/4
+        env:
+          OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER: "true"
+          TURBO_SCM_BASE: ${{ github.event_name == 'pull_request' && format('{0}^1', github.sha) || github.event.before }}
+          TURBO_SCM_HEAD: ${{ github.sha }}
+
+  # Everything that used to run once at the tail of `unit (linux)`: it is independent of the unit tests,
+  # so it runs on its own runner beside the shards instead of adding its runtime to theirs.
+  verify:
+    name: verify (linux)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: ${{ github.event_name == 'pull_request' && 2 || 0 }}
+
+      - name: Setup Bun
+        uses: ./.github/actions/setup-bun
+
+      - name: Test Effect simplification rules
+        run: bun run test:effect-simplification-rules
+
+      - name: Check Effect simplifications
+        run: bun run lint:effect-simplifications
+
       - name: Verify published codemode package
-        if: runner.os == 'Linux'
         working-directory: packages/codemode
         run: bun run script/publish.ts --dry-run
 
       - name: Verify packed workerd SDK
-        if: runner.os == 'Linux'
         timeout-minutes: 15
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
@@ -146,14 +203,43 @@ jobs:
           TURBO_SCM_HEAD: ${{ github.sha }}
 
       - name: Check generated client
-        if: runner.os == 'Linux'
         working-directory: packages/client
         run: bun run check:generated
 
       - name: Check generated documentation
-        if: runner.os == 'Linux'
         working-directory: services/www
         run: bun run check:generated
+
+  # Branch rules pin the check names `unit (linux)` and `unit (windows)`; these keep those names and pass
+  # only when every shard (and, for Linux, the verification job) passed.
+  unit-linux-result:
+    name: unit (linux)
+    needs: [unit-linux, verify]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check unit shard and verification results
+        env:
+          SHARDS: ${{ needs.unit-linux.result }}
+          VERIFY: ${{ needs.verify.result }}
+        run: |
+          echo "unit shards: $SHARDS, package verification: $VERIFY"
+          test "$SHARDS" = success && test "$VERIFY" = success
+
+  unit-windows-result:
+    name: unit (windows)
+    needs: [unit-windows]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    # Windows legs are flaky on GitHub-hosted runners (see issue #126); they must not block a PR.
+    continue-on-error: true
+    steps:
+      - name: Check unit shard results
+        env:
+          SHARDS: ${{ needs.unit-windows.result }}
+        run: |
+          echo "unit shards: $SHARDS"
+          test "$SHARDS" = success
 
   build:
     name: build (${{ matrix.settings.name }})
