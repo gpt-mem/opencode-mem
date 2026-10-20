@@ -57,7 +57,7 @@ The fork ships two lines:
 | Line | Branch              | Layout                           | Release tags                    |
 | ---- | ------------------- | -------------------------------- | ------------------------------- |
 | v1   | `memory-context-v1` | `packages/opencode`              | `mem-v<YYYYMMDD-HHMM>-<SHA>`    |
-| v2   | `v2-base`           | `packages/core` + `packages/cli` | `mem-preview-<YYYYMMDD>-<slug>` |
+| v2   | `main`              | `packages/core` + `packages/cli` | `mem-preview-<YYYYMMDD>-<slug>` |
 
 #### Install from a release
 
@@ -91,7 +91,7 @@ Requires [Bun](https://bun.sh) `1.4.2` — the version pinned in `packageManager
 ```bash
 git clone https://github.com/gpt-mem/opencode-mem.git
 cd opencode-mem
-git checkout v2-base
+git checkout main
 bun install
 
 cd packages/cli
@@ -106,9 +106,16 @@ The executable lands in `packages/cli/dist/cli-<os>-<arch>/bin/opencode`
 version is taken from `packages/cli/package.json`.
 `OPENCODE_CHANNEL` decides which **database file** the binary opens (`packages/cli/src/database-path.ts`):
 `opencode.db` for the `latest|dev|beta|next|prod` channels, `opencode-<channel>.db` for anything else. Left unset,
-the channel is taken from the branch name, so a build of `v2-base` opens `opencode-v2-base.db` — a database of its
+the channel is taken from the branch name, so a build of `main` opens `opencode-main.db` — a database of its
 own, with none of your credentials and none of your sessions in it. A fork build that **replaces** the upstream
 binary has to share the upstream database, hence `OPENCODE_CHANNEL=latest`.
+The branch was called `v2-base` before it became `main`, so a build made from the old name opens
+`opencode-v2-base.db`. Rename that file once to keep the sessions it holds:
+
+```bash
+mv ~/.local/share/opencode/opencode-v2-base.db ~/.local/share/opencode/opencode-main.db
+```
+
 Check what a binary opens with:
 
 ```bash
@@ -189,7 +196,7 @@ The Ladder cache mask has been removed. Requests use the normal message history 
 file pointers above; provider-native prompt caching continues to work without a client-side cache ledger.
 
 > The `OPENCODE_MEMORY_*` family (`OPENCODE_MEMORY_CONTEXT`, `OPENCODE_MEMORY_INTENT`, …) belongs to the **v1**
-> line (`memory-context-v1`). It does not exist on `v2-base`: the v2 line applies the context budget
+> line (`memory-context-v1`). It does not exist on `main`: the v2 line applies the context budget
 > unconditionally instead of behind a flag.
 
 ### Installation (upstream OpenCode)

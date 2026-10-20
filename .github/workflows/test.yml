@@ -4,7 +4,7 @@ on:
   push:
     branches:
       - dev
-      - v2-base
+      - main
   pull_request:
   workflow_dispatch:
 
@@ -12,7 +12,7 @@ concurrency:
   # Keep every run on the release branches so cancelled checks do not pollute the
   # branch commit history. PRs and other branches still share a group and cancel
   # stale runs.
-  group: ${{ case(contains(fromJSON('["refs/heads/dev","refs/heads/v2-base"]'), github.ref), format('{0}-{1}', github.workflow, github.run_id), format('{0}-{1}', github.workflow, github.event.pull_request.number || github.ref)) }}
+  group: ${{ case(contains(fromJSON('["refs/heads/dev","refs/heads/main"]'), github.ref), format('{0}-{1}', github.workflow, github.run_id), format('{0}-{1}', github.workflow, github.event.pull_request.number || github.ref)) }}
   cancel-in-progress: true
 
 permissions:

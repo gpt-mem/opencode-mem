@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 // Fails when a GUI package file this branch adds or edits has any oxlint problem, including warn-level rules (anti-slop):
 // a change that touches a file leaves the whole file clean. Untouched files and other packages are not checked.
-// Usage: bun script/lint-changed.ts [base-ref]   (default: merge base with upstream/dev, origin/dev, or dev)
+// Usage: bun script/lint-changed.ts [base-ref]   (default: merge base with the closest of upstream/main, origin/main, main, upstream/dev, origin/dev, dev)
 import { $ } from "bun"
 
 type Diagnostic = {
@@ -42,11 +42,20 @@ process.exit(report.diagnostics.length > 0 ? 1 : 0)
 
 async function resolveBase(explicit: string | undefined) {
   if (explicit) return (await $`git rev-parse ${explicit}`.text()).trim()
-  const refs = ["upstream/dev", "origin/dev", "dev"]
-  const found = await Promise.all(
-    refs.map(async (ref) => (await $`git rev-parse --verify --quiet ${ref}`.nothrow().quiet()).exitCode === 0),
+  const refs = ["upstream/main", "origin/main", "main", "upstream/dev", "origin/dev", "dev"]
+  const bases = await Promise.all(
+    refs.map(async (ref) => {
+      if ((await $`git rev-parse --verify --quiet ${ref}`.nothrow().quiet()).exitCode !== 0) return undefined
+      const sha = (await $`git merge-base HEAD ${ref}`.nothrow().quiet().text()).trim()
+      if (!sha) return undefined
+      const committed = (await $`git show -s --format=%ct ${sha}`.nothrow().quiet().text()).trim()
+      return { sha, committed: Number(committed) }
+    }),
   )
-  const ref = refs.find((_, index) => found[index])
-  if (!ref) throw new Error("lint:changed: no v2 ref found; pass a base ref")
-  return (await $`git merge-base HEAD ${ref}`.text()).trim()
+  // The closest base is the line the branch was cut from: main for release work, dev for upstream ports.
+  const closest = bases
+    .filter((base): base is { sha: string; committed: number } => base !== undefined)
+    .sort((a, b) => b.committed - a.committed)[0]
+  if (!closest) throw new Error("lint:changed: no base ref found; pass one")
+  return closest.sha
 }
