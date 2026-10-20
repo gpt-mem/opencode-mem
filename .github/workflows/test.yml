@@ -241,19 +241,102 @@ jobs:
           echo "unit shards: $SHARDS"
           test "$SHARDS" = success
 
-  build:
-    name: build (${{ matrix.settings.name }})
-    strategy:
-      fail-fast: false
-      matrix:
-        settings:
-          - name: linux
-            host: ubuntu-latest
-          - name: windows
-            host: windows-latest
-    runs-on: ${{ matrix.settings.host }}
+  # The Linux build leg used to bundle the CLI for Bun, build every workspace library and bundle the
+  # CLI for Node one after another on a single runner, which made it the longest leg in the workflow.
+  # The Bun bundle removes the whole `dist` directory before it writes, so the Bun and the Node
+  # bundle cannot share a workspace. Separate runners give each of them their own checkout and let
+  # them run at the same time.
+  build-linux-service:
+    name: build (linux, service)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          # Pull requests diff against the merge's first parent; pushes diff against the previous dev head.
+          fetch-depth: ${{ github.event_name == 'pull_request' && 2 || 0 }}
+
+      - name: Setup Bun
+        uses: ./.github/actions/setup-bun
+
+      - name: Verify compiled service lifecycle
+        timeout-minutes: 10
+        working-directory: packages/cli
+        run: |
+          bun run script/build.ts --single --skip-install
+          bun run script/service-smoke.ts
+
+      # Unit tests import workspace sources and never build the libraries they use, so this checks those builds. The
+      # CLI and app closures hold every library a tested package depends on. The builds are tsc and Bun.build with no
+      # platform-specific steps, and the libraries publish from Linux, so Windows skips them.
+      - name: Build workspace libraries
+        timeout-minutes: 10
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            bun turbo build --concurrency=3 --filter='@opencode/cli^...' --filter='@opencode/app^...'
+            exit 0
+          fi
+          bun turbo build --affected --concurrency=3 --filter='@opencode/cli^...' --filter='@opencode/app^...'
+        env:
+          TURBO_SCM_BASE: ${{ github.event_name == 'pull_request' && format('{0}^1', github.sha) || github.event.before }}
+          TURBO_SCM_HEAD: ${{ github.sha }}
+
+  build-linux-node:
+    name: build (linux, node)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          # Pull requests diff against the merge's first parent; pushes diff against the previous dev head.
+          fetch-depth: ${{ github.event_name == 'pull_request' && 2 || 0 }}
+
+      - name: Setup Bun
+        uses: ./.github/actions/setup-bun
+
+      - name: Setup Node build runtime
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "26.4.0"
+
+      - name: Verify Node build
+        timeout-minutes: 15
+        working-directory: packages/cli
+        run: |
+          bun run script/build-node.ts --single --skip-install --outdir=dist/node
+          bun run script/service-smoke.ts --node
+
+  # Branch rules pin the check name `build (linux)`; this keeps that name and passes only when both
+  # halves of the Linux build passed.
+  build-linux-result:
+    name: build (linux)
+    needs: [build-linux-service, build-linux-node]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check build results
+        env:
+          SERVICE: ${{ needs.build-linux-service.result }}
+          NODE: ${{ needs.build-linux-node.result }}
+        run: |
+          echo "service build: $SERVICE, node build: $NODE"
+          test "$SERVICE" = success && test "$NODE" = success
+
+  # The Windows build leg stays on one runner: it is not the critical path of the workflow, so
+  # splitting it would only spend runner minutes without making the workflow finish sooner.
+  build-windows:
+    name: build (windows)
+    runs-on: windows-latest
     # Windows legs are flaky on GitHub-hosted runners (see issue #126); they must not block a PR.
-    continue-on-error: ${{ matrix.settings.name == 'windows' }}
+    continue-on-error: true
     defaults:
       run:
         shell: bash
@@ -277,30 +360,12 @@ jobs:
           bun run script/build.ts --single --skip-install
           bun run script/service-smoke.ts
 
-      # Unit tests import workspace sources and never build the libraries they use, so this checks those builds. The
-      # CLI and app closures hold every library a tested package depends on. The builds are tsc and Bun.build with no
-      # platform-specific steps, and the libraries publish from Linux, so Windows skips them.
-      - name: Build workspace libraries
-        if: ${{ !cancelled() && runner.os == 'Linux' }}
-        timeout-minutes: 10
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            bun turbo build --concurrency=3 --filter='@opencode/cli^...' --filter='@opencode/app^...'
-            exit 0
-          fi
-          bun turbo build --affected --concurrency=3 --filter='@opencode/cli^...' --filter='@opencode/app^...'
-        env:
-          TURBO_SCM_BASE: ${{ github.event_name == 'pull_request' && format('{0}^1', github.sha) || github.event.before }}
-          TURBO_SCM_HEAD: ${{ github.sha }}
-
       - name: Setup Node build runtime
-        if: ${{ !cancelled() }}
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "26.4.0"
 
       - name: Verify Node build
-        if: ${{ !cancelled() }}
         timeout-minutes: 15
         working-directory: packages/cli
         env:
