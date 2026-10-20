@@ -63,7 +63,7 @@ jobs:
           OPENCODE_RELEASE: ${{ steps.params.outputs.version }}
           GH_REPO: ${{ github.repository }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: ./packages/cli/script/build.ts --target=linux-x64
+        run: ./packages/cli/script/build.ts --target=opencode-linux-x64
 
       - name: Package and verify the archive
         env:
