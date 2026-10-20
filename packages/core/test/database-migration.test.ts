@@ -22,6 +22,7 @@ import sessionInboxMigration from "@opencode/core/database/migration/20260812181
 import sessionViewedStateMigration from "@opencode/core/database/migration/20260819222447_session_viewed_state"
 import azureCliCredentialMigration from "@opencode/core/database/migration/20261007190000_azure_cli_external_credential"
 import cacheMarkMigration from "@opencode/core/database/migration/20261019172723_colossal_sue_storm"
+import memRecordMigration from "@opencode/core/database/migration/20261020143020_volatile_mister_fear"
 import { Global } from "@opencode/util/global"
 
 const run = <A, E>(
@@ -665,6 +666,61 @@ describe("DatabaseMigration", () => {
         expect(
           yield* db.get(sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'provider_cache_mark'`),
         ).toEqual({ name: "provider_cache_mark" })
+      }),
+    )
+  })
+
+  test("applies the mem-record migration on a database the v1 line already populated", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* db.run(sql`CREATE TABLE project (id text PRIMARY KEY)`)
+        // The shared stock/v1 database carries mem_record under the v1 migration id
+        // 20261011235047_mem_record: the table, its three indexes and one migration
+        // row exist, but 20261020143020_volatile_mister_fear does not. Dying on
+        // "table mem_record already exists" rolls back forever, so the fork could
+        // never open that database (issue #182).
+        yield* db.run(sql`CREATE TABLE mem_record (
+          id text PRIMARY KEY,
+          project_id text NOT NULL,
+          session_id text,
+          type text NOT NULL,
+          subject text NOT NULL,
+          content text NOT NULL,
+          reason text,
+          status text DEFAULT 'active' NOT NULL,
+          authority text NOT NULL,
+          decided_by text,
+          recorded_by text NOT NULL,
+          source_ref text,
+          scope text,
+          supersedes text,
+          version integer DEFAULT 1 NOT NULL,
+          time_created integer NOT NULL,
+          time_updated integer NOT NULL,
+          CONSTRAINT fk_mem_record_project_id_project_id_fk FOREIGN KEY (project_id) REFERENCES project(id) ON DELETE CASCADE
+        )`)
+        yield* db.run(sql`CREATE INDEX mem_record_project_type_status_idx ON mem_record (project_id, type, status)`)
+        yield* db.run(sql`CREATE INDEX mem_record_project_subject_idx ON mem_record (project_id, subject)`)
+        yield* db.run(sql`CREATE INDEX mem_record_session_idx ON mem_record (session_id)`)
+        yield* db.run(sql`INSERT INTO mem_record VALUES (
+          'record', 'project', NULL, 'decision', 'subject', 'content', NULL, 'active',
+          'user', 'user', 'agent', NULL, NULL, NULL, 1, 1, 1
+        )`)
+
+        yield* DatabaseMigration.applyOnly(db, [memRecordMigration])
+
+        expect(yield* db.get(sql`SELECT id FROM migration WHERE id = ${memRecordMigration.id}`)).toBeDefined()
+        expect(yield* db.get(sql`SELECT count(*) AS count FROM mem_record`)).toEqual({ count: 1 })
+        expect(
+          yield* db.all(
+            sql`SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'mem_record' AND name LIKE 'mem_record_%' ORDER BY name`,
+          ),
+        ).toEqual([
+          { name: "mem_record_project_subject_idx" },
+          { name: "mem_record_project_type_status_idx" },
+          { name: "mem_record_session_idx" },
+        ])
       }),
     )
   })

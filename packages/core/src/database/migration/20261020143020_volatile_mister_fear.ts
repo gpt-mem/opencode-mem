@@ -5,8 +5,12 @@ const migration: DatabaseMigration.Migration = {
   id: "20261020143020_volatile_mister_fear",
   up(tx) {
     return Effect.gen(function* () {
+      // IF NOT EXISTS: the table is also created by the v1 line's migration
+      // (20261011235047_mem_record), so a shared stock/v1 database already carries it
+      // under another id. Dying on "table mem_record already exists" would roll the
+      // transaction back forever and the fork could never open that database.
       yield* tx.run(`
-        CREATE TABLE \`mem_record\` (
+        CREATE TABLE IF NOT EXISTS \`mem_record\` (
           \`id\` text PRIMARY KEY,
           \`project_id\` text NOT NULL,
           \`session_id\` text,
@@ -28,10 +32,12 @@ const migration: DatabaseMigration.Migration = {
         );
       `)
       yield* tx.run(
-        `CREATE INDEX \`mem_record_project_type_status_idx\` ON \`mem_record\` (\`project_id\`,\`type\`,\`status\`);`,
+        `CREATE INDEX IF NOT EXISTS \`mem_record_project_type_status_idx\` ON \`mem_record\` (\`project_id\`,\`type\`,\`status\`);`,
       )
-      yield* tx.run(`CREATE INDEX \`mem_record_project_subject_idx\` ON \`mem_record\` (\`project_id\`,\`subject\`);`)
-      yield* tx.run(`CREATE INDEX \`mem_record_session_idx\` ON \`mem_record\` (\`session_id\`);`)
+      yield* tx.run(
+        `CREATE INDEX IF NOT EXISTS \`mem_record_project_subject_idx\` ON \`mem_record\` (\`project_id\`,\`subject\`);`,
+      )
+      yield* tx.run(`CREATE INDEX IF NOT EXISTS \`mem_record_session_idx\` ON \`mem_record\` (\`session_id\`);`)
     })
   },
 }
