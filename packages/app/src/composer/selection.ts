@@ -31,7 +31,7 @@ export function createComposerControls(input: { model?: ModelSelection } = {}) {
         paid: providers.paid().length > 0,
         loading:
           !(input.model ?? local.model).ready() ||
-          (local.agent.visible() && data.location.agent.list({ directory: sdk().directory }) === undefined) ||
+          data.location.agent.list({ directory: sdk().directory }) === undefined ||
           !providers.ready(),
       },
     }

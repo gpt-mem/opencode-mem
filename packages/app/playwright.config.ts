@@ -34,6 +34,8 @@ export default defineConfig({
     "service-worker/**",
     // Bun unit tests for the e2e harness, not Playwright specs.
     "unit/**",
+    // The real backend suite runs the compiled server, and has its own config.
+    "real/**",
     process.env.OPENCODE_PERFORMANCE === "1" ? "performance/**/*.test.ts" : "performance/**",
   ],
   outputDir: "./e2e/test-results",

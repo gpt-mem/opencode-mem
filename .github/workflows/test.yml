@@ -251,6 +251,8 @@ jobs:
     defaults:
       run:
         shell: bash
+    env:
+      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.playwright-browsers
     steps:
       - name: Checkout repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -268,6 +270,47 @@ jobs:
         run: |
           bun run script/build.ts --single --skip-install
           bun run script/service-smoke.ts
+
+      # The app talks to the compiled server, which serves the app build it embeds from its own origin. The
+      # suite therefore proves the product against the real protocol, not against the mock the other e2e legs
+      # use, and it runs here because this leg already produced the binary it needs.
+      - name: Read Playwright version
+        id: playwright-version
+        run: |
+          version=$(node -e 'console.log(require("./package.json").workspaces.catalog["@playwright/test"])')
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ github.workspace }}/.playwright-browsers
+          key: ${{ runner.os }}-${{ runner.arch }}-playwright-${{ steps.playwright-version.outputs.version }}-chromium
+
+      - name: Install Playwright system dependencies
+        working-directory: packages/app
+        run: bunx playwright install-deps chromium
+
+      - name: Install Playwright browsers
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        working-directory: packages/app
+        run: bunx playwright install chromium
+
+      - name: Run the app against the real server
+        timeout-minutes: 15
+        working-directory: packages/app
+        run: bun run test:e2e:real
+        env:
+          CI: true
+
+      - name: Upload the real backend artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: playwright-real-${{ github.run_attempt }}
+          if-no-files-found: ignore
+          retention-days: 7
+          path: packages/app/e2e/test-results/real
 
       # Unit tests import workspace sources and never build the libraries they use, so this checks those builds. The
       # CLI and app closures hold every library a tested package depends on. The builds are tsc and Bun.build with no
