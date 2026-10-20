@@ -171,7 +171,7 @@ test("replies with predefined choices and the edited custom multiselect answer",
 })
 
 test("shows a pending permission dock", async ({ page }) => {
-  const replies: { sessionID: string; permissionID: string; body: unknown }[] = []
+  const replies: { sessionID: string; requestID: string; body: unknown }[] = []
   await mockServer(page, {
     onPermissionReply: (reply) => replies.push(reply),
     sessionPermissions: {
@@ -204,7 +204,7 @@ test("shows a pending permission dock", async ({ page }) => {
   expect(new URL(response.url()).pathname).toBe(`/api/session/${sessionID}/permission/permission-request/reply`)
   expect(response.request().postDataJSON()).toEqual({ decision: "once" })
   expect(response.status()).toBe(204)
-  expect(replies).toEqual([{ sessionID, permissionID: "permission-request", body: { decision: "once" } }])
+  expect(replies).toEqual([{ sessionID, requestID: "permission-request", body: { decision: "once" } }])
   await expect(permission).toHaveCount(0)
   await expect(page.locator('[data-component="composer"]')).toBeVisible()
 })

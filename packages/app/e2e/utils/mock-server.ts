@@ -97,7 +97,7 @@ export interface MockServerConfig {
   // Returning true fails the next `/api/permission/request` listing with a 500.
   permissionListFailures?: () => boolean
   // Without it, permission replies answer 501 MockUnsupported.
-  onPermissionReply?: (input: { sessionID: string; permissionID: string; body: unknown }) => void
+  onPermissionReply?: (input: { sessionID: string; requestID: string; body: unknown }) => void
   forms?: unknown[] | (() => unknown[])
   // MCP servers. A list serves every workspace; a function receives the requested directory.
   mcp?: unknown[] | ((directory: string) => unknown[])
@@ -1307,25 +1307,25 @@ function mockHandlers(
 
           return Effect.sync(() => {
             const sessionID = ctx.params.sessionID
-            const permissionID = ctx.params.permissionID
-            reply({ sessionID, permissionID, body: ctx.payload })
+            const requestID = ctx.params.requestID
+            reply({ sessionID, requestID, body: ctx.payload })
 
             const pending = [config.sessionPermissions?.[sessionID] ?? [], resolve(config.permissions ?? [])]
 
             pending.forEach((list) => {
-              const index = list.findIndex((item) => Predicate.isObject(item) && item.id === permissionID)
+              const index = list.findIndex((item) => Predicate.isObject(item) && item.id === requestID)
 
               if (index >= 0) list.splice(index, 1)
             })
             state.emit([
               {
-                id: `evt_permission_replied_${permissionID}`,
+                id: `evt_permission_replied_${requestID}`,
                 created: Date.now(),
                 type: "permission.replied",
                 location: { directory: requestDirectory(config, ctx.request) },
                 data: {
                   sessionID,
-                  requestID: permissionID,
+                  requestID,
                   reply: Option.getOrUndefined(decodePermissionReply(ctx.payload))?.decision ?? "once",
                 },
               },

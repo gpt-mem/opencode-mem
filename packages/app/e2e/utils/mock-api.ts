@@ -410,8 +410,8 @@ const Group = HttpApiGroup.make("mock")
     }),
   )
   .add(
-    HttpApiEndpoint.post("sessionPermissionReply", "/api/session/:sessionID/permission/:permissionID/reply", {
-      params: { ...SessionParams, permissionID: Schema.String },
+    HttpApiEndpoint.post("sessionPermissionReply", "/api/session/:sessionID/permission/:requestID/reply", {
+      params: { ...SessionParams, requestID: Schema.String },
       payload: JsonPayload,
       success: NoContent,
       error: Unsupported,
