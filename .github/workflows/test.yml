@@ -505,3 +505,6 @@ jobs:
         run: |
           echo "affected packages: $AFFECTED, browser test legs: $SUITES (expected $EXPECTED)"
           test "$AFFECTED" = success && test "$SUITES" = "$EXPECTED"
+
+# The Ladder cache lineage ships to the runner as a mem-preview build; keep the
+# preview branch on the same test contract as the release branch.
