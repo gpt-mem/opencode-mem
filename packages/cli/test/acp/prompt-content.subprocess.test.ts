@@ -84,5 +84,5 @@ describe("acp prompt content subprocess", () => {
     expect(linked.stopReason).toBe("end_turn")
     expect(missing.stopReason).toBe("end_turn")
     expect(fixture.llm.requests.length).toBeGreaterThanOrEqual(5)
-  }, 60_000)
+  }, process.platform === "win32" ? 120_000 : 60_000)
 })

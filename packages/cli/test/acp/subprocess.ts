@@ -284,7 +284,11 @@ function spawnAcp(input: { readonly env: Record<string, string | undefined> }): 
     const message: JsonRpcRequest =
       params === undefined ? { jsonrpc: "2.0", id, method } : { jsonrpc: "2.0", id, method, params }
     return write(message).then(async () => {
-      const response = await take((message) => isResponse(message) && message.id === id, 20_000, `${method} response`)
+      const response = await take(
+        (message) => isResponse(message) && message.id === id,
+        process.platform === "win32" ? 60_000 : 20_000,
+        `${method} response`,
+      )
       if (!isResponse<T>(response)) throw new Error(`Invalid ACP response: ${JSON.stringify(response)}`)
       return response
     })
@@ -299,7 +303,11 @@ function spawnAcp(input: { readonly env: Record<string, string | undefined> }): 
         inputClosed = true
         await child.stdin.end()
       }
-      const exitCode = await withTimeout(child.exited, 5_000, "ACP did not exit after stdin EOF")
+      const exitCode = await withTimeout(
+        child.exited,
+        process.platform === "win32" ? 15_000 : 5_000,
+        "ACP did not exit after stdin EOF",
+      )
       await Promise.all([output, errors])
       if (exitCode !== 0) throw new Error(`ACP exited with ${exitCode}: ${stderr}`)
       return exitCode

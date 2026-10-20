@@ -2,12 +2,13 @@ import { describe, expect, test } from "bun:test"
 import { createAcpFixture, initialize } from "./subprocess"
 
 describe("acp lifecycle subprocess", () => {
+  // Windows runners need longer to boot the ACP server and to notice the closed stdin.
   test("stdin EOF exits cleanly", async () => {
     await using fixture = await createAcpFixture()
     const acp = fixture.spawn()
     await initialize(acp)
     expect(await acp.close()).toBe(0)
-  }, 60_000)
+  }, process.platform === "win32" ? 120_000 : 60_000)
 
   // The private server is found with `pgrep`, which Windows lacks.
   const testOutsideWindows = process.platform === "win32" ? test.skip : test
