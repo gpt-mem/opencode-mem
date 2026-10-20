@@ -13,13 +13,11 @@ import type { Agent } from "@opencode/schema/agent"
 import { Cause, Clock, Data, Effect, Exit, Fiber, Option, Stream } from "effect"
 import { SessionError } from "@opencode/schema/session-error"
 import { Bus } from "../../bus.js"
-import { Database } from "../../database/database.js"
 import { Permission } from "../../permission.js"
 import { Snapshot } from "../../snapshot.js"
 import { Tool } from "../../tool.js"
 import { ToolOutput } from "../../tool-output.js"
 import { QuestionTool } from "../../tool/plugin/question.js"
-import { CacheMask } from "../cache-mask.js"
 import { StepFailedError } from "../error.js"
 import { SessionEvent } from "../event.js"
 import { SessionMessage } from "../message.js"
@@ -71,7 +69,6 @@ export const make = Effect.gen(function* () {
   const llm = yield* LLMClient.Service
   const snapshots = yield* Snapshot.Service
   const toolOutput = yield* ToolOutput.Service
-  const db = (yield* Database.Service).db
 
   const attempt = Effect.fn("SessionStep.attempt")(function* (input: Input) {
     // The start snapshot only has to exist before local tools run, which cannot happen before Step.Started,
@@ -182,15 +179,6 @@ export const make = Effect.gen(function* () {
             : undefined
         const llmFailure = streamFailure instanceof AIError ? streamFailure : unknownFinish
         const llmError = llmFailure && !recorded.providerFailed ? toSessionError(llmFailure) : undefined
-        // A failed attempt leaves the provider cache unverifiable: the TTL may have
-        // outlived the stall, the rung may have moved. Drop the confirmed boundary
-        // so the next attempt does not resuscitate a prefix nobody may still hold.
-        if (llmError && !isContextOverflowFailure(llmFailure) && input.prepared.cacheMask)
-          yield* CacheMask.forget({
-            db,
-            state: input.prepared.cacheMask,
-            response: input.prepared.cacheMask.observation.response,
-          })
         if (
           input.recoverContinuation &&
           llmFailure?.reason._tag === "Transport" &&
@@ -270,20 +258,6 @@ export const make = Effect.gen(function* () {
               snapshot,
               files,
             })
-            // The provider confirmed the prefix it cached. Record it so the next
-            // request can floor its masked branch at that boundary.
-            if (input.prepared.cacheMask)
-              yield* CacheMask.record({
-                db,
-                state: input.prepared.cacheMask,
-                response: input.prepared.cacheMask.observation.response,
-                usage: {
-                  input: record.finish.tokens.input,
-                  output: record.finish.tokens.output,
-                  cacheRead: record.finish.tokens.cache.read,
-                  cacheWrite: record.finish.tokens.cache.write,
-                },
-              })
           }
         }
 

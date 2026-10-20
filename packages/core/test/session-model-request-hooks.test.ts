@@ -1,4 +1,8 @@
 import { describe, expect } from "bun:test"
+import { Message, ToolResultPart } from "@opencode/ai"
+import { sql } from "drizzle-orm"
+import { Database } from "@opencode/core/database/database"
+import { withEnv } from "./fixture/env"
 import { OpenAIChat } from "@opencode/ai/protocols"
 import { Agent } from "@opencode/schema/agent"
 import { Money } from "@opencode/schema/money"
@@ -152,5 +156,50 @@ describe("SessionModelRequest HTTP hooks", () => {
         "receive:primary:created",
       ])
     }),
+  )
+})
+
+describe("SessionModelRequest Ladder requests", () => {
+  it.effect("ignores a legacy warm ledger and mask flag on consecutive requests", () =>
+    withEnv({ OPENCODE_CACHE_MASK: "1" }, () =>
+      Effect.gen(function* () {
+        const database = yield* Database.Service
+        yield* database.db.run(sql`INSERT INTO provider_cache_mark
+          (provider_id, mark_tokens, mark_index, prefix_hash, last_used_at)
+          VALUES ('ladder/build::opencode-go/retired-free::v1_0123456789abcdef0123456789abcdef',
+            5000, 1, NULL, ${Date.now()})`)
+        const requests = yield* SessionModelRequest.Service.pipe(Effect.provide(SessionModelRequest.layer))
+        const ladder = SessionRunnerModel.resolved(OpenAIChat.route.model({ id: "build", provider: "ladder" }), {
+          capabilities: { tools: true, input: ["text"], output: ["text"] },
+          cost: [],
+          limit: { context: 200_000, output: 32_000 },
+        })
+        const messages = [
+          Message.user("Read the saved output"),
+          Message.tool(
+            ToolResultPart.make({
+              id: "call_saved",
+              name: "read",
+              result: { type: "text", value: "Important result; full output saved to /tmp/saved-output" },
+            }),
+          ),
+          ...Array.from({ length: 14 }, (_, index) => Message.user(`Follow-up ${index}`)),
+        ]
+        for (let index = 0; index < 3; index++) {
+          const prepared = yield* requests.primary({
+            session,
+            agent: Agent.ID.make("build"),
+            model: ladder,
+            system: [],
+            messages,
+          })
+          expect(prepared.request.messages).toEqual(messages)
+          expect(prepared.request.http?.body).not.toHaveProperty("ladder_cache_variant")
+          const body = yield* prepared.request.model.route.body.from(prepared.request)
+          expect(body).not.toHaveProperty("ladder_cache_variant")
+          messages.push(Message.user(`Next request ${index}`))
+        }
+      }).pipe(Effect.provideService(SessionModelTransport.Service, transport)),
+    ),
   )
 })
