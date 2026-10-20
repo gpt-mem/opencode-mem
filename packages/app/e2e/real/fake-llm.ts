@@ -22,7 +22,11 @@ export type FakeLlm = {
  * An OpenAI-compatible chat completions endpoint. The first turn calls the `write` tool, the turn after the
  * tool result answers with text, so a session runs the same provider path a real model drives.
  */
-export function startFakeLlm(input: { readonly file: string; readonly content: string; readonly reply: string }) {
+export function startFakeLlm(input: {
+  readonly file: string
+  readonly content: string
+  readonly reply: string
+}): FakeLlm {
   let calls = 0
 
   const server = Bun.serve({
