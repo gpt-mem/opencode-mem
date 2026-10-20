@@ -50,7 +50,8 @@ runs:
         echo "version=$(bun --version)" >> "$GITHUB_OUTPUT"
 
     # On Windows, extracting the cache archive takes longer than Bun downloading and
-    # extracting the same packages itself, so Windows installs skip the cache.
+    # extracting the same packages itself, so Windows installs skip the persisted cache and
+    # rely on the local cache on the workspace volume instead (see below).
     - name: Restore Bun dependencies
       id: bun-cache
       if: runner.os != 'Windows'
@@ -58,6 +59,15 @@ runs:
       with:
         path: ${{ steps.cache.outputs.dir }}
         key: ${{ runner.os }}-${{ runner.arch }}-bun-${{ steps.cache.outputs.version }}-${{ hashFiles('bun.lock', 'patches/**') }}
+
+    # Bun's package cache defaults to the home directory, which Windows runners keep on C: while the
+    # workspace is on D:. Linking a package across volumes cannot use a hardlink, so Bun copies every
+    # file of all 2124 packages. Pointing the cache at the workspace volume keeps the link a hardlink:
+    # the same install takes ~36s instead of ~126s.
+    - name: Keep the Windows package cache on the workspace volume
+      if: runner.os == 'Windows'
+      shell: bash
+      run: echo "BUN_INSTALL_CACHE_DIR=$RUNNER_TEMP/bun-install-cache" >> "$GITHUB_ENV"
 
     - name: Install setuptools for distutils compatibility
       run: python3 -m pip install setuptools || pip install setuptools || true
