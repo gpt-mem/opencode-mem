@@ -411,14 +411,11 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Setup Node
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
-        with:
-          # Playwright 1.59 hangs while extracting Chromium with Node 24.16.
-          node-version: "24.15"
-
       - name: Setup Bun
         uses: ./.github/actions/setup-bun
+        with:
+          # Keep the pin inside the composite action so its Node setup cannot overwrite it.
+          node-version: "24.15"
 
       - name: Read Playwright version
         id: playwright-version
@@ -442,6 +439,23 @@ jobs:
         if: steps.playwright-cache.outputs.cache-hit != 'true'
         working-directory: packages/app
         run: bunx playwright install chromium
+
+      - name: Enable Windows crash diagnostics
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          "CI_TEST_STARTED=$((Get-Date).ToUniversalTime().ToString('o'))" >> $env:GITHUB_ENV
+          $directory = Join-Path $env:RUNNER_TEMP 'windows-crashes'
+          New-Item -ItemType Directory -Force -Path $directory | Out-Null
+          foreach ($executable in @('node.exe', 'bun.exe')) {
+            $key = "HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\$executable"
+            New-Item -Force -Path $key | Out-Null
+            New-ItemProperty -Path $key -Name DumpFolder -PropertyType ExpandString -Value $directory -Force | Out-Null
+            New-ItemProperty -Path $key -Name DumpType -PropertyType DWord -Value 1 -Force | Out-Null
+            New-ItemProperty -Path $key -Name DumpCount -PropertyType DWord -Value 3 -Force | Out-Null
+          }
+          node --version
+          bun --version
 
       - name: Run app e2e tests against production build
         if: matrix.suite.shard
@@ -469,6 +483,30 @@ jobs:
         env:
           CI: true
         timeout-minutes: 15
+
+      - name: Collect Windows crash events
+        if: always() && runner.os == 'Windows' && env.CI_TEST_STARTED != ''
+        shell: pwsh
+        run: |
+          $directory = Join-Path $env:RUNNER_TEMP 'windows-crashes'
+          # Event 1000 identifies the faulting executable and native module; 1001 adds the WER bucket.
+          Get-WinEvent -FilterHashtable @{
+            LogName = 'Application'
+            Id = 1000, 1001
+            StartTime = [datetime]$env:CI_TEST_STARTED
+          } -ErrorAction SilentlyContinue |
+            Format-List TimeCreated, Id, ProviderName, Message |
+            Out-String -Width 4096 |
+            Tee-Object -FilePath (Join-Path $directory 'events.txt')
+
+      - name: Upload Windows crash diagnostics
+        if: always() && runner.os == 'Windows' && env.CI_TEST_STARTED != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: windows-crashes-${{ matrix.suite.id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/windows-crashes
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Upload Playwright artifacts
         if: always()
