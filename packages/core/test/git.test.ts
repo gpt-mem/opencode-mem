@@ -404,6 +404,10 @@ describe("Git objects", () => {
         expect(yield* loose()).toEqual([])
         expect(yield* everything()).toEqual(before)
 
+        // The large capture already lives in the first pack. Remove its worktree files so creating the
+        // remaining packs does not rescan 2,100 files sixteen times (especially costly on Windows).
+        // The inventory checks below still require every historical object to survive compaction.
+        yield* Effect.promise(() => fs.rm(path.join(project, "gen"), { recursive: true }))
         for (let batch = 0; batch < 16; batch++) {
           yield* Effect.promise(() => Bun.write(path.join(project, `batch-${batch}.txt`), `${batch}\n`))
           trees.push(yield* capture())
@@ -424,7 +428,8 @@ describe("Git objects", () => {
         expect((yield* packs()).length).toBe(1)
         expect(yield* everything()).toEqual(merged)
 
-        expect((yield* git.tree.files({ repository, from: trees[0]!, to: trees.at(-1)! })).length).toBe(2100 + 16)
+        expect((yield* git.tree.files({ repository, from: trees[0]!, to: trees[1]! })).length).toBe(2100)
+        expect((yield* git.tree.files({ repository, from: trees[0]!, to: trees.at(-1)! })).length).toBe(16)
       }),
     { timeout: 60_000 },
   )
