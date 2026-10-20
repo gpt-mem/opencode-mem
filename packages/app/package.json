@@ -19,7 +19,7 @@
     "build": "vite build",
     "serve": "vite preview",
     "test": "bun run test:unit && bun run test:browser",
-    "test:unit": "bun test --conditions=solid --only-failures --isolate --preload ./happydom.ts ./src",
+    "test:unit": "bun test --conditions=solid --only-failures --isolate --preload ./happydom.ts ./src ./e2e/unit",
     "test:browser": "bun test --conditions=browser --isolate --preload ./happydom.ts ./test-browser",
     "test:unit:watch": "bun test --conditions=solid --watch --isolate --preload ./happydom.ts ./src",
     "test:e2e": "playwright test",
@@ -39,6 +39,7 @@
   "license": "MIT",
   "devDependencies": {
     "@happy-dom/global-registrator": "20.0.11",
+    "@opencode/protocol": "workspace:*",
     "@playwright/test": "catalog:",
     "@sentry/vite-plugin": "catalog:",
     "@tailwindcss/vite": "4.3.3",

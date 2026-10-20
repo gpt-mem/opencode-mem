@@ -95,6 +95,7 @@
       },
       "devDependencies": {
         "@happy-dom/global-registrator": "20.0.11",
+        "@opencode/protocol": "workspace:*",
         "@playwright/test": "catalog:",
         "@sentry/vite-plugin": "catalog:",
         "@tailwindcss/vite": "4.3.3",

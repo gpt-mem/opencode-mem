@@ -97,7 +97,7 @@ export interface MockServerConfig {
   // Returning true fails the next `/api/permission/request` listing with a 500.
   permissionListFailures?: () => boolean
   // Without it, permission replies answer 501 MockUnsupported.
-  onPermissionReply?: (input: { sessionID: string; permissionID: string; body: unknown }) => void
+  onPermissionReply?: (input: { sessionID: string; requestID: string; body: unknown }) => void
   forms?: unknown[] | (() => unknown[])
   // MCP servers. A list serves every workspace; a function receives the requested directory.
   mcp?: unknown[] | ((directory: string) => unknown[])
@@ -1038,7 +1038,7 @@ function mockHandlers(
           })),
         fsList: (ctx) =>
           Effect.promise(() => Promise.resolve(config.fileList?.(ctx.query.path ?? ""))).pipe(
-            Effect.map((data) => ({ location: location(config), data })),
+            Effect.map((data) => ({ location: location(config), data: data ?? [] })),
           ),
         fsFind: (ctx) =>
           Effect.promise(() =>
@@ -1060,7 +1060,7 @@ function mockHandlers(
                         }
                       : entry,
                   )
-                : entries,
+                : (entries ?? []),
             })),
           ),
         fsWrite: (ctx) => {
@@ -1245,7 +1245,8 @@ function mockHandlers(
 
             return {
               data: {
-                id: prompt?.id ?? `inb_mock_${Date.now()}`,
+                // The server admits the prompt as an inbox item under a message id.
+                id: prompt?.id ?? `msg_mock_${Date.now()}`,
                 sessionID: ctx.params.sessionID,
                 time: { created: Date.now() },
                 type: "user",
@@ -1263,7 +1264,7 @@ function mockHandlers(
 
             return {
               data: {
-                id: Predicate.isString(body.id) ? body.id : `inb_mock_${Date.now()}`,
+                id: Predicate.isString(body.id) ? body.id : `msg_mock_${Date.now()}`,
                 sessionID: ctx.params.sessionID,
                 time: { created: Date.now() },
                 type: "compaction",
@@ -1307,25 +1308,25 @@ function mockHandlers(
 
           return Effect.sync(() => {
             const sessionID = ctx.params.sessionID
-            const permissionID = ctx.params.permissionID
-            reply({ sessionID, permissionID, body: ctx.payload })
+            const requestID = ctx.params.requestID
+            reply({ sessionID, requestID, body: ctx.payload })
 
             const pending = [config.sessionPermissions?.[sessionID] ?? [], resolve(config.permissions ?? [])]
 
             pending.forEach((list) => {
-              const index = list.findIndex((item) => Predicate.isObject(item) && item.id === permissionID)
+              const index = list.findIndex((item) => Predicate.isObject(item) && item.id === requestID)
 
               if (index >= 0) list.splice(index, 1)
             })
             state.emit([
               {
-                id: `evt_permission_replied_${permissionID}`,
+                id: `evt_permission_replied_${requestID}`,
                 created: Date.now(),
                 type: "permission.replied",
                 location: { directory: requestDirectory(config, ctx.request) },
                 data: {
                   sessionID,
-                  requestID: permissionID,
+                  requestID,
                   reply: Option.getOrUndefined(decodePermissionReply(ctx.payload))?.decision ?? "once",
                 },
               },
@@ -1424,7 +1425,14 @@ function projectSeed(config: MockServerConfig) {
 
 // Every field of the configured project, for answers that echo it.
 function projectFields(config: MockServerConfig) {
-  return Predicate.isObject(config.project) ? config.project : undefined
+  if (!Predicate.isObject(config.project)) return undefined
+
+  const time = Option.getOrUndefined(decodeProjectTime(config.project.time))
+
+  if (!time) return config.project
+
+  // The server reports when a project was last active, and its schema requires the field.
+  return { ...config.project, time: { ...time, active: time.active ?? time.created } }
 }
 
 function currentProviders(catalog: MockProviderCatalog) {
@@ -1535,6 +1543,14 @@ const decodeProject = Schema.decodeUnknownOption(
     worktree: lenient(Schema.String),
     canonical: lenient(Schema.String),
     sandboxes: lenient(Schema.Array(Schema.String)),
+  }),
+)
+
+const decodeProjectTime = Schema.decodeUnknownOption(
+  Schema.Struct({
+    created: Schema.Number,
+    updated: Schema.Number,
+    active: Schema.optional(Schema.Number),
   }),
 )
 

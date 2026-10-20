@@ -18,7 +18,7 @@ const childA = session({
 
 const sessionB = session({ id: "ses_server_b", directory: directoryB, title: "Server B session" })
 
-type Reply = { origin: string; sessionID: string; permissionID: string; body: unknown }
+type Reply = { origin: string; sessionID: string; requestID: string; body: unknown }
 
 test.use({ serviceWorkers: "block" })
 
@@ -102,10 +102,10 @@ async function chooseProjectAutoAccept(page: Page, project: string, current: str
   await settings.getByRole("button", { name: "Back to projects", exact: true }).click()
 }
 
-const reply = (sessionID: string, permissionID: string) => ({
+const reply = (sessionID: string, requestID: string) => ({
   origin: SERVER,
   sessionID,
-  permissionID,
+  requestID,
   body: { decision: "once" },
 })
 
@@ -239,7 +239,7 @@ test("a project's auto-accept choice overrides the default in both directions", 
       sessionStatus: { [api.id]: { type: "running" }, [web.id]: { type: "running" } },
       permissions: () => Object.values(requests).flat(),
       sessionPermissions: requests,
-      onPermissionReply: (reply) => replies.push(reply.permissionID),
+      onPermissionReply: (reply) => replies.push(reply.requestID),
     },
   })
   await seed(page, {
