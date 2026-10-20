@@ -1,7 +1,7 @@
 - After changing the public Protocol or Server `HttpApi`, run `bun run generate` from `packages/client`. Do not edit generated client files directly.
 - Keep runtime dependencies directed from Schema to Core and Protocol, then from Core and Protocol to Server. Client runtime code may depend on Schema and Protocol but never Core or Server; `sdk` composes Client, Core, and Server.
 - This repository does not use Changesets. Do not add `.changeset` files; follow the existing release workflow instead.
-- The default branch is `main`. Base branches and worktrees on `origin/main`, target PRs at `main`, and diff against `origin/main` unless told otherwise. `dev` is the legacy v1-era line (it diverged from `memory-context-v1`); the released lines are `main` (v2) and `memory-context-v1` (v1).
+- The default branch is `main`. Base branches and worktrees on `origin/main`, target PRs at `main`, and diff against `origin/main` unless told otherwise. The released lines are `main` (v2) and `memory-context-v1` (v1). The old v1-era `dev` branch was deleted on 2026-10-20; its unmerged history is preserved in `archive-v1-line`, and the upstream fork's `dev` branch is unrelated to it.
 
 ## Live TUI Testing
 
