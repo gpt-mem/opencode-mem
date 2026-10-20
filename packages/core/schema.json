@@ -1,9 +1,13 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "d39f49f9-4ff6-4729-adec-de8db370f24c",
-  "prevIds": ["5067fae0-90ff-4601-82d7-dd050ea9dc8f"],
+  "id": "cfabf2b0-d2e7-4c5d-8ffd-71fdb88da264",
+  "prevIds": ["d39f49f9-4ff6-4729-adec-de8db370f24c"],
   "ddl": [
+    {
+      "name": "mem_record",
+      "entityType": "tables"
+    },
     {
       "name": "account_state",
       "entityType": "tables"
@@ -83,6 +87,176 @@
     {
       "name": "worktree",
       "entityType": "tables"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "mem_record"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "project_id",
+      "entityType": "columns",
+      "table": "mem_record"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "session_id",
+      "entityType": "columns",
+      "table": "mem_record"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "type",
+      "entityType": "columns",
+      "table": "mem_record"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "subject",
+      "entityType": "columns",
+      "table": "mem_record"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "content",
+      "entityType": "columns",
+      "table": "mem_record"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "reason",
+      "entityType": "columns",
+      "table": "mem_record"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'active'",
+      "generated": null,
+      "name": "status",
+      "entityType": "columns",
+      "table": "mem_record"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "authority",
+      "entityType": "columns",
+      "table": "mem_record"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "decided_by",
+      "entityType": "columns",
+      "table": "mem_record"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "recorded_by",
+      "entityType": "columns",
+      "table": "mem_record"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "source_ref",
+      "entityType": "columns",
+      "table": "mem_record"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "scope",
+      "entityType": "columns",
+      "table": "mem_record"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "supersedes",
+      "entityType": "columns",
+      "table": "mem_record"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "1",
+      "generated": null,
+      "name": "version",
+      "entityType": "columns",
+      "table": "mem_record"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_created",
+      "entityType": "columns",
+      "table": "mem_record"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_updated",
+      "entityType": "columns",
+      "table": "mem_record"
     },
     {
       "type": "integer",
@@ -1585,6 +1759,17 @@
       "table": "worktree"
     },
     {
+      "columns": ["project_id"],
+      "tableTo": "project",
+      "columnsTo": ["id"],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_mem_record_project_id_project_id_fk",
+      "entityType": "fks",
+      "table": "mem_record"
+    },
+    {
       "columns": ["active_account_id"],
       "tableTo": "account",
       "columnsTo": ["id"],
@@ -1736,6 +1921,13 @@
     {
       "columns": ["id"],
       "nameExplicit": false,
+      "name": "mem_record_pk",
+      "table": "mem_record",
+      "entityType": "pks"
+    },
+    {
+      "columns": ["id"],
+      "nameExplicit": false,
       "name": "account_state_pk",
       "table": "account_state",
       "entityType": "pks"
@@ -1844,6 +2036,60 @@
       "name": "workspace_pk",
       "table": "workspace",
       "entityType": "pks"
+    },
+    {
+      "columns": [
+        {
+          "value": "project_id",
+          "isExpression": false
+        },
+        {
+          "value": "type",
+          "isExpression": false
+        },
+        {
+          "value": "status",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "mem_record_project_type_status_idx",
+      "entityType": "indexes",
+      "table": "mem_record"
+    },
+    {
+      "columns": [
+        {
+          "value": "project_id",
+          "isExpression": false
+        },
+        {
+          "value": "subject",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "mem_record_project_subject_idx",
+      "entityType": "indexes",
+      "table": "mem_record"
+    },
+    {
+      "columns": [
+        {
+          "value": "session_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "mem_record_session_idx",
+      "entityType": "indexes",
+      "table": "mem_record"
     },
     {
       "columns": [
