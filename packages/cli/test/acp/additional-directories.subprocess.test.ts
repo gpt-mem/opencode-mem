@@ -40,5 +40,5 @@ describe("acp additional directories subprocess", () => {
 
     expect(result.stopReason).toBe("end_turn")
     expect(JSON.stringify(fixture.llm.requests.at(-1))).toContain("shared root content")
-  }, 60_000)
+  }, process.platform === "win32" ? 120_000 : 60_000)
 })
