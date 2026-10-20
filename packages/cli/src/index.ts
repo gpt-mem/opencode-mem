@@ -21,6 +21,11 @@ import { CpuProfile } from "./cpu-profile"
 
 ensurePluginRuntime()
 
+// Метка сборки форка: её доставляет хук промоушена, и она видна в окружении
+// процесса, поэтому прод может показать, какой именно preview форка
+// обслуживает задачи, не гадая по версии.
+process.env.OPENCODE_FORK_BUILD = FORK_PROMOTION_PROBE
+
 if (process.env.OPENCODE_SSH_ASKPASS_PORT) {
   const { askpass } = await import("./ssh-askpass")
   process.exit(await Effect.runPromise(askpass.pipe(Effect.provide(NodeServices.layer))))
