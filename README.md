@@ -139,15 +139,15 @@ mv -f "$HOME/.opencode/bin/opencode.new" "$HOME/.opencode/bin/opencode"
 
 Installing a fork build touches these paths. Nothing else is written, and nothing outside them is modified:
 
-| Path                                | What it is                                                                             |
-| ----------------------------------- | -------------------------------------------------------------------------------------- |
-| `~/.opencode/bin/opencode`          | the executable your shell runs                                                          |
-| `~/.opencode/bin/opencode.stock-backup` | the upstream binary, copied aside before the first fork install so the fork can be undone |
-| `~/.opencode/builds/<sha12>/opencode` | one directory per installed fork build; `<sha12>` is the commit it was built from        |
-| `~/.opencode/builds/current`        | symlink to the **last** installed build (the file, not the directory)                    |
-| `~/.opencode/builds/previous`       | symlink to the build installed before `current`                                          |
-| `~/.opencode/builds/order.txt`      | the build queue, oldest first; `rollback` walks strictly backwards through it             |
-| `~/.opencode/forever-install.json`  | manifest of the active build: repository, revision, version, platform, sha256, install time |
+| Path                                    | What it is                                                                                  |
+| --------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `~/.opencode/bin/opencode`              | the executable your shell runs                                                              |
+| `~/.opencode/bin/opencode.stock-backup` | the upstream binary, copied aside before the first fork install so the fork can be undone   |
+| `~/.opencode/builds/<sha12>/opencode`   | one directory per installed fork build; `<sha12>` is the commit it was built from           |
+| `~/.opencode/builds/current`            | symlink to the **last** installed build (the file, not the directory)                       |
+| `~/.opencode/builds/previous`           | symlink to the build installed before `current`                                             |
+| `~/.opencode/builds/order.txt`          | the build queue, oldest first; `rollback` walks strictly backwards through it               |
+| `~/.opencode/forever-install.json`      | manifest of the active build: repository, revision, version, platform, sha256, install time |
 
 Keeping every build in its own directory is what makes "last" and "previous" selectable at the same time:
 `current` and `previous` are two pointers into the same queue, so switching between them never rebuilds or
@@ -185,13 +185,8 @@ cat ~/.opencode/forever-install.json
 Tool output above **2 KiB** leaves the model context by default and lands in a file instead, so a large result
 costs a pointer rather than its full payload on every later step.
 
-The provider cache-mark ledger and the Ladder cache mask are **on by default**; set the environment variable to
-`0` to turn the mask off, and move the idle threshold that decides when a confirmed cache boundary counts as cold:
-
-| Variable                      | Default  | Effect                                                                                                                         |
-| ----------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| `OPENCODE_CACHE_MASK`         | on       | Project the message history for the Ladder provider so a stale cache boundary is re-warmed instead of resent. `0` disables it. |
-| `OPENCODE_CACHE_MARK_IDLE_MS` | `600000` | Idle time after which a confirmed cache boundary is treated as cold.                                                           |
+The Ladder cache mask has been removed. Requests use the normal message history with the tool-output
+file pointers above; provider-native prompt caching continues to work without a client-side cache ledger.
 
 > The `OPENCODE_MEMORY_*` family (`OPENCODE_MEMORY_CONTEXT`, `OPENCODE_MEMORY_INTENT`, …) belongs to the **v1**
 > line (`memory-context-v1`). It does not exist on `v2-base`: the v2 line applies the context budget
