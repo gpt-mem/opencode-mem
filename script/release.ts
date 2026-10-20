@@ -55,7 +55,7 @@ process.chdir(root)
 
 console.log("\n=== Generating changelog ===\n")
 await rm(review, { force: true })
-await $`git fetch origin "+refs/tags/v2.*:refs/tags/v2.*" "+refs/heads/v1:refs/remotes/origin/v1"`
+await $`git fetch origin "+refs/tags/v2.*:refs/tags/v2.*" "+refs/heads/memory-context-v1:refs/remotes/origin/memory-context-v1"`
 const base =
   values.from ??
   (await $`git tag --list "v2.*" --sort=-version:refname`.text()).split("\n").find((tag) => /^v2\.\d+\.\d+$/.test(tag))
@@ -102,7 +102,7 @@ if (answer?.trim().toLowerCase() !== "y" && answer?.trim().toLowerCase() !== "ye
   process.exit(0)
 }
 
-await $`gh workflow run publish.yml --ref dev ${input} -f release_notes=${releaseNotes}`
+await $`gh workflow run publish.yml --ref main ${input} -f release_notes=${releaseNotes}`
 console.log(`Triggered the ${version} release`)
 
 async function generateReview(base: string, head: string) {
@@ -158,10 +158,11 @@ async function generateReview(base: string, head: string) {
   }
 }
 
-// V1 history was merged into dev when V2 was promoted, so it must be excluded from the release range. Merges are skipped
-// because dev only takes squash merges, and the promotion merge would otherwise show the whole V1 tree.
+// V1 history was merged into the release line when V2 was promoted, so it must be excluded from the release range. Merges
+// are skipped because the release line only takes squash merges, and the promotion merge would otherwise show the whole
+// V1 tree.
 function commitRange(base: string, head: string) {
-  return `--no-merges ${base}..${head} --not origin/v1`
+  return `--no-merges ${base}..${head} --not origin/memory-context-v1`
 }
 
 function reviewPrompt(base: string, head: string) {
