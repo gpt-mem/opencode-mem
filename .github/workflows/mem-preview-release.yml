@@ -1,0 +1,91 @@
+name: MEM preview release
+
+# Публикация preview-сборки форка в формате, который умеет принимать
+# `trained-assist/ai-agent-runner`:
+#
+#   * тег `mem-preview-<YYYYMMDD>-<slug>` — ровно та регулярка, которую ждёт
+#     детектор промоушена (`scripts/opencode-promotion-candidate.mjs`);
+#   * `target_commitish` = полный 40-символьный SHA исходного коммита;
+#   * ассеты `opencode-linux-x64.tar.gz` и `opencode-linux-x64.tar.gz.sha256`,
+#     причём архив обязан содержать бинарь `opencode` в корне.
+#
+# Сборка идёт из чекаута ровно того коммита, который указан во входе: тег
+# релиза и бинарь всегда соответствуют друг другу.
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: "Полный 40-символьный SHA исходного коммита сборки"
+        required: true
+        type: string
+      tag:
+        description: "Тег релиза, например mem-preview-20261020-ladder-cache-7a12f66b4abc"
+        required: true
+        type: string
+      version:
+        description: "Версия, вшиваемая в бинарь (должна начинаться с 0.0.0-)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: mem-preview-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build and publish the Linux x64 preview build
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 # v3.6.0
+        with:
+          ref: ${{ inputs.source_sha }}
+          fetch-depth: 0
+
+      - uses: ./.github/actions/setup-bun
+
+      - name: Build the Linux x64 CLI
+        run: ./packages/cli/script/build.ts --target=linux-x64
+        env:
+          BUN_COMPILE_RELEASE: bun-v1.4.2
+          OPENCODE_VERSION: ${{ inputs.version }}
+          OPENCODE_RELEASE: ${{ inputs.version }}
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Package and verify the archive
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          binary="packages/cli/dist/cli-linux-x64/bin/opencode"
+          test -x "$binary"
+          mkdir -p dist-package
+          install -m 0755 "$binary" dist-package/opencode
+          tar -czf opencode-linux-x64.tar.gz -C dist-package opencode
+          sha256sum opencode-linux-x64.tar.gz > opencode-linux-x64.tar.gz.sha256
+          cat opencode-linux-x64.tar.gz.sha256
+          reported="$(./dist-package/opencode --version)"
+          echo "binary reports version: $reported"
+          test "$reported" = "$VERSION"
+
+      - name: Publish the preview release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          gh release create "$TAG" \
+            opencode-linux-x64.tar.gz \
+            opencode-linux-x64.tar.gz.sha256 \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$SOURCE_SHA" \
+            --prerelease \
+            --title "$TAG" \
+            --notes "Linux x64 build of $SOURCE_SHA."
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --json tagName,targetCommitish,isDraft,isPrerelease,assets
