@@ -166,11 +166,18 @@ describe("CacheMask", () => {
     Effect.gen(function* () {
       const db = (yield* Database.Service).db
       const messages = [Message.user("a")]
-      expect(yield* CacheMask.apply({ db, providerID: "anthropic", modelID: "claude", messages })).toBeUndefined()
-      const state = yield* CacheMask.apply({ db, providerID: "ladder", modelID: "gpt-5", messages })
-      expect(state?.key).toBe("ladder/gpt-5")
-      expect(state?.masked).toBeUndefined()
-      expect(state?.fallback.messages).toEqual(messages)
+      const previous = process.env.OPENCODE_CACHE_MASK
+      process.env.OPENCODE_CACHE_MASK = "1"
+      try {
+        expect(yield* CacheMask.apply({ db, providerID: "anthropic", modelID: "claude", messages })).toBeUndefined()
+        const state = yield* CacheMask.apply({ db, providerID: "ladder", modelID: "gpt-5", messages })
+        expect(state?.key).toBe("ladder/gpt-5")
+        expect(state?.masked).toBeUndefined()
+        expect(state?.fallback.messages).toEqual(messages)
+      } finally {
+        if (previous === undefined) delete process.env.OPENCODE_CACHE_MASK
+        else process.env.OPENCODE_CACHE_MASK = previous
+      }
     }),
   )
 })
@@ -227,6 +234,27 @@ describe("CacheMark ledger", () => {
       expect(yield* CacheMark.latestScoped(db, "ladder/gpt-5", messages)).toBeDefined()
       yield* CacheMark.resetMatching(db, "ladder/gpt-5")
       expect(yield* CacheMark.latestScoped(db, "ladder/gpt-5", messages)).toBeUndefined()
+    }),
+  )
+
+  it.effect("stays off unless the mask is explicitly enabled", () =>
+    Effect.gen(function* () {
+      const db = (yield* Database.Service).db
+      const messages = [Message.user("a")]
+      const previous = process.env.OPENCODE_CACHE_MASK
+      const apply = () =>
+        CacheMask.apply({ db, providerID: "ladder", modelID: "build", messages })
+      try {
+        delete process.env.OPENCODE_CACHE_MASK
+        expect(yield* apply()).toBeUndefined()
+        process.env.OPENCODE_CACHE_MASK = "0"
+        expect(yield* apply()).toBeUndefined()
+        process.env.OPENCODE_CACHE_MASK = "1"
+        expect(yield* apply()).toBeDefined()
+      } finally {
+        if (previous === undefined) delete process.env.OPENCODE_CACHE_MASK
+        else process.env.OPENCODE_CACHE_MASK = previous
+      }
     }),
   )
 })

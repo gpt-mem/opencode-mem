@@ -24,7 +24,23 @@ const number = (raw: string | undefined, fallback: number) => {
   return Number.isFinite(parsed) ? parsed : fallback
 }
 
-const enabled = () => process.env.OPENCODE_CACHE_MASK !== "0"
+/**
+ * The mask is opt-in.
+ *
+ * The Ladder service validates a `ladder_cache_variant` block against its own
+ * rung list and its own per-(rung, key, conversation) scope: a rung the
+ * service served from its dynamic free-model pool is not a member of the
+ * static ladder list, and the scope it hands out is recomputed for every
+ * (rung, key, conversation) — so a scope stored from an earlier response never
+ * matches the next request. Every such request is rejected with
+ * `400 invalid ladder_cache_variant`, which kills the second step of the
+ * assistant on `ladder/*`.
+ *
+ * The mask therefore stays off unless it is explicitly requested, and the
+ * provider falls back to the stock v2 tool-output markers, which already point
+ * at the full output on disk.
+ */
+const enabled = () => process.env.OPENCODE_CACHE_MASK === "1"
 
 const idleMs = () => number(process.env.OPENCODE_CACHE_MARK_IDLE_MS, DEFAULT_IDLE_MS)
 
