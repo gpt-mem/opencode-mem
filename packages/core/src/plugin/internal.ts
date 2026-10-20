@@ -13,6 +13,7 @@ import { Provider } from "../provider.js"
 import { Command } from "../command.js"
 import { Config } from "../config.js"
 import { Credential } from "../credential.js"
+import { Database } from "../database/database.js"
 import { llmClient } from "../effect/app-node-platform.js"
 import { ConfigAgentPlugin } from "../config/plugin/agent.js"
 import { ConfigCommandPlugin } from "../config/plugin/command.js"
@@ -86,6 +87,7 @@ import { WebFetchTool } from "../tool/plugin/webfetch.js"
 import { WebSearchTool } from "../tool/plugin/websearch.js"
 import { WellKnown } from "../wellknown.js"
 import { WriteTool } from "../tool/plugin/write.js"
+import { OperationalMemoryTool } from "../tool/plugin/operational-memory.js"
 import { AgentPlugin } from "./agent.js"
 import BrowserPlugin from "@opencode/plugin-browser"
 import { CommandPlugin } from "./command.js"
@@ -108,6 +110,7 @@ import { WellKnownPlugin } from "../wellknown/plugin.js"
 const services = [
   Agent.Service,
   AppProcess.Service,
+  Database.Service,
   Provider.Service,
   Model.Service,
   Command.Service,
@@ -162,6 +165,7 @@ export type Requirements = Context.Service.Identifier<(typeof services)[number]>
 export const requirements = LayerNode.group([
   Agent.node,
   AppProcess.node,
+  Database.node,
   Provider.node,
   Model.node,
   Command.node,
@@ -240,6 +244,7 @@ const pre = [
   McpResourceTools.Plugin,
   QuestionTool.Plugin,
   ReadTool.Plugin,
+  OperationalMemoryTool.Plugin,
   ShellTool.Plugin,
   SkillTool.Plugin,
   SubagentTool.Plugin,

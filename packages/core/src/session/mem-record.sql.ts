@@ -1,5 +1,6 @@
 import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core"
 import { ProjectTable } from "../project/sql.js"
+import { MemRecord } from "./mem-record.js"
 
 // Operational memory records. One row = one decision/fact, project-scoped and
 // optionally linked to the session that produced it. Columns mirror the v1
@@ -14,12 +15,12 @@ export const MemRecordTable = sqliteTable(
       .notNull()
       .references(() => ProjectTable.id, { onDelete: "cascade" }),
     session_id: text(),
-    type: text().notNull(),
+    type: text().$type<MemRecord.Type>().notNull(),
     subject: text().notNull(),
     content: text().notNull(),
     reason: text(),
-    status: text().notNull().default("active"),
-    authority: text().notNull(),
+    status: text().$type<MemRecord.Status>().notNull().default("active"),
+    authority: text().$type<MemRecord.Authority>().notNull(),
     decided_by: text(),
     recorded_by: text().notNull(),
     source_ref: text(),
