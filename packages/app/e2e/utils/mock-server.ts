@@ -1038,7 +1038,7 @@ function mockHandlers(
           })),
         fsList: (ctx) =>
           Effect.promise(() => Promise.resolve(config.fileList?.(ctx.query.path ?? ""))).pipe(
-            Effect.map((data) => ({ location: location(config), data })),
+            Effect.map((data) => ({ location: location(config), data: data ?? [] })),
           ),
         fsFind: (ctx) =>
           Effect.promise(() =>
@@ -1060,7 +1060,7 @@ function mockHandlers(
                         }
                       : entry,
                   )
-                : entries,
+                : (entries ?? []),
             })),
           ),
         fsWrite: (ctx) => {
@@ -1245,7 +1245,8 @@ function mockHandlers(
 
             return {
               data: {
-                id: prompt?.id ?? `inb_mock_${Date.now()}`,
+                // The server admits the prompt as an inbox item under a message id.
+                id: prompt?.id ?? `msg_mock_${Date.now()}`,
                 sessionID: ctx.params.sessionID,
                 time: { created: Date.now() },
                 type: "user",
@@ -1263,7 +1264,7 @@ function mockHandlers(
 
             return {
               data: {
-                id: Predicate.isString(body.id) ? body.id : `inb_mock_${Date.now()}`,
+                id: Predicate.isString(body.id) ? body.id : `msg_mock_${Date.now()}`,
                 sessionID: ctx.params.sessionID,
                 time: { created: Date.now() },
                 type: "compaction",
