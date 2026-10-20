@@ -141,8 +141,7 @@ export function project(input: { id: string; directory: string; name?: string } 
     canonical: directory,
     name: directory.split(/[\\/]/).at(-1),
     vcs: "git",
-    // The server tracks when a project was last active; the schema requires it.
-    time: { created: T0, updated: T0, active: T0 },
+    time: { created: T0, updated: T0 },
     sandboxes: [] as string[],
     ...rest,
   }

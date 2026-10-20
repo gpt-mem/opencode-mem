@@ -1425,7 +1425,14 @@ function projectSeed(config: MockServerConfig) {
 
 // Every field of the configured project, for answers that echo it.
 function projectFields(config: MockServerConfig) {
-  return Predicate.isObject(config.project) ? config.project : undefined
+  if (!Predicate.isObject(config.project)) return undefined
+
+  const time = Option.getOrUndefined(decodeProjectTime(config.project.time))
+
+  if (!time) return config.project
+
+  // The server reports when a project was last active, and its schema requires the field.
+  return { ...config.project, time: { ...time, active: time.active ?? time.created } }
 }
 
 function currentProviders(catalog: MockProviderCatalog) {
@@ -1536,6 +1543,14 @@ const decodeProject = Schema.decodeUnknownOption(
     worktree: lenient(Schema.String),
     canonical: lenient(Schema.String),
     sandboxes: lenient(Schema.Array(Schema.String)),
+  }),
+)
+
+const decodeProjectTime = Schema.decodeUnknownOption(
+  Schema.Struct({
+    created: Schema.Number,
+    updated: Schema.Number,
+    active: Schema.optional(Schema.Number),
   }),
 )
 
