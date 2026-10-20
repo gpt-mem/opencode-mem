@@ -123,7 +123,7 @@ To avoid adding more:
 - Most suites print only failures (`--only-failures`): `(fail) <name> [5000ms]` and `^ this test timed out after 5000ms`.
   - When `killed 1 dangling process` and `# Unhandled error between tests` follow (for example `NpmInstallFailedError` with `SIGTERM` from a `git clone`), the test was still doing real work, not hanging.
   - The unhandled error is the abandoned Effect failing after Bun killed its child, not a second bug. Count the work (see Before you push) before choosing a fix.
-- Check whether the test also fails on dev pushes: `gh run list --workflow test.yml --branch dev --event push --status failure`. In one census before core's 30s default, 4 of 25 dev pushes went red, all on Windows unit tests (3 of them Npm.add 5s timeouts).
+- Check whether the test also fails on pushes to the release line: `gh run list --workflow test.yml --branch main --event push --status failure`. In one census before core's 30s default, 4 of 25 pushes went red, all on Windows unit tests (3 of them Npm.add 5s timeouts).
 - Read whole job logs with `gh run view --log --job <id>`; `--log-failed` omits green jobs, whose `Ran N tests across M files. [Xs]` lines you need for comparison.
 - Assert a child's stderr before its exit codes. `packages/core/test/util/effect-flock.test.ts:327-328` checks codes first, so its one CI failure never showed the cause.
 
@@ -136,5 +136,5 @@ Run from the package directory with the flags from its `test` script (app needs 
 - [ ] Windows: count spawns. `GIT_TRACE=<abs file>` logs roughly one `trace: built-in:` or `trace: exec:` line per git process; a logging `git` shim first on PATH also works. At about 40ms per spawn, compare with the package timeout.
 - [ ] Rerun the file while the full package suite runs in another terminal; CI runs three suites on four vCPUs.
 - [ ] Grep the diff for `Bun.sleep(`, `setTimeout(`, `Date.now() +`, `performance.now()`, `Effect.runPromise(` in product code, `mock.module`, `git config`, and literal port numbers.
-- [ ] After CI: with `--only-failures`, the `unit (windows)` log hides passing durations. Compare your package's `Ran N tests across M files. [Xs]` line with a recent dev run's.
+- [ ] After CI: with `--only-failures`, the `unit (windows)` log hides passing durations. Compare your package's `Ran N tests across M files. [Xs]` line with a recent main run's.
 - [ ] New package suite: `bun turbo test --dry=json` lists `@opencode/<pkg>#test`.

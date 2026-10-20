@@ -33,7 +33,7 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          # Pull requests diff against the merge's first parent; pushes diff against the previous dev head.
+          # Pull requests diff against the merge's first parent; pushes diff against the previous head.
           fetch-depth: ${{ github.event_name == 'pull_request' && 2 || 0 }}
 
       - name: Setup Bun
@@ -76,7 +76,7 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          # Pull requests diff against the merge's first parent; pushes diff against the previous dev head.
+          # Pull requests diff against the merge's first parent; pushes diff against the previous head.
           fetch-depth: ${{ github.event_name == 'pull_request' && 2 || 0 }}
 
       - name: Setup Node
@@ -130,7 +130,7 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          # Pull requests diff against the merge's first parent; pushes diff against the previous dev head.
+          # Pull requests diff against the merge's first parent; pushes diff against the previous head.
           fetch-depth: ${{ github.event_name == 'pull_request' && 2 || 0 }}
 
       - name: Setup Node
@@ -257,7 +257,7 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          # Pull requests diff against the merge's first parent; pushes diff against the previous dev head.
+          # Pull requests diff against the merge's first parent; pushes diff against the previous head.
           fetch-depth: ${{ github.event_name == 'pull_request' && 2 || 0 }}
 
       - name: Setup Bun
@@ -296,7 +296,7 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          # Pull requests diff against the merge's first parent; pushes diff against the previous dev head.
+          # Pull requests diff against the merge's first parent; pushes diff against the previous head.
           fetch-depth: ${{ github.event_name == 'pull_request' && 2 || 0 }}
 
       - name: Setup Bun
@@ -345,7 +345,7 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          # Pull requests diff against the merge's first parent; pushes diff against the previous dev head.
+          # Pull requests diff against the merge's first parent; pushes diff against the previous head.
           fetch-depth: ${{ github.event_name == 'pull_request' && 2 || 0 }}
 
       - name: Setup Bun
