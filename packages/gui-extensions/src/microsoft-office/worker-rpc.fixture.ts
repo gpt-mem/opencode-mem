@@ -6,12 +6,12 @@ import { serveWorker, Transfer, type Method } from "./worker-rpc"
 export type FixtureMethods = {
   readonly echo: Method<string, string>
   readonly sleep: Method<number, undefined>
-  /** Holds the worker for `input` milliseconds without yielding, so a cancel can only arrive after the reply left. */
-  readonly spin: Method<number, ArrayBuffer>
+  /** Holds the worker without yielding until the caller releases it after cancelling. */
+  readonly spin: Method<{ port: MessagePort; release: Int32Array }, ArrayBuffer>
   /** Runs until its caller aborts it. */
-  readonly hold: Method<undefined, undefined>
-  /** A bitmap after `input` milliseconds. */
-  readonly paint: Method<number, ImageBitmap>
+  readonly hold: Method<MessagePort, undefined>
+  /** Returns a bitmap only after the caller explicitly releases the handler. */
+  readonly paint: Method<MessagePort, ImageBitmap>
   readonly log: Method<
     undefined,
     { readonly ran: readonly string[]; readonly aborted: readonly string[]; readonly closed: number }
@@ -48,18 +48,19 @@ serveWorker<FixtureMethods>({
   spin: (input) => {
     log.ran.push("spin")
 
-    const until = performance.now() + input
-
-    while (performance.now() < until) {
-      // Busy: no message reaches the worker meanwhile.
-    }
+    input.port.postMessage("started")
+    // Block message delivery until cancellation is queued in the parent. The reply must cross it.
+    Atomics.wait(input.release, 0, 0)
+    input.port.close()
 
     const buffer = new ArrayBuffer(8)
 
     return new Transfer(buffer, [buffer])
   },
-  hold: (_, signal) => {
+  hold: (port, signal) => {
     log.ran.push("hold")
+    port.postMessage("started")
+    port.close()
 
     return new Promise((resolve) =>
       signal.addEventListener("abort", () => {
@@ -68,9 +69,16 @@ serveWorker<FixtureMethods>({
       }),
     )
   },
-  paint: async (input) => {
+  paint: async (input, signal) => {
     log.ran.push("paint")
-    await sleep(input)
+    await Promise.all([
+      new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true })),
+      new Promise<void>((resolve) => {
+        input.onmessage = () => resolve()
+        input.postMessage("started")
+      }),
+    ])
+    input.close()
 
     const bitmap = new ImageBitmap()
 
