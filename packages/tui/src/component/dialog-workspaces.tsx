@@ -19,10 +19,14 @@ import { DialogWorkspaceFileChanges } from "./dialog-workspace-file-changes"
 import type { WorktreeListOutput } from "@opencode/client"
 import { useRoute } from "../context/route"
 import { DialogWorktreeName } from "./dialog-worktree-name"
+import { DialogPrompt } from "../ui/dialog-prompt"
 
 export type WorkspaceSelection =
   | { type: "directory"; directory: string; subdirectory: boolean }
   | { type: "new"; name: string }
+/** A row value that asks for a directory path instead of naming a known worktree. */
+type CustomDirectory = { type: "custom" }
+type DialogValue = WorkspaceSelection | CustomDirectory
 type ProjectDirectory = WorktreeListOutput[number]
 
 type DialogWorkspacesProps = {
@@ -52,6 +56,7 @@ export function DialogWorkspaces(props: DialogWorkspacesProps) {
   const [removing, setRemoving] = createSignal(props.initialRemoving)
   const [replacementCurrent, setReplacementCurrent] = createSignal<string>()
   const [loadError, setLoadError] = createSignal<unknown>()
+  const [customDirectory, setCustomDirectory] = createSignal(false)
   onMount(() => dialog.setSize("xlarge"))
 
   function reopen(initialRemoving?: string) {
@@ -123,7 +128,7 @@ export function DialogWorkspaces(props: DialogWorkspacesProps) {
       .toSorted((a, b) => b.directory.length - a.directory.length)[0]
   })
 
-  const options = createMemo<DialogSelectOption<WorkspaceSelection | undefined>[]>(() => {
+  const options = createMemo<DialogSelectOption<DialogValue | undefined>[]>(() => {
     if (showError()) return []
     const data = directoryData()
     const current = currentRoot()?.directory
@@ -136,7 +141,6 @@ export function DialogWorkspaces(props: DialogWorkspacesProps) {
       if (!a.strategy && !b.strategy) return a.directory.length - b.directory.length
       return 0
     })
-    if (roots.length === 0) return []
 
     const subdirectories = sessionData.session
       .list()
@@ -164,7 +168,7 @@ export function DialogWorkspaces(props: DialogWorkspacesProps) {
     })
     const titleWidth = Math.max(1, dialogSelectContentWidth(Math.min(dialogWidth("xlarge"), dimensions().width - 2)))
 
-    return list.map((item) => {
+    const rows = list.map((item) => {
       const title = abbreviateHome(item.location, paths.home)
       const suffix =
         item.location === item.root.directory ? undefined : path.sep + path.relative(item.root.directory, item.location)
@@ -197,6 +201,18 @@ export function DialogWorkspaces(props: DialogWorkspacesProps) {
         truncateTitle: "left" as const,
       }
     })
+
+    // A project can have no known worktree at all, for example when its only
+    // checkout was deleted. The list still offers a path so the session can move.
+    return [
+      ...rows,
+      {
+        title: "Custom directory…",
+        value: { type: "custom" } as const,
+        titleWidth,
+        truncateTitle: "left" as const,
+      },
+    ]
   })
 
   const current = createMemo(() => {
@@ -223,7 +239,7 @@ export function DialogWorkspaces(props: DialogWorkspacesProps) {
     return true
   }
 
-  async function remove(option: DialogSelectOption<WorkspaceSelection | undefined>) {
+  async function remove(option: DialogSelectOption<DialogValue | undefined>) {
     if (!option.value || option.value.type !== "directory" || option.value.subdirectory || removing()) return
     const data = directoryData()
     const selected = option.value
@@ -310,7 +326,7 @@ export function DialogWorkspaces(props: DialogWorkspacesProps) {
     props.onSelect({ type: "new", name })
   }
 
-  async function move(option: DialogSelectOption<WorkspaceSelection | undefined>) {
+  async function move(option: DialogSelectOption<DialogValue | undefined>) {
     if (route.data.type !== "session" || option.value?.type !== "directory") return
     const sessionID = route.data.sessionID
     const directory = option.value.directory
@@ -322,85 +338,117 @@ export function DialogWorkspaces(props: DialogWorkspacesProps) {
     Math.max(8, Math.min(16, dimensions().height - Math.floor(dimensions().height / 4) - 2)),
   )
 
+  function openCustomDirectory() {
+    setCustomDirectory(true)
+  }
+
+  function closeCustomDirectory() {
+    setCustomDirectory(false)
+    dialog.setSize("xlarge")
+  }
+
   return (
     <box minHeight={showError() ? 5 : fullHeight()}>
-      <DialogSelect
-        title="Worktrees"
-        titleView={
-          <box flexDirection="row" gap={1}>
-            <text fg={theme.text.base} attributes={TextAttributes.BOLD}>
-              Worktrees
-            </text>
-            <Show when={working() || directories.loading || loadedProject.loading}>
-              <Spinner />
-            </Show>
-          </box>
+      <Show
+        when={!customDirectory()}
+        fallback={
+          <DialogPrompt
+            title="Custom directory"
+            placeholder="Absolute path"
+            description={() => <text fg={theme.text.muted}>The session continues in this directory.</text>}
+            onCancel={closeCustomDirectory}
+            onConfirm={(value) => {
+              const directory = value.trim()
+              if (!directory) return
+              closeCustomDirectory()
+              props.onSelect({ type: "directory", directory, subdirectory: false })
+            }}
+          />
         }
-        renderFilter={!showError()}
-        flat={true}
-        options={options()}
-        emptyView={
-          showError() ? (
-            <box paddingLeft={DIALOG_LIST_INSET} paddingRight={DIALOG_LIST_INSET}>
-              <text fg={theme.text.feedback.error.base} attributes={TextAttributes.BOLD}>
-                Could not load worktrees
+      >
+        <DialogSelect
+          title="Worktrees"
+          titleView={
+            <box flexDirection="row" gap={1}>
+              <text fg={theme.text.base} attributes={TextAttributes.BOLD}>
+                Worktrees
               </text>
-              <text fg={theme.text.muted}>{errorMessage(loadError())}</text>
-              <text fg={theme.text.muted}>Close and reopen Worktrees to try again.</text>
+              <Show when={working() || directories.loading || loadedProject.loading}>
+                <Spinner />
+              </Show>
             </box>
-          ) : directories.loading || loadedProject.loading ? (
+          }
+          renderFilter={!showError()}
+          flat={true}
+          options={options()}
+          emptyView={
+            showError() ? (
+              <box paddingLeft={DIALOG_LIST_INSET} paddingRight={DIALOG_LIST_INSET}>
+                <text fg={theme.text.feedback.error.base} attributes={TextAttributes.BOLD}>
+                  Could not load worktrees
+                </text>
+                <text fg={theme.text.muted}>{errorMessage(loadError())}</text>
+                <text fg={theme.text.muted}>Close and reopen Worktrees to try again.</text>
+              </box>
+            ) : directories.loading || loadedProject.loading ? (
+              <box paddingLeft={DIALOG_LIST_INSET} paddingRight={DIALOG_LIST_INSET}>
+                <text fg={theme.text.muted}>Loading worktrees…</text>
+              </box>
+            ) : (
+              <box paddingLeft={DIALOG_LIST_INSET} paddingRight={DIALOG_LIST_INSET}>
+                <text fg={theme.text.muted}>No worktrees available</text>
+              </box>
+            )
+          }
+          noMatchView={
             <box paddingLeft={DIALOG_LIST_INSET} paddingRight={DIALOG_LIST_INSET}>
-              <text fg={theme.text.muted}>Loading worktrees…</text>
+              <text fg={theme.text.muted}>No worktrees found</text>
             </box>
-          ) : (
-            <box paddingLeft={DIALOG_LIST_INSET} paddingRight={DIALOG_LIST_INSET}>
-              <text fg={theme.text.muted}>No worktrees available</text>
-            </box>
-          )
-        }
-        noMatchView={
-          <box paddingLeft={DIALOG_LIST_INSET} paddingRight={DIALOG_LIST_INSET}>
-            <text fg={theme.text.muted}>No worktrees found</text>
-          </box>
-        }
-        locked={showError() || directories.loading || loadedProject.loading || Boolean(removing())}
-        current={current()}
-        onSelect={(option) => {
-          if (option.value) props.onSelect(option.value)
-        }}
-        onMove={() => setToDelete(undefined)}
-        actions={
-          showError() || props.fixture
-            ? []
-            : [
-                ...(route.data.type === "session"
-                  ? [{ command: "dialog.move_session.move", title: "move", onTrigger: move }]
-                  : []),
-                {
-                  command: "dialog.move_session.new",
-                  title: "new",
-                  selection: "none",
-                  onTrigger: () => void create(),
-                },
-                {
-                  command: "dialog.move_session.delete",
-                  title: "delete",
-                  disabled: (option) => {
-                    const value = option?.value
-                    if (!value || value.type !== "directory" || value.subdirectory) return true
-                    return !directoryData()?.find((item) => item.directory === value.directory)?.strategy
+          }
+          locked={showError() || directories.loading || Boolean(removing())}
+          current={current()}
+          onSelect={(option) => {
+            if (!option.value) return
+            if (option.value.type === "custom") {
+              openCustomDirectory()
+              return
+            }
+            props.onSelect(option.value)
+          }}
+          onMove={() => setToDelete(undefined)}
+          actions={
+            showError() || props.fixture
+              ? []
+              : [
+                  ...(route.data.type === "session"
+                    ? [{ command: "dialog.move_session.move", title: "move", onTrigger: move }]
+                    : []),
+                  {
+                    command: "dialog.move_session.new",
+                    title: "new",
+                    selection: "none",
+                    onTrigger: () => void create(),
                   },
-                  onTrigger: remove,
-                },
-                {
-                  command: "dialog.move_session.refresh",
-                  title: "refresh",
-                  selection: "none",
-                  onTrigger: () => void refresh().catch(toast.error),
-                },
-              ]
-        }
-      />
+                  {
+                    command: "dialog.move_session.delete",
+                    title: "delete",
+                    disabled: (option) => {
+                      const value = option?.value
+                      if (!value || value.type !== "directory" || value.subdirectory) return true
+                      return !directoryData()?.find((item) => item.directory === value.directory)?.strategy
+                    },
+                    onTrigger: remove,
+                  },
+                  {
+                    command: "dialog.move_session.refresh",
+                    title: "refresh",
+                    selection: "none",
+                    onTrigger: () => void refresh().catch(toast.error),
+                  },
+                ]
+          }
+        />
+      </Show>
     </box>
   )
 }
