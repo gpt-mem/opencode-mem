@@ -218,6 +218,54 @@ test("creating a worktree recovers the session without reading its removed locat
   }
 })
 
+test("recovers a session whose project has no worktree by naming a directory", async () => {
+  const fixture = await renderMove({ directory: clone, unavailable: "location", showMissingLocation: true, noWorktrees: true })
+  try {
+    await fixture.app.waitForFrame((frame) => frame.includes("Session location unavailable"))
+    fixture.app.mockInput.pressEnter()
+    await fixture.app.waitForFrame((frame) => frame.includes("Custom directory"))
+    await fixture.app.waitFor(() => fixture.app.renderer.currentFocusedEditor instanceof InputRenderable)
+    fixture.app.mockInput.pressEnter()
+    await fixture.app.waitForFrame((frame) => frame.includes("The session continues in this directory."))
+    await fixture.app.waitFor(
+      () =>
+        fixture.app.renderer.currentFocusedEditor instanceof TextareaRenderable &&
+        !(fixture.app.renderer.currentFocusedEditor instanceof InputRenderable),
+    )
+    await fixture.app.mockInput.typeText("/tmp/opencode/elsewhere")
+    fixture.app.mockInput.pressEnter()
+    await fixture.app.waitFor(() => fixture.moves.length === 1)
+
+    expect(fixture.moves).toEqual([{ directory: "/tmp/opencode/elsewhere" }])
+    expect(fixture.route.data).toEqual({ type: "session", sessionID: "ses_clone" })
+    expect(fixture.requests).toEqual([])
+  } finally {
+    fixture.app.renderer.destroy()
+  }
+})
+
+test("a slow current-checkout lookup does not lock the directory list", async () => {
+  const fixture = await renderMove({
+    directory: clone,
+    unavailable: "location",
+    showMissingLocation: true,
+    noWorktrees: true,
+    slowLocation: true,
+  })
+  try {
+    await fixture.app.waitForFrame((frame) => frame.includes("Session location unavailable"))
+    fixture.app.mockInput.pressEnter()
+    await fixture.app.waitForFrame((frame) => frame.includes("Custom directory"))
+    await fixture.app.waitFor(() => fixture.app.renderer.currentFocusedEditor instanceof InputRenderable)
+    fixture.app.mockInput.pressEnter()
+    await fixture.app.waitForFrame((frame) => frame.includes("The session continues in this directory."))
+
+    expect(fixture.reads.locations).toContain(main)
+  } finally {
+    fixture.app.renderer.destroy()
+  }
+})
+
 test("failed recovery does not navigate away from the session", async () => {
   const fixture = await renderMove({ directory: clone, unavailable: "location", showMissingLocation: true, moveFails: true })
   try {
@@ -288,6 +336,8 @@ async function renderMove(input: {
   unavailable?: "session" | "location"
   showMissingLocation?: boolean
   moveFails?: boolean
+  noWorktrees?: boolean
+  slowLocation?: boolean
 }) {
   const launch = input.launch ?? (input.home ? input.directory : main)
   const requests: unknown[] = []
@@ -310,6 +360,8 @@ async function renderMove(input: {
       reads.locations.push(directory)
       if (input.unavailable === "location" && directory === input.directory)
         return json({ message: "Location unavailable" }, { status: 503 })
+      // The current-checkout lookup is best effort: a slow answer must not lock the list.
+      if (input.slowLocation && directory === launch) await new Promise(() => {})
       return json({
         directory,
         project,
@@ -335,6 +387,7 @@ async function renderMove(input: {
       if (request.method === "GET") {
         const projectID = url.searchParams.get("projectID") ?? ""
         reads.worktrees.push(projectID)
+        if (input.noWorktrees) return json([])
         return json(
           projectID === input.launchProjectID
             ? [{ directory: launch }]
