@@ -1,64 +1,73 @@
-name: MEM preview release
+name: Personal OpenCode MEM preview release
 
-# Публикация preview-сборки форка в формате, который умеет принимать
+# Сборка и публикация preview-сборки форка в формате, который принимает
 # `trained-assist/ai-agent-runner`:
 #
-#   * тег `mem-preview-<YYYYMMDD>-<slug>` — ровно та регулярка, которую ждёт
-#     детектор промоушена (`scripts/opencode-promotion-candidate.mjs`);
+#   * тег `mem-preview-<YYYYMMDD>-<slug>` — регулярка детектора промоушена;
 #   * `target_commitish` = полный 40-символьный SHA исходного коммита;
 #   * ассеты `opencode-linux-x64.tar.gz` и `opencode-linux-x64.tar.gz.sha256`,
-#     причём архив обязан содержать бинарь `opencode` в корне.
+#     причём архив содержит бинарь `opencode` в корне.
 #
-# Сборка идёт из чекаута ровно того коммита, который указан во входе: тег
-# релиза и бинарь всегда соответствуют друг другу.
+# Параметры сборки лежат в `preview-release.json` рядом с этим файлом: пуш в
+# ветку `opencode-mem-preview` — и есть запуск. Собирается ровно тот коммит,
+# который указан в `sourceSha`, и релиз публикуется с `--target` этого же SHA,
+# поэтому тег, бинарь и исходный коммит всегда совпадают.
 on:
-  workflow_dispatch:
-    inputs:
-      source_sha:
-        description: "Полный 40-символьный SHA исходного коммита сборки"
-        required: true
-        type: string
-      tag:
-        description: "Тег релиза, например mem-preview-20261020-ladder-cache-7a12f66b4abc"
-        required: true
-        type: string
-      version:
-        description: "Версия, вшиваемая в бинарь (должна начинаться с 0.0.0-)"
-        required: true
-        type: string
+  push:
+    branches: [opencode-mem-preview]
 
 permissions:
   contents: write
 
-concurrency:
-  group: mem-preview-release
-  cancel-in-progress: false
-
 jobs:
   release:
     name: Build and publish the Linux x64 preview build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 # v3.6.0
-        with:
-          ref: ${{ inputs.source_sha }}
-          fetch-depth: 0
+      - uses: actions/checkout@v4
+
+      - name: Read the release parameters
+        id: params
+        run: |
+          set -euo pipefail
+          source_sha="$(node -p "require('./preview-release.json').sourceSha")"
+          tag="$(node -p "require('./preview-release.json').tag")"
+          version="$(node -p "require('./preview-release.json').version")"
+          [[ "$source_sha" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$tag" =~ ^mem-preview-[0-9]{8}-[A-Za-z0-9.-]+$ ]]
+          [[ "$version" == 0.0.0-* ]]
+          {
+            echo "source_sha=$source_sha"
+            echo "tag=$tag"
+            echo "version=$version"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Check out the source commit
+        env:
+          SOURCE_SHA: ${{ steps.params.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          if ! git fetch --no-tags --depth 1 origin "$SOURCE_SHA"; then
+            git fetch --no-tags origin
+          fi
+          git checkout --detach "$SOURCE_SHA"
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
 
       - uses: ./.github/actions/setup-bun
 
       - name: Build the Linux x64 CLI
-        run: ./packages/cli/script/build.ts --target=linux-x64
         env:
           BUN_COMPILE_RELEASE: bun-v1.4.2
-          OPENCODE_VERSION: ${{ inputs.version }}
-          OPENCODE_RELEASE: ${{ inputs.version }}
+          OPENCODE_VERSION: ${{ steps.params.outputs.version }}
+          OPENCODE_RELEASE: ${{ steps.params.outputs.version }}
           GH_REPO: ${{ github.repository }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./packages/cli/script/build.ts --target=linux-x64
 
       - name: Package and verify the archive
         env:
-          VERSION: ${{ inputs.version }}
+          VERSION: ${{ steps.params.outputs.version }}
         run: |
           set -euo pipefail
           binary="packages/cli/dist/cli-linux-x64/bin/opencode"
@@ -69,14 +78,15 @@ jobs:
           sha256sum opencode-linux-x64.tar.gz > opencode-linux-x64.tar.gz.sha256
           cat opencode-linux-x64.tar.gz.sha256
           reported="$(./dist-package/opencode --version)"
+          normalized="$(printf '%s' "$reported" | sed -E 's/^opencode[[:space:]]+v?//')"
           echo "binary reports version: $reported"
-          test "$reported" = "$VERSION"
+          test "$normalized" = "$VERSION"
 
       - name: Publish the preview release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ inputs.tag }}
-          SOURCE_SHA: ${{ inputs.source_sha }}
+          TAG: ${{ steps.params.outputs.tag }}
+          SOURCE_SHA: ${{ steps.params.outputs.source_sha }}
         run: |
           set -euo pipefail
           gh release create "$TAG" \
