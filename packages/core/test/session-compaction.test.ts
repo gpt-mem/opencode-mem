@@ -17,6 +17,23 @@ test("compaction prompt preserves detailed work state and relevant files", () =>
   expect(prompt).toContain("### Active")
   expect(prompt).toContain("### Blocked")
   expect(prompt).toContain("## Relevant Files")
+  expect(prompt).toContain("keep only the latest completed run for that project in the active summary")
+  expect(prompt).toContain("ReplacingMergeTree rows")
+  expect(prompt).toContain("The latest run is the complete result for its recorded command")
+  expect(prompt).toContain("from any runner")
+  expect(prompt).toContain("Vitest, Jest, Mocha, Playwright, Cypress, pytest, go test, and cargo test")
+  expect(prompt).toContain("Keep the first substantive reasoning paragraph as an explicit initial plan/decision anchor")
+  expect(prompt).toContain("Give the latest user request and the immediately preceding substantive assistant result the most detail")
+  expect(prompt).toContain("reduce detail progressively for each older turn")
+  expect(prompt).toContain("retain roughly 30% or more of its distinct substantive points when space allows")
+  expect(prompt).toContain("semantic guardrail, not a quota for verbatim text or tokens")
+  expect(prompt).toContain("Preserve more when older reasoning contains unique evidence")
+  expect(prompt).toContain("preserving paragraph integrity")
+  expect(prompt).toContain("do not split it into disconnected fragments")
+  expect(prompt).toContain("the immediately preceding substantive assistant result")
+  expect(prompt).toContain("short or elliptical")
+  expect(prompt).toContain("Apply exponential recency weighting")
+  expect(prompt).toContain("as a separate anchor with extra weight regardless of age")
 })
 
 test("compaction prompt gives update instructions for a prior summary", () => {
@@ -32,6 +49,16 @@ test("compaction prompt gives update instructions for a prior summary", () => {
   )
   expect(prompt).toContain('Move completed work from "Active" to "Completed".')
   expect(prompt).toContain('Update "Objective" and "Next Move" to reflect the current work state.')
+  expect(prompt).toContain("carry it forward through every summary update")
+})
+
+test("compaction prompt keeps the result needed to understand a short follow-up", () => {
+  const prompt = SessionCompaction.buildPrompt({
+    context: ["[Assistant]: The run failed because the provider timed out.", "[User]: why?"],
+  })
+
+  expect(prompt.indexOf("The run failed because the provider timed out.")).toBeLessThan(prompt.indexOf("[User]: why?"))
+  expect(prompt).toContain("When a user message is short or elliptical")
 })
 
 test("compaction describes tool media without embedding base64", () => {
@@ -94,4 +121,25 @@ test("compaction keeps complete source and shell output for the summarizer", () 
   expect(serializedSource).not.toContain("[truncated]")
   expect(serializedShell).toContain(shellTail)
   expect(serializedShell).not.toContain("[truncated]")
+})
+
+test("compaction passes long reasoning to the summarizer without truncating its beginning or end", () => {
+  const opening = "Initial plan: preserve the first decision anchor."
+  const ending = "Later evidence changed the chosen trade-off; keep this conclusion."
+  const reasoning = `${opening}\n${"Detailed reasoning step.\n".repeat(12_000)}${ending}`
+  const now = DateTime.makeUnsafe(0)
+  const message: SessionMessage.Message = {
+    id: SessionMessage.ID.create(),
+    type: "assistant",
+    agent: "build",
+    model: { providerID: ProviderV2.ID.make("test"), id: ModelV2.ID.make("test-model") },
+    time: { created: now },
+    content: [{ id: "reasoning-1", type: "reasoning", text: reasoning, time: { created: now } }],
+  }
+
+  const serialized = SessionCompaction.serializeMessageForCompaction(message)
+
+  expect(serialized).toStartWith(`[Assistant reasoning]: ${opening}`)
+  expect(serialized).toContain(ending)
+  expect(serialized).not.toContain("[truncated]")
 })

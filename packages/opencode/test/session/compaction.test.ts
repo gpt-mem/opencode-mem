@@ -1578,7 +1578,7 @@ describe("session.compaction.process", () => {
   )
 
   itCompaction.instance(
-    "keeps the full source and final test output available to the summarizer",
+    "keeps full source, final test output, and long reasoning available to the summarizer",
     () => {
       const stub = llm()
       let captured = ""
@@ -1596,6 +1596,17 @@ describe("session.compaction.process", () => {
         const assistant = yield* createAssistantMessage(session.id, user.id, test.directory)
         const codeTail = "241: export const importantBoundary = true"
         const testTail = "Tests 1 passed | 152 skipped (153)"
+        const reasoningStart = "Initial reasoning anchor: preserve the first plan."
+        const reasoningEnd = "Later reasoning conclusion: retain the final trade-off."
+
+        yield* ssn.updatePart({
+          id: PartID.ascending(),
+          messageID: assistant.id,
+          sessionID: session.id,
+          type: "reasoning",
+          text: `${reasoningStart}\n${"Substantive reasoning detail.\n".repeat(5_000)}${reasoningEnd}`,
+          time: { start: Date.now(), end: Date.now() },
+        })
 
         yield* ssn.updatePart({
           id: PartID.ascending(),
@@ -1644,6 +1655,8 @@ describe("session.compaction.process", () => {
         expect(captured).toContain("src/session/compaction.ts")
         expect(captured).toContain(codeTail)
         expect(captured).toContain(testTail)
+        expect(captured).toContain(reasoningStart)
+        expect(captured).toContain(reasoningEnd)
         expect(captured).not.toContain("[truncated]")
       }).pipe(withCompaction({ llm: stub.llmLayer, config: cfg({ tail_turns: 0 }) }))
     },
