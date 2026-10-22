@@ -177,9 +177,7 @@ export const Plugin = {
                 const original =
                   managedPath === undefined
                     ? undefined
-                    : yield* fs
-                        .readFileStringSafe(managedPath)
-                        .pipe(Effect.catch(() => Effect.succeed(undefined)))
+                    : yield* fs.readFileStringSafe(managedPath).pipe(Effect.orElseSucceed(() => undefined))
                 const text = original ?? stored
                 const page = window(text, offset, limit)
                 const output = {
