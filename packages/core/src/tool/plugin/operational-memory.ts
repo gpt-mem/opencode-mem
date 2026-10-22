@@ -39,17 +39,22 @@ const SearchInput = Schema.Struct({
       description:
         "Case-insensitive regular expression matched against subject, content and reason. " +
         "When it finds nothing, the same words are retried as plain-text substrings, so a natural-language " +
-        "question usually still matches. It matches record TEXT, not the type label — to list every record of a kind use type= without query",
+        "question usually still matches; that fallback matches records containing ANY of the words (no " +
+        "morphology) and ranks them by how many words they contain. It matches record TEXT, not the type " +
+        "label — to list every record of a kind use type= without query",
     }),
   ),
   type: Schema.optional(MemRecord.Type.annotate({ description: "Only return this record type" })),
   status: Schema.optional(
-    MemRecord.Status.annotate({ description: "Filter by status (default: active only when no query given)" }),
+    MemRecord.Status.annotate({ description: "Filter by status (default: active only)" }),
   ),
   scope: Schema.optional(Schema.String.annotate({ description: "Exact match on the scope tag" })),
   limit: Schema.optional(
     Schema.Number.annotate({
-      description: `Maximum records returned, most recent first (default ${DEFAULT_LIMIT}, max ${MAX_LIMIT})`,
+      description:
+        `Maximum records returned (default ${DEFAULT_LIMIT}, max ${MAX_LIMIT}). A plain-text fallback match ` +
+        "returns the records containing the most query words first; a regex match and a type-only listing " +
+        "return the most recent records first",
     }),
   ),
 })
@@ -152,7 +157,9 @@ export const Plugin = {
             "stored for this project via put_in_operational_memory. Project-scoped: finds records from earlier " +
             "sessions too. Each hit includes authority (user vs agent), decided_by, reason and source_ref so " +
             "provenance is visible. Use this to recover 'what did we decide and why' without re-reading history. " +
-            "To list every record of a kind pass type= alone; query matches as a regex first, then as plain-text words.",
+            "Only active records are returned unless you pass status= explicitly, so a superseded decision never " +
+            "reads as the current one. To list every record of a kind pass type= alone; query matches as a regex " +
+            "first, then as plain-text words.",
           input: SearchInput,
           output: SearchOutput,
           execute: (input, context) =>

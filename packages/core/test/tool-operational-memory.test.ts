@@ -134,7 +134,13 @@ describe("operational-memory tools", () => {
       expect(v2.supersedes).toBe(v1.id)
 
       const found = output(yield* executeTool(registry, search({ query: "database" })))
-      expect(found.matched).toBe(2)
+      expect(found.matched).toBe(1)
+      expect(found.records[0].id).toBe(v2.id)
+
+      // The superseded version stays reachable, but only when asked for.
+      const superseded = output(yield* executeTool(registry, search({ query: "database", status: "superseded" })))
+      expect(superseded.matched).toBe(1)
+      expect(superseded.records[0].id).toBe(v1.id)
 
       const detail = output(yield* executeTool(registry, get({ id: v2.id })))
       expect(detail.found).toBe(true)
@@ -253,6 +259,84 @@ describe("operational-memory tools", () => {
       )
       const found = output(yield* executeTool(registry, search({ query: "cache(" })))
       expect(found.matched).toBe(1)
+    }),
+  )
+
+  it.effect("plain-text fallback returns the records with the most query words, not the fewest", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const registry = yield* Tool.Service
+      const written = output(
+        yield* executeTool(
+          registry,
+          put({
+            entries: [
+              {
+                type: "decision",
+                subject: "дефект окна вывода",
+                decision: "хвост маркера обязан вести к восстановлению",
+              },
+              { type: "decision", subject: "вывод команды", decision: "хвост файла содержит полный результат" },
+              { type: "decision", subject: "маркер усечения", decision: "дефект окна исправлен" },
+            ],
+          }),
+        ),
+      )
+      const best = written.records[0]
+      // The words are never adjacent, so the regex pass misses and only the
+      // plain-text fallback matches — it ranks the record holding both words
+      // first.
+      const all = output(yield* executeTool(registry, search({ query: "дефект хвост" })))
+      expect(all.matched).toBe(3)
+      expect(all.records[0].id).toBe(best.id)
+
+      const one = output(yield* executeTool(registry, search({ query: "дефект хвост", limit: 1 })))
+      expect(one.records.length).toBe(1)
+      expect(one.records[0].id).toBe(best.id)
+
+      const two = output(yield* executeTool(registry, search({ query: "дефект хвост", limit: 2 })))
+      expect(two.records.length).toBe(2)
+      expect(two.records[0].id).toBe(best.id)
+      expect(two.records.map((record: { id: string }) => record.id)).toContain(best.id)
+    }),
+  )
+
+  it.effect("a query never returns a superseded record as if it were current", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const registry = yield* Tool.Service
+      const first = output(
+        yield* executeTool(
+          registry,
+          put({ entries: [{ type: "decision", subject: "window-cut", decision: "keep the head of the output" }] }),
+        ),
+      )
+      const v1 = first.records[0]
+      const second = output(
+        yield* executeTool(
+          registry,
+          put({
+            entries: [
+              {
+                type: "decision",
+                subject: "window-cut",
+                decision: "keep the head and the tail of the output",
+                supersedes: v1.id,
+              },
+            ],
+          }),
+        ),
+      )
+      const v2 = second.records[0]
+
+      const found = output(yield* executeTool(registry, search({ query: "window" })))
+      expect(found.matched).toBe(1)
+      expect(found.records[0].id).toBe(v2.id)
+      expect(found.records.map((record: { id: string }) => record.id)).not.toContain(v1.id)
+
+      const listed = output(yield* executeTool(registry, search({ type: "decision" })))
+      expect(listed.matched).toBe(1)
+      expect(listed.records[0].id).toBe(v2.id)
     }),
   )
 })

@@ -216,9 +216,11 @@ export const search = (
     if (input.type !== undefined) conditions.push(eq(MemRecordTable.type, input.type))
     if (input.scope !== undefined) conditions.push(eq(MemRecordTable.scope, input.scope))
     // Default to active-only so superseded/rejected noise stays out of the way;
-    // an explicit status overrides.
+    // an explicit status overrides. The filter applies to queries too: a
+    // plain-language question must not surface a superseded record as if it
+    // were the current decision.
     if (input.status !== undefined) conditions.push(eq(MemRecordTable.status, input.status))
-    else if (input.query === undefined) conditions.push(eq(MemRecordTable.status, "active"))
+    else conditions.push(eq(MemRecordTable.status, "active"))
 
     const rows = yield* db
       .select()
@@ -229,11 +231,20 @@ export const search = (
       .pipe(Effect.orDie)
 
     let matched: MemRecordRow[] = rows
+    // The plain-text fallback ranks records by how many query terms they
+    // contain, best first. The regex pass and the no-query listing keep row
+    // order (oldest first), where the newest records win the limit. Slicing
+    // the tail of the ranked array would hand back the worst matches, so the
+    // ranked pass has to keep the head.
+    let ranked = false
     if (input.query !== undefined) {
       // Regex is the documented semantics; fall back to plain-text words before
       // reporting "nothing found" so a natural-language question still hits.
       matched = regexMatches(input.query, rows)
-      if (matched.length === 0) matched = plainTextMatches(input.query, rows)
+      if (matched.length === 0) {
+        matched = plainTextMatches(input.query, rows)
+        ranked = true
+      }
     }
 
     const limit = Math.max(1, Math.min(input.limit ?? 20, 100))
@@ -245,7 +256,7 @@ export const search = (
         ? `query matched 0 of ${rows.length} record(s) that match the other filters — matching tries a case-insensitive regex over subject/content/reason, then the query's words as plain text, so a type name like "${input.query}" usually matches nothing; retry without query to list them`
         : undefined
     return {
-      records: matched.slice(-limit).reverse().map(toRecord),
+      records: (ranked ? matched.slice(0, limit) : matched.slice(-limit).reverse()).map(toRecord),
       matched: matched.length,
       filter_matched: rows.length,
       hint,
