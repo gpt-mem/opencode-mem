@@ -94,6 +94,25 @@ describe("ToolOutput", () => {
     ),
   )
 
+  it.live("names the retrieval tool in the marker when the call id is known", () =>
+    withStore(
+      (output) =>
+        Effect.gen(function* () {
+          const result = yield* output.truncate({ content: [{ type: "text", text: "one\ntwo" }] }, "call_abc")
+          expect(result.content).toEqual([
+            { type: "text", text: "one" },
+            {
+              type: "text",
+              text: expect.stringMatching(
+                /^\[showing lines 1-1 of 2; full output saved to .+ — read or grep that file instead of re-running the command, or retrieve the original output with get_tool_call_details\(call_id="call_abc"\)\]$/,
+              ),
+            },
+          ])
+        }),
+      { maxLines: 100, maxBytes: 5 },
+    ),
+  )
+
   it.live("preserves mixed content ordering", () =>
     withStore(
       (output) =>

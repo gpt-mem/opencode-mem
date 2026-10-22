@@ -31,7 +31,7 @@ export type Editor = {
 }
 
 export interface Interface extends State.Transformable<Editor> {
-  readonly truncate: (result: Result) => Effect.Effect<Result>
+  readonly truncate: (result: Result, callID?: string) => Effect.Effect<Result>
   readonly cleanup: () => Effect.Effect<void>
 }
 
@@ -66,7 +66,7 @@ const layer = Layer.effect(
       }),
     })
 
-    const truncate = Effect.fnUntraced(function* (result: Result) {
+    const truncate = Effect.fnUntraced(function* (result: Result, callID?: string) {
       if (result.metadata?.truncated !== undefined) return result
       const content = result.content
       const text = content.flatMap((item) => (item.type === "text" ? [item.text] : [])).join("\n")
@@ -89,7 +89,7 @@ const layer = Layer.effect(
       yield* fs.ensureDir(directory).pipe(Effect.orDie)
       yield* fs.writeFileString(file, text).pipe(Effect.orDie)
       const shown = kept.length > 0 ? `lines 1-${kept.length}` : "0 lines"
-      const marker = `[showing ${shown} of ${lines.length}; full output saved to ${file} — read or grep that file instead of re-running the command]`
+      const marker = `[showing ${shown} of ${lines.length}; full output saved to ${file} — read or grep that file instead of re-running the command${callID === undefined ? "" : `, or retrieve the original output with get_tool_call_details(call_id="${callID}")`}]`
       const bounded: Tool.Content[] = []
       let remaining = kept.join("\n").length
       let seenText = false

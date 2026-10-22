@@ -88,6 +88,7 @@ import { WebSearchTool } from "../tool/plugin/websearch.js"
 import { WellKnown } from "../wellknown.js"
 import { WriteTool } from "../tool/plugin/write.js"
 import { OperationalMemoryTool } from "../tool/plugin/operational-memory.js"
+import { GetToolCallDetailsTool } from "../tool/plugin/get-tool-call-details.js"
 import { AgentPlugin } from "./agent.js"
 import BrowserPlugin from "@opencode/plugin-browser"
 import { CommandPlugin } from "./command.js"
@@ -245,6 +246,7 @@ const pre = [
   QuestionTool.Plugin,
   ReadTool.Plugin,
   OperationalMemoryTool.Plugin,
+  GetToolCallDetailsTool.Plugin,
   ShellTool.Plugin,
   SkillTool.Plugin,
   SubagentTool.Plugin,
