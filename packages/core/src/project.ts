@@ -43,6 +43,9 @@ export interface Resolved {
   // This checkout's main directory; the stored project canonical may be another clone.
   readonly canonical: AbsolutePath
   readonly vcs?: Vcs
+  // Display name of the repository. Derived from the remote when there is one, because a
+  // worktree directory is named after whatever the session needed, not after the project.
+  readonly name?: string
 }
 
 // Keep this filesystem-only; permission checks use it and should not execute VCS commands.
@@ -122,6 +125,25 @@ const layer = Layer.effect(
         .get()
         .pipe(Effect.orDie)
       yield* upsertProject(db, project).pipe(Effect.orDie)
+      // The display name is derived from the remote the first time a project is seen. A name
+      // the user set by hand is never overwritten.
+      const named = project.name
+        ? yield* db
+            .update(ProjectTable)
+            .set({ name: project.name })
+            .where(and(eq(ProjectTable.id, project.id), isNull(ProjectTable.name)))
+            .returning()
+            .get()
+            .pipe(Effect.orDie)
+        : undefined
+      // The stored name wins: it is either the one the user set or the derived one.
+      const stored = yield* db
+        .select({ name: ProjectTable.name })
+        .from(ProjectTable)
+        .where(eq(ProjectTable.id, project.id))
+        .get()
+        .pipe(Effect.orDie)
+      const resolved: Resolved = { ...project, name: stored?.name ?? undefined }
       const unarchived = yield* db
         .update(ProjectTable)
         .set({ time_archived: null, time_updated: sql`${ProjectTable.time_updated}` })
@@ -142,9 +164,9 @@ const layer = Layer.effect(
               .get()
               .pipe(Effect.orDie)
           : undefined
-      const changed = replaced ?? unarchived
+      const changed = replaced ?? unarchived ?? named
       if (changed) yield* bus.publish(ProjectSchema.Event.Updated, fromRow(changed))
-      if (!project.vcs) return project
+      if (!project.vcs) return resolved
       const directories: Array<{ projectID: ID; directory: AbsolutePath; strategy?: string }> = [
         { projectID: project.id, directory: project.canonical },
       ]
@@ -215,7 +237,7 @@ const layer = Layer.effect(
           )
         }).pipe(Effect.ensuring(Effect.sync(() => announcing.delete(key))))
       }
-      return project
+      return resolved
     })
 
     const list = Effect.fn("Project.list")(function* (input?: ListInput) {
@@ -284,8 +306,14 @@ const layer = Layer.effect(
       if (!origin) return undefined
       const normalized = url(origin)
       if (!normalized) return undefined
-      return ID.make(Hash.fast(`git-remote:${normalized}`))
+      return { id: ID.make(Hash.fast(`git-remote:${normalized}`)), name: repositoryName(normalized) }
     })
+
+    // The repository name is the last segment of the normalized remote: "host/owner/repo".
+    function repositoryName(normalized: string) {
+      const segment = normalized.split("/").filter(Boolean).pop()
+      return segment || undefined
+    }
 
     function url(input: string) {
       const value = input.trim()
@@ -363,7 +391,8 @@ const layer = Layer.effect(
           : undefined
       if (repo) {
         const previous = yield* cached(repo.commonDirectory)
-        const id = (yield* remote(repo)) ?? previous ?? (yield* rootCommit(repo))
+        const origin = yield* remote(repo)
+        const id = origin?.id ?? previous ?? (yield* rootCommit(repo))
         const canonical =
           repo.gitDirectory === repo.commonDirectory
             ? repo.worktree
@@ -377,6 +406,7 @@ const layer = Layer.effect(
           directory: repo.worktree,
           canonical,
           vcs: { type: "git" as const, store: repo.commonDirectory },
+          name: origin?.name,
         })
       }
 
