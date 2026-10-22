@@ -228,7 +228,9 @@ export const Plugin = {
                   ...output,
                   output: output.timeout
                     ? `${output.output}\n\nCommand exceeded timeout of ${finalTimeout} ms. Retry with a larger timeout if the command is expected to take longer.`
-                    : output.output,
+                    : output.truncated
+                      ? `${output.output}\n[retrieve the original output with get_tool_call_details(call_id="${context.id}")]`
+                      : output.output,
                   status: "completed" as const,
                 }
               }).pipe(
