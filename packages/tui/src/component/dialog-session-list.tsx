@@ -49,6 +49,12 @@ export function DialogSessionList() {
     activeLocation.ref ??
     data.location.default()
 
+  // A session belongs to the repository it was started in, not to the folder it
+  // happened to live in. A repository spans its subdirectories, its linked
+  // worktrees and its clones, so the list is scoped by repository. An empty
+  // scope - no repository selected - means every session is listed.
+  const scope = createMemo(() => sessionScope(data.location.info(pickerLocation()), allProjects()))
+
   const [searchResults, { mutate: setSearchResults }] = createResource(
     () => ({
       query: search().trim(),
@@ -60,25 +66,19 @@ export function DialogSessionList() {
         if (!data.location.info(location)) await data.location.sync(location)
         const current = data.location.info(location)
         if (!current) throw new Error("Location unavailable")
+        const scope = sessionScope(current, allProjects)
         const response = await client.api.session.list({
-          ...(allProjects
-            ? {}
-            : current.project.id === Project.ID.global
-              ? { directory: current.directory }
-              : {
-                  project: current.project.id,
-                  subpath: path.relative(current.project.directory, current.directory).replaceAll("\\", "/"),
-                }),
+          ...(scope.kind === "repository" ? { project: scope.id } : {}),
           ...(query ? { search: query } : {}),
           limit: 50,
           order: "desc",
           parentID: null,
         })
-        return { query, allProjects, sessions: response.data, error: undefined }
+        return { query, scope, sessions: response.data, error: undefined }
       } catch (error) {
         // A transient transport failure must degrade search, not crash the TUI
         // through the root ErrorBoundary when the errored resource is read.
-        return { query, allProjects, sessions: [] as SessionInfo[], error }
+        return { query, scope: sessionScope(undefined, allProjects), sessions: [] as SessionInfo[], error }
       }
     },
   )
@@ -86,14 +86,8 @@ export function DialogSessionList() {
   const currentSessionID = createMemo(() => (route.data.type === "session" ? route.data.sessionID : undefined))
   const localSessions = createMemo(() => {
     const query = filter().trim().toLowerCase()
-    const current = data.location.info(pickerLocation())
-    const sessions = data.session
-      .list()
-      .filter(
-        (session) =>
-          allProjects() ||
-          (session.projectID === current?.project.id && session.location.directory === current.directory),
-      )
+    const current = scope()
+    const sessions = data.session.list().filter((session) => current.kind === "all" || session.projectID === current.id)
     if (!query) return sessions
     return sessions.filter(
       (session) => !session.parentID && withTimestampedFallback(session).toLowerCase().includes(query),
@@ -105,7 +99,10 @@ export function DialogSessionList() {
     if (query !== search().trim()) return searchResults.latest?.sessions ?? local
     if (searchResults.loading) return searchResults.latest?.sessions ?? []
     const result = searchResults()
-    if (result?.query !== query || result.allProjects !== allProjects() || result.error) return local
+    const current = scope()
+    if (result?.query !== query || result.scope.kind !== current.kind || result.error) return local
+    if (result.scope.kind === "repository" && current.kind === "repository" && result.scope.id !== current.id)
+      return local
     return result.sessions
   })
   const searchState = createMemo(() => {
@@ -132,11 +129,32 @@ export function DialogSessionList() {
     const hint = quickSwitchHint()
     return hint && local.session.slots().length > 0 ? [{ title: "switch", label: hint }] : []
   })
-  const currentProjectName = createMemo(() => {
-    const current = data.location.info(pickerLocation())
-    if (!current) return ""
-    const project = data.project.get(current.project.id)
-    return projectName(project) ?? ""
+  const scopeName = createMemo(() => {
+    const current = scope()
+    if (current.kind !== "repository") return ""
+    return projectName(data.project.get(current.id)) ?? ""
+  })
+  // One label per repository. Two repositories can share a basename, so an
+  // ambiguous label falls back to the full path instead of silently merging
+  // two repositories into one group.
+  const projectLabels = createMemo(() => {
+    const labels = new Map<string, string>()
+    const ambiguous = new Map<string, number>()
+    for (const session of sessions()) {
+      if (labels.has(session.projectID)) continue
+      const project = data.project.get(session.projectID)
+      const canonical = project?.canonical ?? ""
+      const name = project?.name || (canonical === "/" ? "global" : canonical ? path.basename(canonical) : "")
+      const label = name || session.projectID
+      labels.set(session.projectID, label)
+      ambiguous.set(label, (ambiguous.get(label) ?? 0) + 1)
+    }
+    for (const [id, label] of labels) {
+      if ((ambiguous.get(label) ?? 0) < 2) continue
+      const canonical = data.project.get(id)?.canonical
+      if (canonical) labels.set(id, canonical)
+    }
+    return labels
   })
 
   const options = createMemo(() => {
@@ -185,6 +203,10 @@ export function DialogSessionList() {
     const remaining = sessions()
       .filter((session) => !session.parentID && !pinnedSet.has(session.id))
       .map((session) => {
+        // With no repository selected the list spans repositories, so it is
+        // grouped by repository; inside one repository the date is the useful
+        // axis.
+        if (scope().kind === "all") return option(session, projectLabels().get(session.projectID) ?? session.projectID)
         const date = new Date(session.time.updated).toDateString()
         return option(session, date === today ? "Today" : date)
       })
@@ -192,7 +214,12 @@ export function DialogSessionList() {
     return [...pinned.map((sessionID) => option(sessionMap.get(sessionID)!, "Pinned")), ...remaining]
   })
 
-  onMount(() => dialog.setSize("large"))
+  onMount(() => {
+    dialog.setSize("large")
+    // Repository labels come from the project list; without it the grouping
+    // would fall back to raw project ids.
+    void data.project.sync()
+  })
 
   return (
     <DialogSelect
@@ -202,14 +229,21 @@ export function DialogSessionList() {
           <text fg={theme.text.base} attributes={TextAttributes.BOLD}>
             Sessions
           </text>
-          <Show when={!allProjects() && currentProjectName()}>
-            <text fg={theme.text.muted}> for {currentProjectName()}</text>
+          <Show when={scope().kind === "repository" && scopeName()}>
+            <text fg={theme.text.muted}> in {scopeName()}</text>
+          </Show>
+          <Show when={scope().kind === "all"}>
+            <text fg={theme.text.muted}> in all repositories</text>
           </Show>
         </box>
       }
       searchInTitle
       titlePlaceholder={
-        !allProjects() && currentProjectName() ? `Search sessions in ${currentProjectName()}` : "Search sessions"
+        scope().kind === "repository"
+          ? scopeName()
+            ? `Search sessions in ${scopeName()}`
+            : "Search sessions in this repository"
+          : "Search sessions in all repositories"
       }
       options={options()}
       skipFilter={true}
@@ -221,7 +255,7 @@ export function DialogSessionList() {
       bindings={[
         {
           bind: "ctrl+a",
-          title: allProjects() ? "Show current directory sessions" : "Show all project sessions",
+          title: scope().kind === "all" ? "Show current repository sessions" : "Show all repository sessions",
           group: "Dialog",
           run: () => {
             void updatePrefs((draft) => {
@@ -292,7 +326,7 @@ export function DialogSessionList() {
       ]}
       footerHints={[
         ...(newDesigns() ? [] : quickSwitchFooterHints()),
-        { title: allProjects() ? "current directory" : "all projects", label: "ctrl+a", side: "right" },
+        { title: scope().kind === "all" ? "current repository" : "all repositories", label: "ctrl+a", side: "right" },
       ]}
     />
   )
@@ -302,6 +336,17 @@ function quickSwitchRange(first: string, last: string) {
   const prefix = first.slice(0, -1)
   if (first.endsWith("1") && last === `${prefix}9`) return `${prefix}1-9`
   return `${first} through ${last}`
+}
+
+type SessionScope = { kind: "all" } | { kind: "repository"; id: string }
+
+// The scope of the session list is a repository, not a folder. An empty scope
+// - no repository selected, or a location that belongs to no repository -
+// means every session is listed.
+function sessionScope(current: { project: { id: string } } | undefined, all: boolean): SessionScope {
+  if (all) return { kind: "all" }
+  if (!current || current.project.id === Project.ID.global) return { kind: "all" }
+  return { kind: "repository", id: current.project.id }
 }
 
 export function sessionStatusGutter(
