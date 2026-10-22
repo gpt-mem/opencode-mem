@@ -2,6 +2,7 @@ import { describe, expect } from "bun:test"
 import { $ } from "bun"
 import fs from "fs/promises"
 import path from "path"
+import { eq } from "drizzle-orm"
 import { Effect, Stream } from "effect"
 import { AppNodeBuilder } from "@opencode/core/effect/app-node-builder"
 import { LayerNode } from "@opencode/util/effect/layer-node"
@@ -359,6 +360,69 @@ describe("Project.resolve", () => {
       expect(result.canonical).toBe(result.directory)
       expect(result.previous).toBeUndefined()
       expect(result.vcs).toBeUndefined()
+    }),
+  )
+
+  it.live("names a repository after its remote", () =>
+    Effect.gen(function* () {
+      const tmp = yield* Effect.acquireRelease(
+        Effect.promise(() => tmpdir()),
+        (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+      )
+      yield* Effect.promise(() => initRepo(tmp.path, { commit: true, remote: "git@github.com:owner/repo.git" }))
+      const project = yield* Project.Service
+
+      const result = yield* project.resolve(abs(tmp.path))
+
+      expect(result.name).toBe("repo")
+    }),
+  )
+
+  it.live("keeps a name the user set for the project", () =>
+    Effect.gen(function* () {
+      const tmp = yield* Effect.acquireRelease(
+        Effect.promise(() => tmpdir()),
+        (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+      )
+      yield* Effect.promise(() => initRepo(tmp.path, { commit: true, remote: "git@github.com:owner/repo.git" }))
+      const project = yield* Project.Service
+      const result = yield* project.resolve(abs(tmp.path))
+      yield* project.update({ projectID: result.id, name: "My name" })
+
+      const again = yield* project.resolve(abs(tmp.path))
+
+      expect(again.name).toBe("My name")
+    }),
+  )
+
+  it.live("fills the name of a project stored without one and announces it", () =>
+    Effect.gen(function* () {
+      const tmp = yield* Effect.acquireRelease(
+        Effect.promise(() => tmpdir()),
+        (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+      )
+      yield* Effect.promise(() => initRepo(tmp.path, { commit: true, remote: "git@github.com:owner/repo.git" }))
+      const db = (yield* Database.Service).db
+      const project = yield* Project.Service
+      const bus = yield* Bus.Service
+      const result = yield* project.resolve(abs(tmp.path))
+      // A project stored before the name was derived has none.
+      yield* db
+        .update(ProjectTable)
+        .set({ name: null })
+        .where(eq(ProjectTable.id, result.id))
+        .run()
+      const updates: Project.Info[] = []
+      yield* bus.subscribe(ProjectSchema.Event.Updated).pipe(
+        Stream.runForEach((event) => Effect.sync(() => updates.push(event.data))),
+        Effect.forkScoped({ startImmediately: true }),
+      )
+
+      const again = yield* project.resolve(abs(tmp.path))
+      yield* Effect.yieldNow
+
+      expect(again.name).toBe("repo")
+      expect(updates.map((update) => update.name)).toEqual(["repo"])
     }),
   )
 
