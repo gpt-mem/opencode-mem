@@ -13,6 +13,7 @@ import { SessionMemoryContext } from "@opencode/core/session/memory-context"
 import { SessionMessage } from "@opencode/core/session/message"
 import { Agent as AgentType } from "@opencode/core/agent"
 import { DateTime } from "effect"
+import { CacheMarkLedgerService } from "@opencode/core/session/cache-mark-ledger"
 
 // Test utilities
 const createTestLayer = () => {
@@ -35,22 +36,104 @@ const toolContent = "x".repeat(3000) // Large content for compression
 describe("CacheMarkLedger - Service Tests", () => {
   test("getMark returns 0 for new provider", async () => {
     const layer = createTestLayer()
-    // Test that getMark returns 0 for a new provider (no record in DB)
+    const cacheMarkLedger = await Effect.runPromise(
+      Layer.provide(layer)(CacheMarkLedgerService.layer)
+    )
+    
+    const mark = await Effect.runPromise(cacheMarkLedger.getMark(providerID))
+    expect(mark).toBe(0)
   })
 
   test("applyUsage updates mark to cache_read value", async () => {
     const layer = createTestLayer()
-    // Test that mark grows based on cache_read
+    const cacheMarkLedger = await Effect.runPromise(
+      Layer.provide(layer)(CacheMarkLedgerService.layer)
+    )
+    
+    await Effect.runPromise(cacheMarkLedger.applyUsage(providerID, {
+      cache_read: 1000,
+      cache_write: 800,
+      model: { id: modelID, providerID: providerID }
+    }))
+    
+    const mark = await Effect.runPromise(cacheMarkLedger.getMark(providerID))
+    expect(mark).toBe(1000)
   })
 
   test("mark only increases (forward-only)", async () => {
     const layer = createTestLayer()
-    // Test that applying smaller cache_read doesn't reduce mark
+    const cacheMarkLedger = await Effect.runPromise(
+      Layer.provide(layer)(CacheMarkLedgerService.layer)
+    )
+    
+    await Effect.runPromise(cacheMarkLedger.applyUsage(providerID, {
+      cache_read: 1000,
+      cache_write: 800,
+      model: { id: modelID, providerID: providerID }
+    }))
+    
+    await Effect.runPromise(cacheMarkLedger.applyUsage(providerID, {
+      cache_read: 500,
+      cache_write: 400,
+      model: { id: modelID, providerID: providerID }
+    }))
+    
+    const mark = await Effect.runPromise(cacheMarkLedger.getMark(providerID))
+    expect(mark).toBe(1000)
   })
 
   test("new provider starts with mark=0", async () => {
     const layer = createTestLayer()
-    // Test that new provider has initial mark of 0
+    const cacheMarkLedger = await Effect.runPromise(
+      Layer.provide(layer)(CacheMarkLedgerService.layer)
+    )
+    
+    const newProvider = Provider.ID.make("new_provider")
+    const mark = await Effect.runPromise(cacheMarkLedger.getMark(newProvider))
+    expect(mark).toBe(0)
+  })
+
+  test("getProjectionMark returns mark value", async () => {
+    const layer = createTestLayer()
+    const cacheMarkLedger = await Effect.runPromise(
+      Layer.provide(layer)(CacheMarkLedgerService.layer)
+    )
+    
+    await Effect.runPromise(cacheMarkLedger.applyUsage(providerID, {
+      cache_read: 1000,
+      cache_write: 800,
+      model: { id: modelID, providerID: providerID }
+    }))
+    
+    const projectionMark = await Effect.runPromise(cacheMarkLedger.getProjectionMark(providerID))
+    expect(projectionMark).toBe(1000)
+  })
+
+  test("isMarkStale returns true for non-existent provider", async () => {
+    const layer = createTestLayer()
+    const cacheMarkLedger = await Effect.runPromise(
+      Layer.provide(layer)(CacheMarkLedgerService.layer)
+    )
+    
+    const newProvider = Provider.ID.make("stale_provider")
+    const isStale = await Effect.runPromise(cacheMarkLedger.isMarkStale(newProvider, 1000))
+    expect(isStale).toBe(true)
+  })
+
+  test("isMarkStale returns false for recently used provider", async () => {
+    const layer = createTestLayer()
+    const cacheMarkLedger = await Effect.runPromise(
+      Layer.provide(layer)(CacheMarkLedgerService.layer)
+    )
+    
+    await Effect.runPromise(cacheMarkLedger.applyUsage(providerID, {
+      cache_read: 1000,
+      cache_write: 800,
+      model: { id: modelID, providerID: providerID }
+    }))
+    
+    const isStale = await Effect.runPromise(cacheMarkLedger.isMarkStale(providerID, 1000))
+    expect(isStale).toBe(false)
   })
 })
 

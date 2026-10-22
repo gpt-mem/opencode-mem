@@ -7,7 +7,7 @@ import { Evidence } from "./evidence.js"
 import { PII } from "./pii.js"
 import { MAX_BYTES } from "../tool-output.js"
 import { Global } from "@opencode/util/global"
-import { getDatabase } from "./database.js"
+import { getDatabase } from "../database/database.js"
 import { sqliteTable, text, integer } from "drizzle-orm/sqlite-core"
 import { eq } from "drizzle-orm"
 import type { ProviderCacheMarkTable } from "./sql.js"
@@ -336,12 +336,16 @@ const applyProviderUsage = async (usage: {
   }
 }): Promise<void> => {
   try {
-    // In a real implementation, this would call CacheMarkLedgerService.applyUsage(
-    //   usage.providerID, 
-    //   { cache_read: usage.cache_read, cache_write: usage.cache_write, model: usage.model }
-    // )
-    // For now, we'll use a simplified implementation
-    // TODO: Replace with actual service call when CacheMarkLedgerService is available
+    const service = getCacheMarkLedgerService()
+    if (service && typeof service.applyUsage === "function") {
+      // In production, we'd use Effect.runPromise
+      const { Effect } = require("effect")
+      await Effect.runPromise(service.applyUsage(usage.providerID, {
+        cache_read: usage.cache_read,
+        cache_write: usage.cache_write,
+        model: usage.model
+      }))
+    }
   } catch (error) {
     console.warn("[mem-context] Failed to apply provider usage:", error)
     throw error

@@ -1,6 +1,6 @@
 import { Context, Effect, Layer } from "effect"
 import { sqliteTable, text, integer } from "drizzle-orm/sqlite-core"
-import { getDatabase } from "../database.js"
+import { Database } from "../database/database.js"
 import type { ProviderCacheMarkTable } from "./sql.js"
 
 // Types
@@ -154,7 +154,7 @@ export class CacheMarkLedgerService extends Context.Tag<"CacheMarkLedger">()<
   static readonly layer = Layer.effect(
     CacheMarkLedgerService,
     Effect.gen(function* () {
-      const database = yield* getDatabase()
+      const database = yield* Database.Service
       return new CacheMarkLedgerImpl(database)
     })
   )
