@@ -460,6 +460,7 @@ describe("LocationServiceMap", () => {
           expect(blockedTools.filter((name) => name !== "execute").sort()).toEqual([
             "edit",
             "get_operational_memory",
+            "get_tool_call_details",
             "glob",
             "grep",
             "patch",
@@ -482,6 +483,7 @@ describe("LocationServiceMap", () => {
           expect(allowedTools.filter((name) => name !== "execute").sort()).toEqual([
             "edit",
             "get_operational_memory",
+            "get_tool_call_details",
             "glob",
             "grep",
             "patch",
