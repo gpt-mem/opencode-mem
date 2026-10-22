@@ -170,6 +170,15 @@ interface ParserState {
 
 const invalid = ProviderShared.invalidRequest
 
+// Some OpenAI-compatible gateways have returned a valid final answer followed
+// by hundreds of literal Harmony control markers in the same content delta.
+// They are not OpenAI Chat tool calls (those arrive in `tool_calls`) and should
+// not be shown as user-facing answer text. Treat a long uninterrupted run as
+// stream corruption and keep the valid answer preceding it. A single marker,
+// or a short run discussed as ordinary text, remains untouched.
+const cleanRepeatedControlMarkers = (text: string) =>
+  text.replace(/(?:<\|tool_call_begin\|>){8,}[\s\S]*$/, "")
+
 // =============================================================================
 // Request Lowering
 // =============================================================================
@@ -421,7 +430,8 @@ const step = (state: ParserState, event: OpenAIChatEvent) =>
 
     if (delta?.content) {
       lifecycle = Lifecycle.reasoningEnd(lifecycle, events, "reasoning-0")
-      lifecycle = Lifecycle.textDelta(lifecycle, events, "text-0", delta.content)
+      const content = cleanRepeatedControlMarkers(delta.content)
+      if (content) lifecycle = Lifecycle.textDelta(lifecycle, events, "text-0", content)
     }
 
     if (toolDeltas.length) lifecycle = Lifecycle.reasoningEnd(lifecycle, events, "reasoning-0")
