@@ -1,6 +1,5 @@
 import { Context, Effect, Layer } from "effect"
 import { sqliteTable, text, integer } from "drizzle-orm/sqlite-core"
-import { eq } from "drizzle-orm"
 import { getDatabase } from "../database.js"
 import type { ProviderCacheMarkTable } from "./sql.js"
 
