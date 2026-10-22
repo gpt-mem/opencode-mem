@@ -32,7 +32,6 @@ import { FindPiiTool } from "./find-pii"
 import { PutInOperationalMemoryTool } from "./put-in-operational-memory"
 import { SearchOperationalMemoryTool } from "./search-operational-memory"
 import { GetOperationalMemoryTool } from "./get-operational-memory"
-import { PdfReadTool } from "./pdf-read"
 import { GetToolCallOverviewTool } from "./get-tool-call-overview"
 import { LspTool } from "./lsp"
 import * as Truncate from "./truncate"
@@ -118,14 +117,9 @@ const layer = Layer.effect(
     const getToolCallDetails = yield* GetToolCallDetailsTool
     const findToolCalls = yield* FindToolCallsTool
     const findPii = yield* FindPiiTool
-    const putInOperationalMemory = yield* PutInOperationalMemoryTool.pipe(
-      Effect.catch(() => Effect.succeed(undefined)),
-    )
-    const searchOperationalMemory = yield* SearchOperationalMemoryTool.pipe(
-      Effect.catch(() => Effect.succeed(undefined)),
-    )
-    const getOperationalMemory = yield* GetOperationalMemoryTool.pipe(Effect.catch(() => Effect.succeed(undefined)))
-    const pdfRead = yield* PdfReadTool.pipe(Effect.catch(() => Effect.succeed(undefined)))
+    const putInOperationalMemory = yield* PutInOperationalMemoryTool
+    const searchOperationalMemory = yield* SearchOperationalMemoryTool
+    const getOperationalMemory = yield* GetOperationalMemoryTool
     const getToolCallOverview = yield* GetToolCallOverviewTool
     const shell = yield* ShellTool
     const globtool = yield* GlobTool
@@ -246,13 +240,9 @@ const layer = Layer.effect(
           getToolCallDetails: Tool.init(getToolCallDetails),
           findToolCalls: Tool.init(findToolCalls),
           findPii: Tool.init(findPii),
-          putInOperationalMemory:
-            putInOperationalMemory !== undefined ? Tool.init(putInOperationalMemory) : Effect.succeed(undefined),
-          searchOperationalMemory:
-            searchOperationalMemory !== undefined ? Tool.init(searchOperationalMemory) : Effect.succeed(undefined),
-          getOperationalMemory:
-            getOperationalMemory !== undefined ? Tool.init(getOperationalMemory) : Effect.succeed(undefined),
-          pdfRead: pdfRead !== undefined ? Tool.init(pdfRead) : Effect.succeed(undefined),
+          putInOperationalMemory: Tool.init(putInOperationalMemory),
+          searchOperationalMemory: Tool.init(searchOperationalMemory),
+          getOperationalMemory: Tool.init(getOperationalMemory),
           getToolCallOverview: Tool.init(getToolCallOverview),
           ...(codeModeTool ? { execute: Tool.init(codeModeTool) } : {}),
         })
@@ -273,10 +263,9 @@ const layer = Layer.effect(
             tool.getToolCallDetails,
             tool.findToolCalls,
             tool.findPii,
-            ...(tool.putInOperationalMemory !== undefined ? [tool.putInOperationalMemory] : []),
-            ...(tool.searchOperationalMemory !== undefined ? [tool.searchOperationalMemory] : []),
-            ...(tool.getOperationalMemory !== undefined ? [tool.getOperationalMemory] : []),
-            ...(tool.pdfRead !== undefined ? [tool.pdfRead] : []),
+            tool.putInOperationalMemory,
+            tool.searchOperationalMemory,
+            tool.getOperationalMemory,
             tool.getToolCallOverview,
             tool.todo,
             tool.search,

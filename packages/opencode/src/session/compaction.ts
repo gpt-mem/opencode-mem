@@ -22,11 +22,16 @@ import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { buildPrompt } from "@opencode-ai/core/session/compaction"
 import { SessionCompactionEvent } from "@opencode-ai/schema/session-compaction-event"
+import { MemRecordStore } from "@opencode-ai/core/session/mem-record-store"
+import { Hash } from "@opencode-ai/core/util/hash"
+import { Database } from "@opencode-ai/core/database/database"
 
 export const Event = SessionCompactionEvent
 
 export const PRUNE_MINIMUM = 20_000
 export const PRUNE_PROTECT = 40_000
+export const REASONING_COMPACTION_INITIAL_CHARS = 100_000
+export const REASONING_COMPACTION_INCREMENTAL_CHARS = 50_000
 const PRUNE_PROTECTED_TOOLS = ["skill"]
 const MIN_PRESERVE_RECENT_TOKENS = 2_000
 const MAX_PRESERVE_RECENT_TOKENS = 15_000
@@ -47,7 +52,108 @@ type CompletedCompaction = {
   summary: string | undefined
 }
 
+// `filterCompactedEffect` supplies the current SQLite-backed compaction
+// checkpoint and only the retained, still-raw tail. Counting this view means
+// the first compaction covers 100k raw characters; after a durable summary,
+// each 50k new raw characters trigger the next summary update.
+export function shouldCompactReasoning(
+  messages: readonly {
+    info: { role: string; summary?: unknown; finish?: unknown; error?: unknown }
+    parts: readonly { type: string; text?: string }[]
+  }[],
+) {
+  const hasPriorSummary = messages.some(
+    (message) => message.info.role === "assistant" && message.info.summary && message.info.finish && !message.info.error,
+  )
+  const threshold = hasPriorSummary
+    ? REASONING_COMPACTION_INCREMENTAL_CHARS
+    : REASONING_COMPACTION_INITIAL_CHARS
+  let chars = 0
+  for (const message of messages) {
+    for (const part of message.parts) {
+      if (part.type === "reasoning") chars += part.text?.length ?? 0
+    }
+  }
+  return chars >= threshold
+}
+
+export function shouldTriggerReasoningCompaction(input: {
+  providerID: string
+  auto: boolean
+  hasFinishedAssistant: boolean
+  lastFinishedIsSummary: boolean
+  messages: Parameters<typeof shouldCompactReasoning>[0]
+}) {
+  return (
+    input.providerID === "ladder" &&
+    input.auto &&
+    input.hasFinishedAssistant &&
+    !input.lastFinishedIsSummary &&
+    shouldCompactReasoning(input.messages)
+  )
+}
+
+export function decisionRecordsFromSummary(summary: string | undefined, userMessageIDs: ReadonlySet<string>) {
+  if (!summary) return []
+  const block = summary.match(/## Decision Records\s*```json\s*([\s\S]*?)\s*```/i)?.[1]
+  if (!block) return []
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(block)
+  } catch {
+    return []
+  }
+  if (!Array.isArray(parsed)) return []
+  const records = new Map<
+    string,
+    { type: "decision"; subject: string; decision: string; reason?: string; decided_by: string; source_ref: string }
+  >()
+  for (const item of parsed) {
+    if (typeof item !== "object" || item === null || Array.isArray(item)) continue
+    const value = item as Record<string, unknown>
+    if (
+      typeof value.subject !== "string" ||
+      typeof value.decision !== "string" ||
+      typeof value.source_ref !== "string" ||
+      !userMessageIDs.has(value.source_ref)
+    )
+      continue
+    const subject = value.subject.trim()
+    const decision = value.decision.trim()
+    if (!subject || !decision) continue
+    const key = `${subject.toLowerCase()}\n${value.source_ref}`
+    records.set(key, {
+      type: "decision",
+      subject,
+      decision,
+      ...(typeof value.reason === "string" && value.reason.trim() ? { reason: value.reason.trim() } : {}),
+      decided_by: "user",
+      source_ref: `${value.source_ref}#decision:${Hash.sha256(subject.toLowerCase()).slice(0, 16)}`,
+    })
+  }
+  return [...records.values()]
+}
+
+const LADDER_COMPACTION_MODEL = {
+  free: { providerID: ProviderV2.ID.make("ladder"), modelID: ModelV2.ID.make("free") },
+  standard: { providerID: ProviderV2.ID.make("ladder"), modelID: ModelV2.ID.make("standard") },
+}
+
+/** Keep Free sessions free; route other Ladder compaction through Standard. */
+export function compactionModelRef(input: {
+  configured?: { providerID: ProviderV2.ID; modelID: ModelV2.ID }
+  session: { providerID: ProviderV2.ID; modelID: ModelV2.ID }
+}) {
+  if (input.configured) return input.configured
+  if (input.session.providerID === "ladder") {
+    if (input.session.modelID === "free") return LADDER_COMPACTION_MODEL.free
+    return LADDER_COMPACTION_MODEL.standard
+  }
+  return input.session
+}
+
 const serialize = (message: SessionV1.WithParts) => {
+  const source = `[Source message id=${message.info.id} role=${message.info.role}]`
   if (message.info.role === "user") {
     const text = message.parts
       .filter((part): part is SessionV1.TextPart => part.type === "text" && !part.ignored)
@@ -57,10 +163,11 @@ const serialize = (message: SessionV1.WithParts) => {
     const files = message.parts.flatMap((part) =>
       part.type === "file" ? [`[Attached ${part.mime}: ${part.filename ?? "file"}]`] : [],
     )
-    return [...(text ? [`[User]: ${text}`] : []), ...files].join("\n")
+    return [source, ...(text ? [`[User]: ${text}`] : []), ...files].join("\n")
   }
-  return message.parts
-    .flatMap((part) => {
+  return [
+    source,
+    ...message.parts.flatMap((part) => {
       if (part.type === "text") return part.text ? [`[Assistant]: ${part.text}`] : []
       if (part.type === "reasoning") return part.text ? [`[Assistant reasoning]: ${part.text}`] : []
       if (part.type !== "tool") return []
@@ -76,8 +183,8 @@ const serialize = (message: SessionV1.WithParts) => {
       }
       if (part.state.status === "error") return [call, `[Tool error]: ${part.state.error}`]
       return [call]
-    })
-    .join("\n")
+    }),
+  ].join("\n")
 }
 
 function summaryText(message: SessionV1.WithParts) {
@@ -187,6 +294,7 @@ export const use = serviceUse(Service)
 const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
+    const database = yield* Database.Service
     const config = yield* Config.Service
     const session = yield* Session.Service
     const agents = yield* Agent.Service
@@ -352,9 +460,11 @@ const layer = Layer.effect(
       }
 
       const agent = yield* agents.get("compaction")
-      const model = agent.model
-        ? yield* provider.getModel(agent.model.providerID, agent.model.modelID).pipe(Effect.orDie)
-        : yield* provider.getModel(userMessage.model.providerID, userMessage.model.modelID).pipe(Effect.orDie)
+      const selectedModel = compactionModelRef({
+        configured: agent.model,
+        session: userMessage.model,
+      })
+      const model = yield* provider.getModel(selectedModel.providerID, selectedModel.modelID).pipe(Effect.orDie)
       const cfg = yield* config.get()
       const history = compactionPart && messages.at(-1)?.info.id === input.parentID ? messages.slice(0, -1) : messages
       const prior = completedCompactions(history)
@@ -452,6 +562,44 @@ const layer = Layer.effect(
         processor.message.finish = "error"
         yield* session.updateMessage(processor.message)
         return "stop"
+      }
+
+      const compactedMessage = yield* MessageV2.get({ sessionID: input.sessionID, messageID: msg.id }).pipe(
+        Effect.provideService(Database.Service, database),
+        Effect.orDie,
+      )
+      const allMessages = yield* session.messages({ sessionID: input.sessionID }).pipe(Effect.orDie)
+      const userMessageIDs = new Set(
+        allMessages
+          .filter(
+            (item) =>
+              item.info.role === "user" &&
+              !item.parts.some((part) => part.type === "compaction") &&
+              item.parts.some((part) => !("synthetic" in part) || !part.synthetic),
+          )
+          .map((item) => item.info.id),
+      )
+      const decisions =
+        compactedMessage.info.role === "assistant"
+          ? decisionRecordsFromSummary(summaryText(compactedMessage), userMessageIDs)
+          : []
+      if (decisions.length > 0) {
+        const written = yield* MemRecordStore.writeBatch(database.db, {
+          sessionID: input.sessionID,
+          agent: "compaction",
+          entries: decisions,
+        }).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("failed to persist compaction decisions", { sessionID: input.sessionID, cause }).pipe(
+              Effect.as(undefined),
+            ),
+          ),
+        )
+        if (written && !written.ok)
+          yield* Effect.logWarning("compaction decisions were not persisted", {
+            sessionID: input.sessionID,
+            error: written.error.kind,
+          })
       }
 
       if (compactionPart && selected.tail_start_id && compactionPart.tail_start_id !== selected.tail_start_id) {
@@ -590,6 +738,7 @@ export const node = LayerNode.make({
   service: Service,
   layer: layer,
   deps: [
+    Database.node,
     Config.node,
     Session.node,
     Agent.node,

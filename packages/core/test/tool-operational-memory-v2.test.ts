@@ -8,7 +8,8 @@ import { Project } from "@opencode-ai/core/project"
 import { ProjectTable } from "@opencode-ai/core/project/sql"
 import { AbsolutePath } from "@opencode-ai/core/schema"
 import { SessionV2 } from "@opencode-ai/core/session"
-import { SessionTable } from "@opencode-ai/core/session/sql"
+import { MemRecordTable, SessionTable } from "@opencode-ai/core/session/sql"
+import { MemRecordStore } from "@opencode-ai/core/session/mem-record-store"
 import { ToolRegistry } from "@opencode-ai/core/tool/registry"
 import { GetOperationalMemoryTool } from "@opencode-ai/core/tool/get-operational-memory"
 import { PutInOperationalMemoryTool } from "@opencode-ai/core/tool/put-in-operational-memory"
@@ -106,6 +107,28 @@ const parsed = (result: { type: string; value: unknown }) => {
 }
 
 describe("V2 operational-memory tools", () => {
+  it.effect("writeBatch is idempotent for source-linked records", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const { db } = yield* Database.Service
+      const entry = {
+        type: "decision" as const,
+        subject: "reasoning-ledger",
+        decision: "keep a rolling summary",
+        source_ref: `${sessionID}#decision:abc123`,
+      }
+      const first = yield* MemRecordStore.writeBatch(db, { sessionID, agent: "compaction", entries: [entry] })
+      const second = yield* MemRecordStore.writeBatch(db, { sessionID, agent: "compaction", entries: [entry] })
+      expect(first.ok).toBe(true)
+      expect(second.ok).toBe(true)
+      if (!first.ok || !second.ok) return
+      expect(second.records[0]?.id).toBe(first.records[0]?.id)
+      const rows = yield* db.select().from(MemRecordTable).all().pipe(Effect.orDie)
+      expect(rows).toHaveLength(1)
+      expect(rows[0]?.authority).toBe("agent")
+    }),
+  )
+
   it.effect("put then search then get with provenance and revision chain", () =>
     Effect.gen(function* () {
       yield* setup

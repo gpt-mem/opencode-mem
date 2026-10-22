@@ -1239,6 +1239,31 @@ const layer = Layer.effect(
             continue
           }
 
+          if (
+            SessionCompaction.shouldTriggerReasoningCompaction({
+              providerID: model.providerID,
+              auto: (yield* config.get()).compaction?.auto !== false,
+              hasFinishedAssistant: lastFinished !== undefined,
+              lastFinishedIsSummary: lastFinished?.summary === true,
+              messages: msgs,
+            })
+          ) {
+            yield* Effect.logInfo("compacting accumulated Ladder reasoning", {
+              "session.id": sessionID,
+              threshold: msgs.some(
+                (message) =>
+                  message.info.role === "assistant" &&
+                  message.info.summary &&
+                  message.info.finish &&
+                  !message.info.error,
+              )
+                ? "incremental-50000-chars"
+                : "initial-100000-chars",
+            })
+            yield* compaction.create({ sessionID, agent: lastUser.agent, model: lastUser.model, auto: true })
+            continue
+          }
+
           const agent = yield* agents.get(lastUser.agent)
           if (!agent) {
             const available = (yield* agents.list()).filter((a) => !a.hidden).map((a) => a.name)

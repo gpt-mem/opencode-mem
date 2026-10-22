@@ -62,10 +62,36 @@ export const writeBatch = (
     }
     const projectID = session.project_id
 
-    for (const entry of input.entries) {
+    const seen = new Set<string>()
+    const entries = input.entries.filter((entry) => {
+      if (entry.source_ref === undefined) return true
+      const key = `${entry.type}\u0000${MemRecord.normalizeSubject(entry.subject)}\u0000${entry.source_ref}`
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+
+    const existingFor = (entry: MemRecord.Entry) =>
+      entry.source_ref === undefined
+        ? Effect.succeed(undefined)
+        : db
+            .select()
+            .from(MemRecordTable)
+            .where(
+              and(
+                eq(MemRecordTable.project_id, projectID),
+                eq(MemRecordTable.type, entry.type),
+                eq(MemRecordTable.subject, MemRecord.normalizeSubject(entry.subject)),
+                eq(MemRecordTable.source_ref, entry.source_ref),
+              ),
+            )
+            .get()
+
+    for (const entry of entries) {
       if ((entry.decision ?? "").trim() === "") {
         return { ok: false as const, error: { kind: "empty_decision" as const, subject: entry.subject } }
       }
+      if ((yield* existingFor(entry).pipe(Effect.orDie)) !== undefined) continue
       if (entry.supersedes !== undefined) {
         const target = yield* db
           .select({ id: MemRecordTable.id, status: MemRecordTable.status })
@@ -95,8 +121,13 @@ export const writeBatch = (
 
     const now = Date.now()
     const inserted: MemRecord.Record[] = []
-    for (const entry of input.entries) {
+    for (const entry of entries) {
       const decision = entry.decision ?? ""
+      const existing = yield* existingFor(entry).pipe(Effect.orDie)
+      if (existing !== undefined) {
+        inserted.push(toRecord(existing))
+        continue
+      }
       const authority = MemRecord.resolveAuthority({
         decided_by: entry.decided_by,
         recorded_by: input.agent,

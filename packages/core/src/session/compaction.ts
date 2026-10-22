@@ -34,6 +34,11 @@ const SUMMARY_TEMPLATE = `Output exactly the Markdown structure shown inside <te
 1. [immediate concrete action, or "(none)"]
 2. [next action if known, or "(none)"]
 
+## Decision Records
+\`\`\`json
+[]
+\`\`\`
+
 ## Relevant Files
 - [file or directory path: why it matters, or "(none)"]
 </template>
@@ -41,9 +46,12 @@ const SUMMARY_TEMPLATE = `Output exactly the Markdown structure shown inside <te
 Rules:
 - Keep every section, even when empty.
 - Use terse bullets, not prose paragraphs.
+- In Decision Records, emit a JSON array of durable user decisions only. Each entry must have string fields "subject", "decision", "reason", and "source_ref"; "source_ref" must be the exact source message ID from a [Source message id=... role=user] label. Do not record questions, tentative ideas, assistant proposals, or decisions without an explicit user source; emit [] when none qualify.
 - Preserve exact file paths, symbols, commands, error strings, URLs, and identifiers when known.
 - For source-code reads, summarize relevant behavior and preserve the exact path and line range so the code can be reopened; do not copy large source blocks into the summary.
 - For command and test output, preserve the final exit status, pass/fail counts, important errors, and relevant output from both the beginning and end.
+- Treat repeated test-run output from any runner like ReplacingMergeTree rows. Recognize common runners such as Vitest, Jest, Mocha, Playwright, Cypress, pytest, go test, and cargo test; identify a project from the command working directory and/or runner banner's absolute project path, then keep only the latest completed run for that project in the active summary. The latest run is the complete result for its recorded command; do not label it incomplete because earlier runs were dropped. Preserve the runner, command and scope, ref when known, exit status, counts, duration, and concise failure details. Keep runs from different project directories separate; if project identity is uncertain, do not merge them. Keep older runs only when the user explicitly asks to compare them. Older full logs remain retrievable from session history when available, but should not be copied into the summary.
+- Compress assistant reasoning semantically and gently, preserving paragraph integrity. Treat each substantive reasoning paragraph as one thought: preserve its point together with the evidence, constraint, or trade-off that supports it; do not split it into disconnected fragments or combine clauses from unrelated paragraphs. Remove repeated exploration only when it adds no new information. Keep the first substantive reasoning paragraph as an explicit initial plan/decision anchor and carry it forward through every summary update. Give the latest user request and the immediately preceding substantive assistant result the most detail. When a user message is short or elliptical (for example, “continue”, “продолжай”, or “why?”), interpret it as referring to that preceding result unless the conversation clearly signals a topic change, and retain enough of that result to make the follow-up understandable. Apply exponential recency weighting to earlier reasoning: reduce detail progressively for each older turn, while keeping the first substantive reasoning paragraph as a separate anchor with extra weight regardless of age. For long reasoning, retain roughly 30% or more of its distinct substantive points when space allows; this is a semantic guardrail, not a quota for verbatim text or tokens. Preserve more when older reasoning contains unique evidence, rejected alternatives, or rationale needed to understand a later decision.
 - Separate verified results from hypotheses, and retain unresolved questions that affect the next step.
 - Do not mention the summary process or that context was compacted.`
 const SUMMARY_UPDATE_INSTRUCTIONS = `The <prior-summary> summarizes everything that happened before the <conversation>. Construct a new summary that combines both. The <prior-summary> is discarded after this: anything you do not carry into the new summary is lost.
