@@ -526,6 +526,31 @@ describe("OpenAI Chat route", () => {
     }),
   )
 
+  it.effect("drops a corrupted repeated control-marker suffix from a text delta", () =>
+    Effect.gen(function* () {
+      const answer = "The task completed successfully."
+      const marker = "<|tool_call_begin|>"
+      const response = yield* LLMClient.generate(request).pipe(
+        Effect.provide(
+          fixedResponse(sseEvents(deltaChunk({ content: `${answer}${marker.repeat(166)}garbage` }), deltaChunk({}, "stop"))),
+        ),
+      )
+
+      expect(response.text).toBe(answer)
+    }),
+  )
+
+  it.effect("preserves isolated control-marker text", () =>
+    Effect.gen(function* () {
+      const content = "The literal token <|tool_call_begin|> appears in this explanation."
+      const response = yield* LLMClient.generate(request).pipe(
+        Effect.provide(fixedResponse(sseEvents(deltaChunk({ content }), deltaChunk({}, "stop")))),
+      )
+
+      expect(response.text).toBe(content)
+    }),
+  )
+
   it.effect("parses OpenAI-compatible reasoning content deltas", () =>
     Effect.gen(function* () {
       const body = sseEvents(
