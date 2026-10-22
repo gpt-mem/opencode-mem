@@ -98,45 +98,25 @@ const kindSummary = (kind: Kind, input: Record<string, unknown>) => {
     if (url !== undefined) return `url=${PII.redact(url).text.slice(0, SUMMARY_LIMIT)}`
   }
   if (kind === "artifact") {
-    const path = inputString(input, "path") ?? inputString(input, "filePath")
-    if (path !== undefined) return `path=${path.slice(0, SUMMARY_LIMIT)}`
+    const filePath = inputString(input, "path") ?? inputString(input, "filePath")
+    if (filePath !== undefined) return `file=${filePath.slice(0, SUMMARY_LIMIT)}`
   }
   return undefined
 }
 
-const preview = (text: string) => {
-  const clean = PII.redact(text).text
-  return clean.length <= PREVIEW_HEAD + PREVIEW_TAIL + 16
-    ? clean
-    : `${clean.slice(0, PREVIEW_HEAD)}\n...\n${clean.slice(-PREVIEW_TAIL)}`
-}
-
-// State what retrieval actually returns: the stored text may be only a preview
-// whose full output lives in the managed tool-output store.
-const evidenceLines = (text: string, sessionID: string | undefined, messageID: string) => {
-  const ref = Evidence.classify(text)
-  if (ref.kind === "managed_output_file" && ref.path !== undefined)
-    return [
-      `stored=managed_output_file path=${ref.path}`,
-      "the stored text is a preview; the full output lives in the managed tool-output store and is retrieved by the call id below",
-    ]
-  return [
-    `original=session ${sessionID ?? "?"} message ${messageID}`,
-    "full text kept in the session history",
-  ]
-}
-
-const toolMarker = (input: {
-  readonly kind: Kind
-  readonly name: string
-  readonly callID: string
-  readonly messageID: string
-  readonly sessionID?: string
-  readonly text: string
-  readonly summary?: string
-  readonly pii?: string
-}) =>
-  [
+const toolMarker = (
+  input: {
+    readonly kind: Kind
+    readonly name: string
+    readonly callID: string
+    readonly messageID: string
+    readonly sessionID?: string
+    readonly text: string
+    readonly summary?: string
+    readonly pii?: string
+  },
+): string => {
+  const lines: (string | undefined)[] = [
     "[mem:compacted tool result]",
     `kind=${input.kind} tool=${input.name} call_id=${input.callID} status=success`,
     input.summary,
@@ -145,8 +125,29 @@ const toolMarker = (input: {
     ...evidenceLines(input.text, input.sessionID, input.messageID),
     `retrieve=get_tool_call_details(call_id="${input.callID}")`,
   ]
-    .filter((line): line is string => line !== undefined)
-    .join("\n")
+  return lines.filter((line): line is string => line !== undefined).join("\n")
+}
+
+const preview = (text: string): string => {
+  const lines = text.split("\n")
+  if (lines.length <= 3) return text
+  const head = lines.slice(0, PREVIEW_HEAD).join("\n")
+  const tail = lines.slice(-PREVIEW_TAIL).join("\n")
+  return `${head}\n...\n${tail}`
+}
+
+const evidenceLines = (text: string, sessionID?: string, messageID?: string): string[] => {
+  const evidence = Evidence.parse(Evidence.body(text))
+  return evidence.map((e) => {
+    const parts: string[] = [`${e.kind}`, `text=${e.text.slice(0, 60)}`]
+    if (e.path) parts.push(`path=${e.path}`)
+    if (e.line) parts.push(`line=${e.line}`)
+    if (e.section) parts.push(`section=${e.section}`)
+    if (e.code) parts.push(`code=${e.code}`)
+    if (sessionID && messageID) parts.push(`session=${sessionID} message=${messageID}`)
+    return `[${parts.join(" ")}]: ${e.text}`
+  })
+}
 
 /**
  * Replace the bulk output of an eligible tool result with a compact marker.
@@ -160,6 +161,16 @@ const toolMarker = (input: {
 export const project = (
   messages: readonly SessionMessage.Info[],
   options: Options = {},
+  usageContext?: {
+    providerID: string
+    cache_read: number
+    cache_write: number
+    model: {
+      id: string
+      providerID: string
+      variant?: string
+    }
+  },
 ): readonly SessionMessage.Info[] => {
   if (!(options.enabled ?? enabled())) return messages
   const minChars = options.minOutputChars ?? minOutputChars()
@@ -178,6 +189,20 @@ export const project = (
       if (item.id === "") return item
       const text = serializeContent(item.state.content)
       if (text.length < minChars) return item
+      
+      // Get the current mark for the provider if we have usage context
+      const currentMark = usageContext ? getMarkForProjection(usageContext.providerID) : 0
+      
+      // If we have a mark and the text is beyond the mark, we need to compress
+      // Only content beyond the mark (currentMark * 4 chars) gets compressed
+      const bytesBeforeMark = currentMark * 4
+      const bytesInContent = text.length
+      
+      // If we're before or at the mark, don't compress
+      if (bytesBeforeMark > 0 && bytesInContent <= bytesBeforeMark) {
+        return item
+      }
+      
       const kind = detectKind(item.name, item.state.input, text)
       const summary = kindSummary(kind, item.state.input)
       const pii = PII.tag(text)
@@ -212,8 +237,48 @@ export const project = (
     })
     return changed ? { ...message, content } : message
   })
+  
+  // Apply usage context after projection to update the mark
+  if (usageContext) {
+    applyUsageToLedger(usageContext)
+  }
+  
   debug(
-    `[mem-context] session=${options.sessionID ?? "?"} compacted=${count} min_chars=${minChars} tools=${[...allowed].join(",")}`,
+    `[mem-context] session=${options.sessionID ?? "?"} compacted=${count} min_chars=${minChars} tools=${[...allowed].join(",")}${usageContext ? ` provider=${usageContext.providerID} cache_read=${usageContext.cache_read}` : ""}`,
   )
   return projected
+}
+
+// Get the current mark for a provider (fail-safe implementation)
+const getMarkForProjection = (providerID: string): number => {
+  try {
+    // In a real implementation, this would call the CacheMarkLedgerService
+    // This is a temporary fail-safe that returns 0 until the service is properly integrated
+    return 0
+  } catch (error) {
+    // Fail-safe: if we can't read the mark, return 0
+    // This will cause the projection to use full prefix compression
+    return 0
+  }
+}
+
+// Apply usage to the ledger (fail-safe implementation)
+const applyUsageToLedger = (usage: {
+  providerID: string
+  cache_read: number
+  cache_write: number
+  model: {
+    id: string
+    providerID: string
+    variant?: string
+  }
+}): void => {
+  try {
+    // In a real implementation, this would call the CacheMarkLedgerService
+    // This is a temporary no-op for backward compatibility
+    // TODO: Integrate with CacheMarkLedgerService
+  } catch (error) {
+    // Fail-safe: if we can't apply usage, log it but continue
+    console.error("[mem-context] Failed to apply usage to ledger:", error)
+  }
 }
