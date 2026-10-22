@@ -13,6 +13,7 @@ import { SessionEvent } from "../event.js"
 import { SessionInbox } from "../inbox.js"
 import { SessionHistory } from "../history.js"
 import { SessionProviderContext } from "../provider-context.js"
+import { SessionMemoryContext } from "../memory-context.js"
 import { SessionModelRequest } from "../model-request.js"
 import { SessionModelTransport } from "../model-transport.js"
 import { SessionMessage } from "../message.js"
@@ -230,7 +231,9 @@ const layer = Layer.effect(
           model: loaded.model,
           tools: loaded.tools,
           initial: loaded.initial,
-          messages: loaded.messages,
+          // The provider-visible view of the history may be compressed; the
+          // stored history keeps the original output.
+          messages: SessionMemoryContext.project(loaded.messages, { sessionID }),
         })
         // A session that keeps making the same call is a doom loop. The warning
         // is advisory: it tells the model to change the approach, and the
