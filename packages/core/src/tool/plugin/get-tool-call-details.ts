@@ -39,19 +39,22 @@ const Input = Schema.Struct({
   ),
 })
 
+// The response of this tool is bounded by the same output limit as any other tool
+// result, so the scalars come first and the retrieved text comes last: the model
+// reads the page size and the source without spending a second call on them.
 const Output = Schema.Struct({
   found: Schema.Boolean,
   call_id: Schema.String,
   tool: Schema.optional(Schema.String),
   status: Schema.optional(Schema.String),
-  output: Schema.optional(Schema.String),
-  truncated: Schema.optional(Schema.Boolean),
   total_chars: Schema.optional(Schema.Number),
+  truncated: Schema.optional(Schema.Boolean),
   offset: Schema.optional(Schema.Number),
   next_offset: Schema.optional(Schema.Number),
   source: Schema.optional(Schema.String),
   managed_path: Schema.optional(Schema.String),
   note: Schema.optional(Schema.String),
+  output: Schema.optional(Schema.String),
 })
 
 const toContent = (output: unknown) => JSON.stringify(output, null, 2)
@@ -178,14 +181,20 @@ export const Plugin = {
                         .readFileStringSafe(managedPath)
                         .pipe(Effect.catch(() => Effect.succeed(undefined)))
                 const text = original ?? stored
+                const page = window(text, offset, limit)
                 const output = {
                   found: true,
                   call_id: input.call_id,
                   tool: part.name,
                   status: part.state.status,
-                  ...window(text, offset, limit),
+                  total_chars: page.total_chars,
+                  truncated: page.truncated,
+                  offset: page.offset,
+                  next_offset: page.next_offset,
                   source: original === undefined ? "stored_output" : "managed_output_file",
                   ...(managedPath !== undefined ? { managed_path: managedPath } : {}),
+                  note: page.note,
+                  output: page.output,
                 }
                 return { output, content: toContent(output) }
               }

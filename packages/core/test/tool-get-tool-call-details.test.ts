@@ -201,6 +201,27 @@ describe("get_tool_call_details", () => {
     ),
   )
 
+  it.live("reports the page scalars before the retrieved text", () =>
+    withDataDir((root) =>
+      Effect.gen(function* () {
+        const fs = yield* FSUtil.Service
+        const original = Array.from({ length: 300 }, (_, index) => `line ${index}`).join("\n")
+        const managed = path.join(root, "tool-output", "tool_fixture")
+        yield* fs.writeFileString(managed, original)
+        const marker = `[showing lines 1-2 of 300; full output saved to ${managed} — read or grep that file instead of re-running the command]`
+        yield* setup([{ call_id: CALL, text: marker }])
+        const registry = yield* Tool.Service
+        const result = output(yield* executeTool(registry, call({ call_id: CALL })))
+        const keys = Object.keys(result)
+        // The answer of this tool is bounded like any other tool result, so the
+        // scalars have to precede the text: otherwise the model reads them back
+        // from the saved file and pays an extra call for it.
+        expect(keys.indexOf("total_chars")).toBeLessThan(keys.indexOf("output"))
+        expect(keys.indexOf("source")).toBeLessThan(keys.indexOf("output"))
+      }),
+    ),
+  )
+
   it.live("finds a call recorded in another session of the same project", () =>
     withDataDir(() =>
       Effect.gen(function* () {
