@@ -2,6 +2,7 @@ import { Context, Effect, Layer } from "effect"
 import { Database } from "../database/database.js"
 import { ProviderCacheMarkTable } from "./sql.js"
 import { eq } from "drizzle-orm"
+import { makeLocationNode } from "@opencode/util/effect/app-node"
 
 // Types
 export type ProviderID = string
@@ -166,3 +167,9 @@ export const runLedger = <T, E>(
 ): Effect.Effect<T, E, Database.Database.Service> => {
   return effect
 }
+
+export const node = makeLocationNode({
+  service: CacheMarkLedgerService,
+  layer: CacheMarkLedgerService.layer,
+  deps: [Database.node],
+})
