@@ -1,7 +1,8 @@
 import { Context, Effect, Layer } from "effect"
-import { sqliteTable, text, integer } from "drizzle-orm/sqlite-core"
 import { Database } from "../database/database.js"
-import type { ProviderCacheMarkTable } from "./sql.js"
+import { sqliteTable, text, integer } from "drizzle-orm/sqlite-core"
+import { ProviderCacheMarkTable } from "./sql.js"
+import { eq } from "drizzle-orm"
 
 // Types
 export type ProviderID = string
@@ -14,15 +15,18 @@ export interface CacheMarkLedger {
    * Apply a usage event from a provider response.
    * This is called after each provider response to update the mark based on cache_read.
    */
-  applyUsage(providerID: ProviderID, usage: {
-    cache_read: number
-    cache_write: number
-    model: {
-      id: string
-      providerID: string
-      variant?: string
+  applyUsage(
+    providerID: ProviderID, 
+    usage: {
+      cache_read: number
+      cache_write: number
+      model: {
+        id: string
+        providerID: string
+        variant?: string
+      }
     }
-  }): Effect.Effect<void, Error>
+  ): Effect.Effect<void, Error>
   
   /**
    * Get the mark for use in memory context projection.
@@ -48,8 +52,8 @@ export class CacheMarkLedgerImpl implements CacheMarkLedger {
     return Effect.gen(function* () {
       const db = yield* this.database
       const [row] = yield* db.select()
-        .from(sqlProviderCacheMarkTable)
-        .where(eq(sqlProviderCacheMarkTable.provider_id, providerID))
+        .from(ProviderCacheMarkTable)
+        .where(eq(ProviderCacheMarkTable.provider_id, providerID))
         .execute()
       
       // Default to 0 if no mark exists
@@ -74,8 +78,8 @@ export class CacheMarkLedgerImpl implements CacheMarkLedger {
       
       // Get current mark
       const current = yield* db.select()
-        .from(sqlProviderCacheMarkTable)
-        .where(eq(sqlProviderCacheMarkTable.provider_id, providerID))
+        .from(ProviderCacheMarkTable)
+        .where(eq(ProviderCacheMarkTable.provider_id, providerID))
         .execute()
       
       const currentMark = current[0]?.mark_tokens ?? 0
@@ -90,7 +94,7 @@ export class CacheMarkLedgerImpl implements CacheMarkLedger {
         const prefix_hash = newMark > 0 ? `hash_at_${newMark}` : null
         
         yield* db
-          .insert(sqlProviderCacheMarkTable)
+          .insert(ProviderCacheMarkTable)
           .values({
             provider_id: providerID,
             mark_tokens: newMark,
@@ -107,9 +111,9 @@ export class CacheMarkLedgerImpl implements CacheMarkLedger {
       } else if (current[0]) {
         // Update last_used_at even if mark didn't change
         yield* db
-          .update(sqlProviderCacheMarkTable)
+          .update(ProviderCacheMarkTable)
           .set({ last_used_at: Date.now() })
-          .where(eq(sqlProviderCacheMarkTable.provider_id, providerID))
+          .where(eq(ProviderCacheMarkTable.provider_id, providerID))
           .execute()
       }
     })
@@ -132,8 +136,8 @@ export class CacheMarkLedgerImpl implements CacheMarkLedger {
     return Effect.gen(function* () {
       const db = yield* this.database
       const [row] = yield* db.select()
-        .from(sqlProviderCacheMarkTable)
-        .where(eq(sqlProviderCacheMarkTable.provider_id, providerID))
+        .from(ProviderCacheMarkTable)
+        .where(eq(ProviderCacheMarkTable.provider_id, providerID))
         .execute()
       
       if (!row?.last_used_at) {
@@ -161,9 +165,4 @@ export class CacheMarkLedgerService extends Context.Tag<"CacheMarkLedger">()<
 }
 
 // SQL table definition (exported for migration)
-export const sqlProviderCacheMarkTable = sqliteTable("provider_cache_mark", {
-  provider_id: text().primaryKey(),
-  mark_tokens: integer().notNull().default(0),
-  prefix_hash: text(),
-  last_used_at: integer().notNull(),
-})
+export const sqlProviderCacheMarkTable = ProviderCacheMarkTable

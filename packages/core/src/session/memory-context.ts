@@ -1,5 +1,3 @@
-export * as SessionMemoryContext from "./memory-context.js"
-
 import fs from "fs/promises"
 import path from "path"
 import { SessionMessage } from "./message.js"
@@ -97,6 +95,37 @@ const getCacheMarkLedgerService = () => {
 const inputString = (input: Record<string, unknown>, key: string) => {
   const value = input[key]
   return typeof value === "string" ? value : undefined
+}
+
+const getMarkForProjection = async (providerID: string): Promise<number> => {
+  try {
+    const service = getCacheMarkLedgerService()
+    if (service && typeof service.getMark === "function") {
+      try {
+        return await Effect.runPromise(service.getMark(providerID))
+      } catch (error) {
+        console.warn("[mem-context] Failed to get provider mark from ledger, using 0:", error)
+        return 0
+      }
+    } else {
+      // Fallback to direct database access if service not available
+      const table = getProviderCacheMarkTable()
+      if (table) {
+        const db = await getDatabase()
+        const [row] = await db
+          .select()
+          .from(table)
+          .where(eq(table.provider_id, providerID))
+          .execute()
+        return row?.mark_tokens ?? 0
+      }
+      return 0
+    }
+  } catch (error) {
+    // Fail-safe: if we can't read the mark, return 0
+    console.warn("[mem-context] Failed to get provider mark, using full prefix compression:", error)
+    return 0
+  }
 }
 
 const detectKind = (name: string, input: Record<string, unknown>, text: string): Kind => {
@@ -274,39 +303,7 @@ export const project = (
   return projected
 }
 
-// Get the current mark for a provider
-const getMarkForProjection = async (providerID: string): Promise<number> => {
-  try {
-    // Try to get the current mark from the cache mark ledger
-    // Use the actual CacheMarkLedgerService if available
-    const service = getCacheMarkLedgerService()
-    if (service && typeof service.getMark === "function") {
-      // Use the actual CacheMarkLedgerService
-      // Note: This is a synchronous call for now, but in production it should be async
-      // The CacheMarkLedgerService.getMark returns an Effect.Effect<number, Error>
-      // For simplicity in this implementation, we'll use the actual service call
-      return await service.getMark(providerID)
-    } else {
-      // Fallback to direct database access if service not available
-      const table = getProviderCacheMarkTable()
-      if (table) {
-        const db = await getDatabase()
-        const [row] = await db
-          .select()
-          .from(table)
-          .where(eq(table.provider_id, providerID))
-          .execute()
-        return row?.mark_tokens ?? 0
-      }
-      return 0
-    }
-  } catch (error) {
-    // Fail-safe: if we can't read the mark, return 0
-    // This will cause the projection to use full prefix compression
-    console.warn("[mem-context] Failed to get provider mark, using full prefix compression:", error)
-    return 0
-  }
-}
+
 
 // Helper function to get provider mark
 const getProviderMark = async (providerID: string): Promise<number> => {
@@ -371,3 +368,5 @@ const applyUsageToLedger = async (usage: {
     console.warn("[mem-context] Failed to apply usage to ledger, continuing:", error)
   }
 }
+
+export { getProviderMark, getMarkForProjection }
