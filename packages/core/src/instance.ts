@@ -47,7 +47,7 @@ import { Snapshot } from "./snapshot.js"
 import { InstructionDiscovery } from "./instruction-discovery.js"
 import { InstructionBuiltIns } from "./instructions/builtins.js"
 import { InstructionEntry } from "./session/instruction-entry.js"
-import { CacheMarkLedgerEntry } from "./session/cache-mark-ledger-entry.js"
+import { node as CacheMarkLedgerNode } from "./session/cache-mark-ledger.js"
 import { SessionInstructions } from "./session/instructions.js"
 import { McpTool } from "./tool/mcp.js"
 import { ReadToolFileSystem } from "./tool/read-filesystem.js"
@@ -99,7 +99,7 @@ const nodes = [
   InstructionEntry.node,
   Form.node,
   Generate.node,
-  CacheMarkLedgerEntry.node,
+  CacheMarkLedgerNode,
   Voice.node,
   ReadToolFileSystem.node,
   McpTool.node,

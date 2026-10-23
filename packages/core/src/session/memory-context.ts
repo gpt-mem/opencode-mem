@@ -5,7 +5,7 @@ import { Evidence } from "./evidence.js"
 import { PII } from "./pii.js"
 import { MAX_BYTES } from "../tool-output.js"
 import { Global } from "@opencode/util/global"
-import { Effect } from "effect"
+
 
 export type Kind = "bash" | "url" | "artifact" | "generic"
 
@@ -281,19 +281,11 @@ export const project = (
 
 // Helper function to get provider mark
 const getProviderMark = async (providerID: string): Promise<number> => {
-  return await getMarkForProjection(providerID)
+  return await getMarkForProjection(providerID) ?? 0
 }
 
 // Get the database table for provider cache mark
-const getProviderCacheMarkTable = () => {
-  try {
-    const { ProviderCacheMarkTable } = require("./sql") as any
-    return ProviderCacheMarkTable
-  } catch (error) {
-    console.warn("[mem-context] Failed to get provider cache mark table:", error)
-    return null
-  }
-}
+
 
 // Helper function to apply provider usage
 const applyProviderUsage = async (usage: {
