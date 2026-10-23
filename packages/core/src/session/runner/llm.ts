@@ -228,7 +228,7 @@ const layer = Layer.effect(
           continue
         }
         const stepLimitReached = loaded.agent.info.steps !== undefined && step >= loaded.agent.info.steps
-        const providerMark = yield* ledger.getMark(loaded.model.providerID)
+        const providerMark = yield* ledger.getMark(loaded.model.ref.providerID)
         const transcript = SessionModelRequest.baseTranscript({
           agent: loaded.agent.info,
           model: loaded.model,
