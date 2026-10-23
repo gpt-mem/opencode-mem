@@ -1,6 +1,6 @@
 export * as MemoryContext from "./memory-context"
 
-import { Flag } from "../flag/flag"
+
 import { Evidence } from "./evidence"
 import { PII } from "./pii"
 import { MemDebugLog } from "./mem-debug-log"
@@ -173,13 +173,13 @@ const shellMarker = (args: ShellArgs) =>
 // (live e2e on ladder/free). FIRST_DELIVERY alone still selects the mode on
 // ledger-less setups (zero-cache providers, FD-only acceptance runs).
 const firstDeliveryPolicy = (options: Options) =>
-  options.firstDelivery ?? (Flag.OPENCODE_MEMORY_FIRST_DELIVERY || Flag.OPENCODE_MEMORY_CACHE_MARK)
+  options.firstDelivery ?? (process.env.OPENCODE_MEMORY_FIRST_DELIVERY === "1" || process.env.OPENCODE_MEMORY_CACHE_MARK === "1")
 
 export const project = (
   messages: readonly SessionMessage.Message[],
   options: Options = {},
 ): readonly SessionMessage.Message[] => {
-  const enabled = options.enabled ?? Flag.OPENCODE_MEMORY_CONTEXT
+  const enabled = options.enabled ?? process.env.OPENCODE_MEMORY_CONTEXT === "1"
   if (!enabled) return messages
   const firstDelivery = firstDeliveryPolicy(options)
   const minChars = firstDelivery
@@ -288,7 +288,7 @@ export const project = (
     return changed ? { ...message, content } : message
   })
 
-  if (compacted > 0 && Flag.OPENCODE_MEMORY_CONTEXT_DEBUG)
+  if (compacted > 0 && process.env.OPENCODE_MEMORY_CONTEXT_DEBUG === "1")
     MemDebugLog.write(
       "memory-context.log",
       `[mem-context] session=${options.sessionID ?? "?"} compacted=${compacted} first_delivery=${firstDelivery} protected_from=${protectedFrom} intent_cut=${cutIndex >= 0} mark=${markFloor}`,
@@ -303,7 +303,7 @@ export const projectV1 = (
   messages: readonly SessionV1.WithParts[],
   options: Options = {},
 ): readonly SessionV1.WithParts[] => {
-  const enabled = options.enabled ?? Flag.OPENCODE_MEMORY_CONTEXT
+  const enabled = options.enabled ?? process.env.OPENCODE_MEMORY_CONTEXT === "1"
   if (!enabled) return messages
   const firstDelivery = firstDeliveryPolicy(options)
   const minChars = firstDelivery
@@ -376,7 +376,7 @@ export const projectV1 = (
     return changed ? { ...message, parts } : message
   })
 
-  if (compacted > 0 && Flag.OPENCODE_MEMORY_CONTEXT_DEBUG)
+  if (compacted > 0 && process.env.OPENCODE_MEMORY_CONTEXT_DEBUG === "1")
     MemDebugLog.write(
       "memory-context.log",
       `[mem-context] session=${options.sessionID ?? "?"} compacted=${compacted} first_delivery=${firstDelivery} protected_from=${protectedFrom} intent_cut=${cutIndex >= 0} mark=${markFloor}`,
@@ -428,14 +428,14 @@ const boundaryFor = (
 // boundary threshold so A/B measurement can tune aggressiveness without
 // changing boundary-mode behavior.
 const resolveFirstDeliveryMinChars = (options: Options) => {
-  const value = Number(options.firstDeliveryMinChars ?? Flag.OPENCODE_MEMORY_FIRST_DELIVERY_MIN_CHARS)
+  const value = Number(options.firstDeliveryMinChars ?? Number(process.env.OPENCODE_MEMORY_FIRST_DELIVERY_MIN_CHARS || 0))
   return Number.isFinite(value) && value >= 0 ? Math.floor(value) : DEFAULT_MIN_OUTPUT_CHARS
 }
 
 // First-delivery allowlist (issue #23): only tools whose bulk output is cheap
 // to re-retrieve on demand. Env override is comma-separated tool names.
 const resolveFirstDeliveryTools = (options: Options): ReadonlySet<string> => {
-  const raw = options.firstDeliveryTools ?? Flag.OPENCODE_MEMORY_FIRST_DELIVERY_TOOLS
+  const raw = options.firstDeliveryTools ?? process.env.OPENCODE_MEMORY_FIRST_DELIVERY_TOOLS || ""
   if (raw === undefined || raw.trim() === "") return new Set(DEFAULT_FIRST_DELIVERY_TOOLS)
   const parsed = raw
     .split(",")
@@ -463,7 +463,7 @@ const stableBoundary = (raw: number, batch: number) => (batch <= 1 ? raw : Math.
 // Batch size is overridable via OPENCODE_MEMORY_BATCH_SIZE for A/B measurement
 // of the token/cost trade-off (issue #20); 1 reproduces the sliding boundary.
 const resolveBatch = (options: Options) => {
-  const value = options.batchSize ?? Number(Flag.OPENCODE_MEMORY_BATCH_SIZE)
+  const value = options.batchSize ?? Number(process.env.OPENCODE_MEMORY_BATCH_SIZE || 0)
   return Number.isFinite(value) && value >= 1 ? Math.floor(value) : DEFAULT_BATCH_SIZE
 }
 
@@ -471,4 +471,4 @@ const resolveBatch = (options: Options) => {
 // cached tokens for expensive uncached re-sends (issue #20). Enable it via
 // OPENCODE_MEMORY_MIDTURN for providers without prompt caching or when
 // shrinking the provider-visible prompt matters more than dollars.
-const resolveMidTurn = (options: Options) => options.midTurn ?? Flag.OPENCODE_MEMORY_MIDTURN
+const resolveMidTurn = (options: Options) => options.midTurn ?? process.env.OPENCODE_MEMORY_MIDTURN === "1"
