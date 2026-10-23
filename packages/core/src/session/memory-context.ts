@@ -18,6 +18,8 @@ export type Options = {
   readonly tools?: ReadonlySet<string>
   /** Session the history belongs to, named in the marker. */
   readonly sessionID?: string
+  /** Confirmed cache prefix length for this provider. */
+  readonly providerMark?: number
 }
 
 /** Tools whose bulk output dominates a tool-heavy session. */

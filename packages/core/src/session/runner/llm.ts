@@ -228,6 +228,7 @@ const layer = Layer.effect(
           continue
         }
         const stepLimitReached = loaded.agent.info.steps !== undefined && step >= loaded.agent.info.steps
+        const providerMark = yield* ledger.getMark(loaded.model.providerID)
         const transcript = SessionModelRequest.baseTranscript({
           agent: loaded.agent.info,
           model: loaded.model,
@@ -235,7 +236,7 @@ const layer = Layer.effect(
           initial: loaded.initial,
           // The provider-visible view of the history may be compressed; the
           // stored history keeps the original output.
-          messages: SessionMemoryContext.project(loaded.messages, { sessionID }),
+          messages: SessionMemoryContext.project(loaded.messages, { sessionID, providerMark }),
         })
         // A session that keeps making the same call is a doom loop. The warning
         // is advisory: it tells the model to change the approach, and the
