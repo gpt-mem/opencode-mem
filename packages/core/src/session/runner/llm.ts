@@ -14,7 +14,7 @@ import { SessionInbox } from "../inbox.js"
 import { SessionHistory } from "../history.js"
 import { SessionProviderContext } from "../provider-context.js"
 import { SessionMemoryContext } from "../memory-context.js"
-import { CacheMarkLedgerService, node as CacheMarkLedgerNode } from "../cache-mark-ledger.js"
+import { CacheMarkLedgerService, type CacheMarkLedger, node as CacheMarkLedgerNode } from "../cache-mark-ledger.js"
 import { SessionModelRequest } from "../model-request.js"
 import { SessionModelTransport } from "../model-transport.js"
 import { SessionMessage } from "../message.js"
@@ -343,7 +343,7 @@ const layer = Layer.effect(
         })
         if (completed !== undefined) return completed
       }
-    }))
+    })
 
     const settleStaleCompactions = Effect.fn("SessionRunner.settleStaleCompactions")(function* (
       sessionID: SessionSchema.ID,
