@@ -236,7 +236,7 @@ const layer = Layer.effect(
           initial: loaded.initial,
           // The provider-visible view of the history may be compressed; the
           // stored history keeps the original output.
-          messages: SessionMemoryContext.project(loaded.messages, { sessionID, providerMark }),
+          messages: SessionMemoryContext.project(loaded.messages, { sessionID, markIndex: providerMark }),
         })
         // A session that keeps making the same call is a doom loop. The warning
         // is advisory: it tells the model to change the approach, and the
