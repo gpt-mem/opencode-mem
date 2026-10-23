@@ -14,7 +14,6 @@ import { SessionInbox } from "../inbox.js"
 import { SessionHistory } from "../history.js"
 import { SessionProviderContext } from "../provider-context.js"
 import { SessionMemoryContext } from "../memory-context.js"
-import { CacheMarkLedgerService } from "../cache-mark-ledger.js"
 import { SessionModelRequest } from "../model-request.js"
 import { SessionModelTransport } from "../model-transport.js"
 import { SessionMessage } from "../message.js"
@@ -227,9 +226,7 @@ const layer = Layer.effect(
           continue
         }
         const stepLimitReached = loaded.agent.info.steps !== undefined && step >= loaded.agent.info.steps
-        const providerMark = yield* Effect.runPromise(
-          SessionMemoryContext.getProviderMark(loaded.model.providerID)
-        )
+        const providerMark = yield* SessionMemoryContext.getProviderMark(loaded.model.ref.providerID)
         const transcript = SessionModelRequest.baseTranscript({
           agent: loaded.agent.info,
           model: loaded.model,
@@ -243,11 +240,15 @@ const layer = Layer.effect(
               sessionID,
               providerMark,
             },
-            loaded.model.providerID ? {
-              providerID: loaded.model.providerID,
-              cache_read: loaded.cost.tokens_cache_read,
-              cache_write: loaded.cost.tokens_cache_write,
-              model: loaded.model,
+            loaded.model.ref.providerID ? {
+              providerID: loaded.model.ref.providerID,
+              cache_read: loaded.session.tokens.cache.read,
+              cache_write: loaded.session.tokens.cache.write,
+              model: {
+                id: loaded.model.ref.id,
+                providerID: loaded.model.ref.providerID,
+                variant: loaded.model.ref.variant,
+              },
             } : undefined
           ),
         })

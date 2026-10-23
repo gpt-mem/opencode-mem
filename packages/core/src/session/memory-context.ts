@@ -8,6 +8,7 @@ import { Global } from "@opencode/util/global"
 import { sqliteTable, text, integer } from "drizzle-orm/sqlite-core"
 import { eq } from "drizzle-orm"
 import type { ProviderCacheMarkTable } from "./sql.js"
+import { Effect } from "effect"
 
 export type Kind = "bash" | "url" | "artifact" | "generic"
 
