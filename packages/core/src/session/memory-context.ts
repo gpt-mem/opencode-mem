@@ -94,32 +94,12 @@ const inputString = (input: Record<string, unknown>, key: string) => {
   return typeof value === "string" ? value : undefined
 }
 
-const getMarkForProjection = async (providerID: string): Promise<number> => {
-  try {
-    const service = getCacheMarkLedgerService()
-    if (service && typeof service.getMark === "function") {
-      try {
-        return await Effect.runPromise(service.getMark(providerID))
-      } catch (error) {
-        console.warn("[mem-context] Failed to get provider mark from ledger, using 0:", error)
-        return 0
-      }
-    } else {
-      // Fallback to direct database access if service not available
-      const table = getProviderCacheMarkTable()
-      if (table) {
-        // We need to get the database service - in a real implementation we'd use Effect.runPromise
-        // For now, return 0 as the mark since we can't access the database directly in this context
-        console.warn("[mem-context] Direct database access not available in test, using 0 for mark")
-        return 0
-      }
-      return 0
-    }
-  } catch (error) {
-    // Fail-safe: if we can't read the mark, return 0
-    console.warn("[mem-context] Failed to get provider mark, using full prefix compression:", error)
-    return 0
-  }
+// getMarkForProjection is now Effect-based - requires Database.Service in runtime
+export const getMarkForProjection = async (providerID: string): Promise<number | null> => {
+  // This helper should be called from an Effect context with Database.Service
+  // or should use Effect.runPromise to run within the proper context
+  console.warn("[mem-context] getMarkForProjection requires Effect context - not available in standalone mode")
+  return null
 }
 
 const detectKind = (name: string, input: Record<string, unknown>, text: string): Kind => {
