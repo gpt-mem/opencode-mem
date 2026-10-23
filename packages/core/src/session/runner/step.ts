@@ -30,7 +30,7 @@ import { createLLMEventPublisher } from "./publish-llm-event.js"
 import { SessionRunnerRetry } from "./retry.js"
 
 export type Outcome = Data.TaggedEnum<{
-  Completed: { readonly needsContinuation: boolean }
+  Completed: { readonly needsContinuation: boolean; readonly usage?: { readonly cache_read: number; readonly cache_write: number; readonly model: { readonly id: string; readonly providerID: string; readonly variant?: string } } }
   Retry: { readonly error: SessionError.Error; readonly decision: SessionRunnerRetry.Decision }
   Continue: {
     readonly error: SessionError.Error
@@ -273,7 +273,7 @@ export const make = Effect.gen(function* () {
 
         if (Exit.isFailure(stream)) return yield* Effect.failCause(stream.cause)
         if (tools.declines.length > 0) {
-          if (input.isLocationClosed()) return Outcome.Completed({ needsContinuation: true })
+          if (input.isLocationClosed()) return Outcome.Completed({ needsContinuation: true, usage: undefined })
           return yield* Effect.interrupt
         }
         if (tools.interrupted && tools.failure) return yield* Effect.failCause(tools.failure)
@@ -281,7 +281,16 @@ export const make = Effect.gen(function* () {
         if (record.failure) return yield* new StepFailedError({ error: record.failure })
         const needsContinuation = input.prepared.request.toolChoice?.type !== "none" && record.needsContinuation
         if (record.finish?.finish === "length") return Outcome.OutputLimit({ needsContinuation })
-        return Outcome.Completed({ needsContinuation })
+        const usage = record.finish?.tokens ? {
+          cache_read: record.finish.tokens.cache.read,
+          cache_write: record.finish.tokens.cache.write,
+          model: {
+            id: input.model.ref.id,
+            providerID: input.model.ref.providerID,
+            variant: input.model.ref.variant,
+          }
+        } : undefined
+        return Outcome.Completed({ needsContinuation, usage })
       }),
     )
   }, Effect.scoped)

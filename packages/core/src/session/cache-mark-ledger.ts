@@ -42,7 +42,6 @@ export interface CacheMarkLedger {
 
 export class CacheMarkLedgerImpl implements CacheMarkLedger {
   getMark(providerID: ProviderID): Effect.Effect<number, Error> {
-    const self = this
     return Effect.gen(function* () {
       const db = (yield* Database.Service).db
       const [row] = yield* db
@@ -68,7 +67,6 @@ export class CacheMarkLedgerImpl implements CacheMarkLedger {
       }
     }
   ): Effect.Effect<void, Error> {
-    const self = this
     return Effect.gen(function* () {
       const db = (yield* Database.Service).db
 
@@ -119,10 +117,9 @@ export class CacheMarkLedgerImpl implements CacheMarkLedger {
   }
 
   getProjectionMark(providerID: ProviderID): Effect.Effect<number | null, Error> {
-    const self = this
     return Effect.gen(function* () {
       try {
-        const mark = yield* self.getMark(providerID)
+        const mark = yield* this.getMark(providerID)
         return mark
       } catch (error) {
         // Fail-safe: if we can't read the mark, return null
@@ -133,7 +130,6 @@ export class CacheMarkLedgerImpl implements CacheMarkLedger {
   }
 
   isMarkStale(providerID: ProviderID, maxIdleMs: number): Effect.Effect<boolean, Error> {
-    const self = this
     return Effect.gen(function* () {
       const db = (yield* Database.Service).db
       const [row] = yield* db
@@ -167,3 +163,30 @@ export class CacheMarkLedgerService extends Context.Service<CacheMarkLedgerServi
 
 // SQL table definition (exported for migration)
 export const sqlProviderCacheMarkTable = ProviderCacheMarkTable
+
+// Helper functions for standalone usage (used by memory-context.ts)
+export const getProviderMark = async (providerID: string): Promise<number> => {
+  // This is a helper function for memory-context.ts integration
+  // In a complete implementation, this would use the CacheMarkLedger service
+  return 0
+}
+
+export const getMarkForProjection = async (providerID: string): Promise<number | null> => {
+  // This is a helper function for memory-context.ts integration
+  // In a complete implementation, this would use the CacheMarkLedger service
+  return null
+}
+
+export const applyUsageToLedger = async (providerID: string, usage: {
+  cache_read: number
+  cache_write: number
+  model: {
+    id: string
+    providerID: string
+    variant?: string
+  }
+}): Promise<void> => {
+  // This is a helper function for memory-context.ts integration
+  // In a complete implementation, this would use the CacheMarkLedger service
+  console.log("[mem-context] Applying usage to ledger:", { providerID, ...usage })
+}

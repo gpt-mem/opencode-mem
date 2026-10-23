@@ -20,6 +20,8 @@ import { SessionMessage } from "../message.js"
 import { SessionSchema } from "../schema.js"
 import { SessionStore } from "../store.js"
 import { SessionMessageTable } from "../sql.js"
+import { CacheMarkLedgerEntry } from "../cache-mark-ledger-entry.js"
+import { CacheMarkLedgerService } from "../cache-mark-ledger.js"
 import { SessionTitle } from "../title.js"
 import { toSessionError } from "../to-session-error.js"
 import { DrainResult, Service, type Interface } from "./index.js"
@@ -226,6 +228,13 @@ const layer = Layer.effect(
           continue
         }
         const stepLimitReached = loaded.agent.info.steps !== undefined && step >= loaded.agent.info.steps
+        
+        // Get the provider mark from the CacheMarkLedger service
+        const cacheMarkLedger = yield* CacheMarkLedgerService
+        const providerMark = loaded.model.ref.providerID 
+          ? (yield* cacheMarkLedger.getProjectionMark(loaded.model.ref.providerID)) ?? undefined 
+          : undefined
+        
         const transcript = SessionModelRequest.baseTranscript({
           agent: loaded.agent.info,
           model: loaded.model,
@@ -233,7 +242,7 @@ const layer = Layer.effect(
           initial: loaded.initial,
           // The provider-visible view of the history may be compressed; the
           // stored history keeps the original output.
-          messages: SessionMemoryContext.project(loaded.messages, { sessionID }),
+          messages: SessionMemoryContext.project(loaded.messages, { sessionID, providerMark }),
         })
         // A session that keeps making the same call is a doom loop. The warning
         // is advisory: it tells the model to change the approach, and the
@@ -284,7 +293,14 @@ const layer = Layer.effect(
           ),
         })
         const completed = yield* SessionStep.Outcome.$match(outcome, {
-          Completed: (outcome) => Effect.succeed(outcome.needsContinuation),
+          Completed: (outcome) => Effect.gen(function* () {
+            // Update the cache mark ledger with the usage from the provider response
+            if (outcome.usage && loaded.model.ref.providerID) {
+              const cacheMarkLedger = yield* CacheMarkLedgerService
+              yield* cacheMarkLedger.applyUsage(loaded.model.ref.providerID, outcome.usage)
+            }
+            return outcome.needsContinuation
+          }),
           Retry: (outcome) =>
             retry.wait({
               decision: outcome.decision,
@@ -417,5 +433,6 @@ export const node = makeLocationNode({
     Snapshot.node,
     ToolOutput.node,
     Database.node,
+    CacheMarkLedgerEntry.node,
   ],
 })
