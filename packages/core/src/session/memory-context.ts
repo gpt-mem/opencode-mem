@@ -435,7 +435,7 @@ const resolveFirstDeliveryMinChars = (options: Options) => {
 // First-delivery allowlist (issue #23): only tools whose bulk output is cheap
 // to re-retrieve on demand. Env override is comma-separated tool names.
 const resolveFirstDeliveryTools = (options: Options): ReadonlySet<string> => {
-  const raw = options.firstDeliveryTools ?? process.env.OPENCODE_MEMORY_FIRST_DELIVERY_TOOLS || ""
+  const raw = options.firstDeliveryTools ?? (process.env.OPENCODE_MEMORY_FIRST_DELIVERY_TOOLS || "")
   if (raw === undefined || raw.trim() === "") return new Set(DEFAULT_FIRST_DELIVERY_TOOLS)
   const parsed = raw
     .split(",")
