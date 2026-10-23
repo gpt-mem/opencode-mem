@@ -242,12 +242,11 @@ export const search = (
         ranked = true
       }
     }
+    const limit = Math.max(1, Math.min(input.limit ?? 20, 100))
     // For plain-text searches, `plainTextMatches` already sorts by hits (best first).
     // For no-query or regex searches, we keep the original row order (oldest first)
     // so that the newest records win the limit when we slice the tail.
     const resultMatched = ranked ? matched : matched.slice(-limit).reverse()
-
-    const limit = Math.max(1, Math.min(input.limit ?? 20, 100))
     // A type name like "decision" is a label, not text that appears in the
     // records themselves, so `type=decision&query=decision` empties a non-empty
     // store. Say so instead of returning a bare zero.

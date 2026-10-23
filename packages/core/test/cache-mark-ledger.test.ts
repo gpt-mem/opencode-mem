@@ -4,7 +4,7 @@ import { AppNodeBuilder } from "@opencode/core/effect/app-node-builder"
 import { LayerNode } from "@opencode/util/effect/layer-node"
 import { Database } from "@opencode/core/database/database"
 import { CacheMarkLedgerService, node as CacheMarkLedgerNode } from "@opencode/core/session/cache-mark-ledger"
-import { CacheMarkLedgerEntry } from "@opencode/core/session/cache-mark-ledger-entry"
+
 import { Bus } from "@opencode/core/bus"
 import { testEffect } from "./lib/effect"
 
