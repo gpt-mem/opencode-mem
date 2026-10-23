@@ -7,3 +7,7 @@ export const node = makeLocationNode({
   layer: CacheMarkLedgerService.layer,
   deps: [],
 })
+
+export const CacheMarkLedgerEntry = {
+  node,
+}

@@ -152,9 +152,9 @@ export class CacheMarkLedgerImpl implements CacheMarkLedger {
 }
 
 // Service
-export class CacheMarkLedgerService extends Context.Tag<"CacheMarkLedger">()<
-  CacheMarkLedgerImpl
->() {
+export class CacheMarkLedgerService extends Context.Service<CacheMarkLedgerService, CacheMarkLedger>()(
+  "@opencode/CacheMarkLedger"
+) {
   static readonly layer = Layer.effect(
     CacheMarkLedgerService,
     Effect.gen(function* () {
