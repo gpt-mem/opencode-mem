@@ -1,113 +1,71 @@
-import fs from "fs/promises"
-import path from "path"
-import { SessionMessage } from "./message.js"
-import { Evidence } from "./evidence.js"
-import { PII } from "./pii.js"
-import { MAX_BYTES } from "../tool-output.js"
-import { Global } from "@opencode/util/global"
+export * as MemoryContext from "./memory-context"
 
+import { Flag } from "../flag/flag"
+import { Evidence } from "./evidence"
+import { PII } from "./pii"
+import { MemDebugLog } from "./mem-debug-log"
+import { SessionMessage } from "./message"
+import { SessionV1 } from "../v1/session"
 
 export type Kind = "bash" | "url" | "artifact" | "generic"
 
 export type Options = {
-  /** Compact eligible tool results instead of sending them in full. */
-  readonly enabled?: boolean
-  /** Minimum serialized output size that earns a compact marker. */
-  readonly minOutputChars?: number
-  /** Tools whose bulk output is cheap to re-retrieve on demand. */
-  readonly tools?: ReadonlySet<string>
-  /** Session the history belongs to, named in the marker. */
   readonly sessionID?: string
-  /** Confirmed cache prefix length for this provider. */
-  readonly providerMark?: number
+  readonly enabled?: boolean
+  readonly minOutputChars?: number
+  readonly keepRecentUserTurns?: number
+  readonly keepRecentAssistantTurns?: number
+  readonly batchSize?: number
+  readonly midTurn?: boolean
+  // Issue #23: compact at first delivery — no protected window, every eligible
+  // result becomes a retrieval marker the moment it exists. Requires enabled
+  // memory context; boundary options (keepRecent*/batchSize/midTurn) do not
+  // apply in this mode.
+  readonly firstDelivery?: boolean
+  readonly firstDeliveryMinChars?: number
+  readonly firstDeliveryTools?: string
+  // Issue #25 B3 (cache-breaking, opt-in): ID of the user message that opened
+  // the currently active intent via a confirmed switch. When set, that message
+  // and everything after it stays verbatim while every eligible tool output
+  // before it is compacted — the old intent's segment is finalized in one
+  // append-only jump instead of sliding one user turn at a time. Falls back to
+  // the normal boundary when the message is not in the list.
+  readonly intentSwitchMessageID?: string
+  // Issue #29: provider cache-mark ledger floor. Messages below this index
+  // were confirmed cached by the provider (usage.cache_read post-factum), so
+  // they stay byte-identical even when the boundary/first-delivery rules
+  // would otherwise compact them — mutating them would invalidate the
+  // provider's prefix cache. 0 (default) = no ledger constraint.
+  readonly markIndex?: number
 }
 
-/** Tools whose bulk output dominates a tool-heavy session. */
-export const DEFAULT_TOOLS = ["shell", "read", "webfetch", "websearch"]
-
-// The v1 line read these flags; on this line they do not exist, so the port
-// uses names of its own.
-const FLAG_ENABLED = "OPENCODE_V2_MEMORY_CONTEXT"
-const FLAG_MIN_CHARS = "OPENCODE_V2_MEMORY_MIN_CHARS"
-const FLAG_TOOLS = "OPENCODE_V2_MEMORY_TOOLS"
-const FLAG_DEBUG = "OPENCODE_V2_MEMORY_CONTEXT_DEBUG"
-
+const DEFAULT_MIN_OUTPUT_CHARS = 2000
+const DEFAULT_KEEP_RECENT_USER_TURNS = 2
+const DEFAULT_KEEP_RECENT_ASSISTANT_TURNS = 2
+const DEFAULT_BATCH_SIZE = 2
+const DEFAULT_FIRST_DELIVERY_TOOLS = ["bash", "webfetch", "websearch", "read"]
 const PREVIEW_HEAD = 400
 const PREVIEW_TAIL = 200
 const SUMMARY_LIMIT = 200
 
-// Memory tools answer with their own compact payloads; compacting them would
-// only cost the model a second round trip.
 const MEMORY_TOOL_PATTERN = /(operational_memory|get_tool_call_|find_tool_calls|find_pii|find_agent_artifact)/
-
-const enabled = () => process.env[FLAG_ENABLED] === "1" || process.env[FLAG_ENABLED] === "true"
-
-// Debug lines belong to the server log, never to stdout: the server's stdout
-// is inherited by the terminal client, so a console.log here would leak
-// "[mem-context] ..." into the user's view.
-const debug = (line: string) => {
-  if (process.env[FLAG_DEBUG] !== "1") return
-  fs.appendFile(path.join(Global.Path.log, "memory-context.log"), line + "\n").catch(() => {})
-}
-
-const minOutputChars = () => {
-  const value = Number(process.env[FLAG_MIN_CHARS])
-  return Number.isFinite(value) && value >= 0 ? Math.floor(value) : MAX_BYTES
-}
-
-const tools = () => {
-  const raw = process.env[FLAG_TOOLS]
-  if (raw === undefined || raw.trim() === "") return new Set(DEFAULT_TOOLS)
-  return new Set(
-    raw
-      .split(",")
-      .map((tool) => tool.trim())
-      .filter((tool) => tool !== ""),
-  )
-}
 
 const serializeContent = (content: SessionMessage.ToolStateCompleted["content"]) =>
   content
     .map((item) =>
-      item.type === "text"
-        ? item.text
-        : `[${item.mime}${item.name === undefined ? "" : `: ${item.name}`}]`,
+      item.type === "text" ? item.text : `[${item.mime}${item.name === undefined ? "" : `: ${item.name}`}]`,
     )
     .join("\n")
-
-// Cache mark ledger service for getting provider marks
-let cacheMarkLedgerService: any = null
-
-const getCacheMarkLedgerService = () => {
-  if (cacheMarkLedgerService === null) {
-    try {
-      const { CacheMarkLedgerService } = require("./cache-mark-ledger")
-      cacheMarkLedgerService = CacheMarkLedgerService
-    } catch (error) {
-      console.warn("[mem-context] CacheMarkLedgerService not available:", error)
-      cacheMarkLedgerService = null
-    }
-  }
-  return cacheMarkLedgerService
-}
 
 const inputString = (input: Record<string, unknown>, key: string) => {
   const value = input[key]
   return typeof value === "string" ? value : undefined
 }
 
-// getMarkForProjection is now Effect-based - requires Database.Service in runtime
-export const getMarkForProjection = async (providerID: string): Promise<number | null> => {
-  // This helper should be called from an Effect context with Database.Service
-  // or should use Effect.runPromise to run within the proper context
-  console.warn("[mem-context] getMarkForProjection requires Effect context - not available in standalone mode")
-  return null
-}
-
 const detectKind = (name: string, input: Record<string, unknown>, text: string): Kind => {
-  if (name === "shell" || name === "bash") return "bash"
+  if (name === "bash") return "bash"
   if (name === "webfetch" || name === "websearch") return "url"
-  const path = inputString(input, "path") ?? inputString(input, "filePath")
+  const path = inputString(input, "path") ?? inputString(input, "file_path") ?? inputString(input, "filePath")
   if (path !== undefined && /\.(md|json|xml|html|ya?ml|csv)$/.test(path)) return "artifact"
   if (/^https?:\/\/\S+$/.test(text.trim())) return "url"
   return "generic"
@@ -123,222 +81,394 @@ const kindSummary = (kind: Kind, input: Record<string, unknown>) => {
     if (url !== undefined) return `url=${PII.redact(url).text.slice(0, SUMMARY_LIMIT)}`
   }
   if (kind === "artifact") {
-    const filePath = inputString(input, "path") ?? inputString(input, "filePath")
-    if (filePath !== undefined) return `file=${filePath.slice(0, SUMMARY_LIMIT)}`
+    const path = inputString(input, "path") ?? inputString(input, "file_path") ?? inputString(input, "filePath")
+    if (path !== undefined) return `path=${path.slice(0, SUMMARY_LIMIT)}`
   }
   return undefined
 }
 
-const toolMarker = (
-  input: {
-    readonly kind: Kind
-    readonly name: string
-    readonly callID: string
-    readonly messageID: string
-    readonly sessionID?: string
-    readonly text: string
-    readonly summary?: string
-    readonly pii?: string
-  },
-): string => {
-  const lines: (string | undefined)[] = [
+const preview = (text: string) => {
+  const clean = PII.redact(text).text
+  return clean.length <= PREVIEW_HEAD + PREVIEW_TAIL + 16
+    ? clean
+    : `${clean.slice(0, PREVIEW_HEAD)}\n...\n${clean.slice(-PREVIEW_TAIL)}`
+}
+
+type MarkerArgs = {
+  readonly kind: Kind
+  readonly name: string
+  readonly callID: string
+  readonly messageID: string
+  readonly sessionID?: string
+  readonly text: string
+  readonly summary?: string
+  readonly outputPaths?: readonly string[]
+  readonly pii?: string
+}
+
+// State what retrieval actually returns: the stored text may be only a preview
+// whose full output lives in a managed tool-output file.
+const evidenceLines = (text: string, original: string, kept: string): readonly string[] => {
+  const ref = Evidence.classify(text)
+  if (ref.kind === "full_original") return ["stored=full_original", `${original} (${kept})`]
+  if (ref.kind === "managed_output_file" && ref.path !== undefined)
+    return [
+      `stored=managed_output_file path=${ref.path}`,
+      `${original} (stored text is a preview; full output lives in the managed tool-output file)`,
+    ]
+  return [original]
+}
+
+const toolMarker = (args: MarkerArgs) =>
+  [
     "[mem:compacted tool result]",
-    `kind=${input.kind} tool=${input.name} call_id=${input.callID} status=success`,
-    input.summary,
-    input.pii,
-    `preview=${preview(Evidence.body(input.text))}`,
-    ...evidenceLines(input.text, input.sessionID, input.messageID),
-    `retrieve=get_tool_call_details(call_id="${input.callID}")`,
+    `kind=${args.kind} tool=${args.name} call_id=${args.callID} status=success`,
+    args.summary,
+    args.pii,
+    `preview=${preview(args.text)}`,
+    args.outputPaths && args.outputPaths.length > 0
+      ? `output_paths=${args.outputPaths.slice(0, 5).join(",")}`
+      : undefined,
+    ...evidenceLines(
+      args.text,
+      `original=session ${args.sessionID ?? "?"} message ${args.messageID}`,
+      "full text kept in SQLite history",
+    ),
+    `retrieve=get_tool_call_details(call_id="${args.callID}")`,
   ]
-  return lines.filter((line): line is string => line !== undefined).join("\n")
+    .filter((line): line is string => line !== undefined)
+    .join("\n")
+
+type ShellArgs = {
+  readonly command: string
+  readonly callID: string
+  readonly messageID: string
+  readonly sessionID?: string
+  readonly text: string
+  readonly pii?: string
 }
 
-const preview = (text: string): string => {
-  const lines = text.split("\n")
-  if (lines.length <= 3) return text
-  const head = lines.slice(0, PREVIEW_HEAD).join("\n")
-  const tail = lines.slice(-PREVIEW_TAIL).join("\n")
-  return `${head}\n...\n${tail}`
-}
+const shellMarker = (args: ShellArgs) =>
+  [
+    "[mem:compacted shell output]",
+    `command=${PII.redact(args.command).text.slice(0, SUMMARY_LIMIT)}`,
+    `call_id=${args.callID} status=success`,
+    args.pii,
+    `preview=${preview(args.text)}`,
+    ...evidenceLines(
+      args.text,
+      `original=session ${args.sessionID ?? "?"} message ${args.messageID}`,
+      "full output kept in SQLite history",
+    ),
+    `retrieve=get_tool_call_details(call_id="${args.callID}")`,
+  ]
+    .filter((line): line is string => line !== undefined)
+    .join("\n")
 
-const evidenceLines = (text: string, sessionID?: string, messageID?: string): string[] => {
-  const evidence = Evidence.parse(Evidence.body(text))
-  return evidence.map((e) => {
-    const parts: string[] = [`${e.kind}`, `text=${e.text.slice(0, 60)}`]
-    if (e.path) parts.push(`path=${e.path}`)
-    if (e.line) parts.push(`line=${e.line}`)
-    if (e.section) parts.push(`section=${e.section}`)
-    if (e.code) parts.push(`code=${e.code}`)
-    if (sessionID && messageID) parts.push(`session=${sessionID} message=${messageID}`)
-    return `[${parts.join(" ")}]: ${e.text}`
-  })
-}
+// Issue #29 P1: with the ledger enabled, first-delivery compaction is the
+// policy — the mark floors the confirmed prefix and the fresh tail is
+// compacted on arrival (B0 = ledger-политика). Bare CACHE_MARK in boundary
+// mode degenerates to no-compaction on caching providers because the mark
+// grows to cover the whole verbatim prefix, including the protected window
+// (live e2e on ladder/free). FIRST_DELIVERY alone still selects the mode on
+// ledger-less setups (zero-cache providers, FD-only acceptance runs).
+const firstDeliveryPolicy = (options: Options) =>
+  options.firstDelivery ?? (Flag.OPENCODE_MEMORY_FIRST_DELIVERY || Flag.OPENCODE_MEMORY_CACHE_MARK)
 
-/**
- * Replace the bulk output of an eligible tool result with a compact marker.
- *
- * The projection only touches the model-visible view of the history: the
- * session history keeps the original output, and the marker names the call id
- * that retrieves it (get_tool_call_details). Because the marker is a pure
- * function of the stored output, the projected history is append-only — the
- * provider's cached prefix never changes under it.
- */
 export const project = (
-  messages: readonly SessionMessage.Info[],
-  options: Options & { providerMark?: number } = {},
-  usageContext?: {
-    providerID: string
-    cache_read: number
-    cache_write: number
-    model: {
-      id: string
-      providerID: string
-      variant?: string
+  messages: readonly SessionMessage.Message[],
+  options: Options = {},
+): readonly SessionMessage.Message[] => {
+  const enabled = options.enabled ?? Flag.OPENCODE_MEMORY_CONTEXT
+  if (!enabled) return messages
+  const firstDelivery = firstDeliveryPolicy(options)
+  const minChars = firstDelivery
+    ? resolveFirstDeliveryMinChars(options)
+    : (options.minOutputChars ?? DEFAULT_MIN_OUTPUT_CHARS)
+  const allow = firstDelivery ? resolveFirstDeliveryTools(options) : undefined
+
+  const userIndices: number[] = []
+  const assistantIndices: number[] = []
+  messages.forEach((message, index) => {
+    if (message.type === "user") userIndices.push(index)
+    if (message.type === "assistant") assistantIndices.push(index)
+  })
+  if (!firstDelivery && userIndices.length === 0) return messages
+  // First-delivery mode (issue #23) has no protected window: eligibility is a
+  // pure per-message function, so the projected prefix is append-only and the
+  // provider prefix cache sees zero invalidations.
+  // Intent cut (issue #25 B3, cache-breaking): when a confirmed switch opened
+  // the active intent, finalize the closed intent's segment in one jump — the
+  // switch message and everything after it stay verbatim, everything eligible
+  // before it is compacted. max() keeps the cut subsumed by the sliding window
+  // once later user turns move the boundary past the switch point, so the
+  // projected prefix stays monotone.
+  const boundary = firstDelivery ? Number.POSITIVE_INFINITY : boundaryFor(userIndices, assistantIndices, options)
+  const cutIndex =
+    firstDelivery || options.intentSwitchMessageID === undefined
+      ? -1
+      : messages.findIndex((message) => message.id === options.intentSwitchMessageID)
+  const protectedFrom = cutIndex > boundary ? cutIndex : boundary
+  if (protectedFrom <= 0) return messages
+  const markFloor = Math.max(0, options.markIndex ?? 0)
+
+  let compacted = 0
+  const projected = messages.map((message, index) => {
+    if (index >= protectedFrom) return message
+    // Ledger floor (issue #29): below the confirmed cache mark the bytes must
+    // stay identical or the provider's prefix cache dies.
+    if (index < markFloor) return message
+    if (message.type === "shell") {
+      // A pointer outside the managed tool-output directory is not a recovery path we may follow.
+      if (Evidence.classify(message.output).kind === "unavailable") return message
+      // Without a callID the original cannot be retrieved later, so keep the output intact.
+      if (message.output.length < minChars || message.callID === "") return message
+      if (allow !== undefined && !allow.has("bash")) return message
+      compacted++
+      const pii = PII.tag(message.output)
+      return {
+        ...message,
+        // The runner renders "Shell command: <command>" next to the output, so
+        // the command field itself must be redacted or secrets in curl headers
+        // would bypass the compact marker. The original stays in SQLite.
+        command: PII.redact(message.command).text,
+        output: shellMarker({
+          command: message.command,
+          callID: message.callID,
+          messageID: message.id,
+          ...(options.sessionID === undefined ? {} : { sessionID: options.sessionID }),
+          text: message.output,
+          ...(pii === undefined ? {} : { pii }),
+        }),
+      }
     }
-  },
-): readonly SessionMessage.Info[] => {
-  if (!(options.enabled ?? enabled())) return messages
-  const minChars = options.minOutputChars ?? minOutputChars()
-  const allowed = options.tools ?? tools()
-  let count = 0
-  const providerMark = options.providerMark ?? 0
-  
-  const projected = messages.map((message): SessionMessage.Info => {
     if (message.type !== "assistant") return message
     let changed = false
     const content = message.content.map((item) => {
       if (item.type !== "tool") return item
       if (item.state.status !== "completed") return item
-      if (item.executed === true) return item
+      if (item.provider?.executed === true) return item
       if (MEMORY_TOOL_PATTERN.test(item.name)) return item
-      if (!allowed.has(item.name)) return item
-      // Without a call id the original cannot be retrieved later.
-      if (item.id === "") return item
+      if (allow !== undefined && !allow.has(item.name)) return item
       const text = serializeContent(item.state.content)
       if (text.length < minChars) return item
-      
-      // Get the current mark for the provider if we have usage context
-      const currentMark = providerMark
-      
-      // If we have a mark and the text is beyond the mark, we need to compress
-      // Only content beyond the mark (currentMark * 4 chars) gets compressed
-      const bytesBeforeMark = currentMark * 4
-      const bytesInContent = text.length
-      
-      // If we're before or at the mark, don't compress
-      if (bytesBeforeMark > 0 && bytesInContent <= bytesBeforeMark) {
-        return item
-      }
-      
+      // A pointer outside the managed tool-output directory is not a recovery path we may follow.
+      if (Evidence.classify(text).kind === "unavailable") return item
+      // Without a call id the original cannot be retrieved later, so keep the output intact.
+      if (item.id === "") return item
       const kind = detectKind(item.name, item.state.input, text)
-      const summary = kindSummary(kind, item.state.input)
       const pii = PII.tag(text)
       changed = true
-      count++
-      // Non-text parts (an image, a PDF) carry information the marker cannot
-      // stand in for, so they stay in the model view next to the marker.
-      const files = item.state.content.filter((part) => part.type !== "text")
-      const compacted: SessionMessage.ToolStateCompleted["content"] = [
-        {
-          type: "text",
-          text: toolMarker({
-            kind,
-            name: item.name,
-            callID: item.id,
-            messageID: message.id,
-            ...(options.sessionID === undefined ? {} : { sessionID: options.sessionID }),
-            text,
-            ...(summary === undefined ? {} : { summary }),
-            ...(pii === undefined ? {} : { pii }),
-          }),
-        },
-        ...files,
-      ]
+      compacted++
       return {
         ...item,
         state: {
           ...item.state,
-          content: compacted,
+          content: [
+            {
+              type: "text" as const,
+              text: toolMarker({
+                kind,
+                name: item.name,
+                callID: item.id,
+                messageID: message.id,
+                ...(options.sessionID === undefined ? {} : { sessionID: options.sessionID }),
+                text,
+                ...(kindSummary(kind, item.state.input) === undefined
+                  ? {}
+                  : { summary: kindSummary(kind, item.state.input)! }),
+                ...(item.state.outputPaths === undefined ? {} : { outputPaths: item.state.outputPaths }),
+                ...(pii === undefined ? {} : { pii }),
+              }),
+            },
+          ],
         },
       }
     })
     return changed ? { ...message, content } : message
   })
-  
-  // Apply usage context after projection to update the mark
-  if (usageContext) {
-    // Fire and forget - we don't block the projection on ledger updates
-    applyUsageToLedger(usageContext).catch((error) => {
-      console.warn("[mem-context] Failed to apply usage to ledger:", error)
-    })
-  }
-  
-  debug(
-    `[mem-context] session=${options.sessionID ?? "?"} compacted=${count} min_chars=${minChars} tools=${[...allowed].join(",")}${usageContext ? ` provider=${usageContext.providerID} cache_read=${usageContext.cache_read}` : ""}`,
-  )
+
+  if (compacted > 0 && Flag.OPENCODE_MEMORY_CONTEXT_DEBUG)
+    MemDebugLog.write(
+      "memory-context.log",
+      `[mem-context] session=${options.sessionID ?? "?"} compacted=${compacted} first_delivery=${firstDelivery} protected_from=${protectedFrom} intent_cut=${cutIndex >= 0} mark=${markFloor}`,
+    )
   return projected
 }
 
+// V1 (SessionPrompt) projection: the production run/TUI path converts
+// SessionV1.WithParts[] via toModelMessagesEffect and never touches the V2
+// runner, so the flag has to hook here as well or compression is dead code.
+export const projectV1 = (
+  messages: readonly SessionV1.WithParts[],
+  options: Options = {},
+): readonly SessionV1.WithParts[] => {
+  const enabled = options.enabled ?? Flag.OPENCODE_MEMORY_CONTEXT
+  if (!enabled) return messages
+  const firstDelivery = firstDeliveryPolicy(options)
+  const minChars = firstDelivery
+    ? resolveFirstDeliveryMinChars(options)
+    : (options.minOutputChars ?? DEFAULT_MIN_OUTPUT_CHARS)
+  const allow = firstDelivery ? resolveFirstDeliveryTools(options) : undefined
 
+  const userIndices: number[] = []
+  const assistantIndices: number[] = []
+  messages.forEach((message, index) => {
+    if (message.info.role === "user") userIndices.push(index)
+    if (message.info.role === "assistant") assistantIndices.push(index)
+  })
+  if (!firstDelivery && userIndices.length === 0) return messages
+  // Same boundary rules as project(), including the intent cut (issue #25 B3):
+  // the switch message that opened the active intent protects itself and
+  // everything after it, while the closed intent's segment is compacted.
+  const boundary = firstDelivery ? Number.POSITIVE_INFINITY : boundaryFor(userIndices, assistantIndices, options)
+  const cutIndex =
+    firstDelivery || options.intentSwitchMessageID === undefined
+      ? -1
+      : messages.findIndex((message) => message.info.id === options.intentSwitchMessageID)
+  const protectedFrom = cutIndex > boundary ? cutIndex : boundary
+  if (protectedFrom <= 0) return messages
+  const markFloor = Math.max(0, options.markIndex ?? 0)
 
-// Helper function to get provider mark
-const getProviderMark = async (providerID: string): Promise<number> => {
-  return await getMarkForProjection(providerID) ?? 0
+  let compacted = 0
+  const projected = messages.map((message, index) => {
+    if (index >= protectedFrom) return message
+    // Ledger floor (issue #29): same cache-mark protection as project().
+    if (index < markFloor) return message
+    if (message.info.role !== "assistant") return message
+    let changed = false
+    const parts = message.parts.map((part) => {
+      if (part.type !== "tool") return part
+      if (part.state.status !== "completed") return part
+      if (part.state.time.compacted !== undefined) return part
+      if (part.metadata?.providerExecuted === true) return part
+      if (MEMORY_TOOL_PATTERN.test(part.tool)) return part
+      if (allow !== undefined && !allow.has(part.tool)) return part
+      const text = part.state.output
+      if (text.length < minChars) return part
+      // A pointer outside the managed tool-output directory is not a recovery path we may follow.
+      if (Evidence.classify(text).kind === "unavailable") return part
+      // Without a call id the original cannot be retrieved later, so keep the output intact.
+      if (part.callID === "") return part
+      const kind = detectKind(part.tool, part.state.input, text)
+      const pii = PII.tag(text)
+      changed = true
+      compacted++
+      return {
+        ...part,
+        state: {
+          ...part.state,
+          output: toolMarker({
+            kind,
+            name: part.tool,
+            callID: part.callID,
+            messageID: message.info.id,
+            ...(options.sessionID === undefined ? {} : { sessionID: options.sessionID }),
+            text,
+            ...(kindSummary(kind, part.state.input) === undefined
+              ? {}
+              : { summary: kindSummary(kind, part.state.input)! }),
+            ...(pii === undefined ? {} : { pii }),
+          }),
+        },
+      }
+    })
+    return changed ? { ...message, parts } : message
+  })
+
+  if (compacted > 0 && Flag.OPENCODE_MEMORY_CONTEXT_DEBUG)
+    MemDebugLog.write(
+      "memory-context.log",
+      `[mem-context] session=${options.sessionID ?? "?"} compacted=${compacted} first_delivery=${firstDelivery} protected_from=${protectedFrom} intent_cut=${cutIndex >= 0} mark=${markFloor}`,
+    )
+  return projected
 }
 
-// Get the database table for provider cache mark
-
-
-// Helper function to apply provider usage
-const applyProviderUsage = async (usage: {
-  providerID: string
-  cache_read: number
-  cache_write: number
-  model: {
-    id: string
-    providerID: string
-    variant?: string
-  }
-}): Promise<void> => {
-  try {
-    const service = getCacheMarkLedgerService()
-    if (service && typeof service.applyUsage === "function") {
-      // In production, we'd use Effect.runPromise
-      const { Effect } = require("effect")
-      await Effect.runPromise(service.applyUsage(usage.providerID, {
-        cache_read: usage.cache_read,
-        cache_write: usage.cache_write,
-        model: usage.model
-      }))
-    }
-  } catch (error) {
-    console.warn("[mem-context] Failed to apply provider usage:", error)
-    throw error
-  }
+// Boundary-mode resolution: first index that must stay verbatim, or 0 when
+// nothing can be safely compressed. Two windows qualify:
+// - the conversation window: from the Nth-from-last user turn on (needs more
+//   than N user turns, otherwise there is no such window at all);
+// - the working set: the last N assistant messages, so a single long agent
+//   turn (one user prompt, many tool results) can still be compressed — older
+//   tool outputs are exactly what the compact markers exist for. This window
+//   slides one message per provider step, so it is only used when mid-turn
+//   compression is enabled (issue #20); by default the boundary stays at
+//   user-turn boundaries and the projected prefix is cache-stable within a turn.
+// The earlier (more protective) start wins; when neither window exists there
+// is nothing that can be safely compressed.
+const protectedStartIndex = (
+  userIndices: readonly number[],
+  assistantIndices: readonly number[],
+  options: Options,
+): number | undefined => {
+  const keepUserTurns = options.keepRecentUserTurns ?? DEFAULT_KEEP_RECENT_USER_TURNS
+  const keepAssistantTurns = options.keepRecentAssistantTurns ?? DEFAULT_KEEP_RECENT_ASSISTANT_TURNS
+  const conversationWindow =
+    userIndices.length > keepUserTurns ? userIndices[userIndices.length - keepUserTurns] : undefined
+  const workingSet =
+    resolveMidTurn(options) && assistantIndices.length > keepAssistantTurns
+      ? assistantIndices[assistantIndices.length - keepAssistantTurns]
+      : undefined
+  if (conversationWindow === undefined) return workingSet
+  if (workingSet === undefined) return conversationWindow
+  return Math.min(conversationWindow, workingSet)
 }
 
-// Apply usage to the ledger
-const applyUsageToLedger = async (usage: {
-  providerID: string
-  cache_read: number
-  cache_write: number
-  model: {
-    id: string
-    providerID: string
-    variant?: string
-  }
-}): Promise<void> => {
-  try {
-    // Apply the usage to update the provider's mark
-    await applyProviderUsage(usage)
-  } catch (error) {
-    // Fail-safe: if we can't apply usage, log it but continue
-    console.warn("[mem-context] Failed to apply usage to ledger, continuing:", error)
-  }
+const boundaryFor = (
+  userIndices: readonly number[],
+  assistantIndices: readonly number[],
+  options: Options,
+): number => {
+  const rawProtected = protectedStartIndex(userIndices, assistantIndices, options)
+  if (rawProtected === undefined) return 0
+  return stableBoundary(rawProtected, resolveBatch(options))
 }
 
-
-export const SessionMemoryContext = {
-  project,
-  getProviderMark,
+// First-delivery threshold (issue #23): separate knob from the historical
+// boundary threshold so A/B measurement can tune aggressiveness without
+// changing boundary-mode behavior.
+const resolveFirstDeliveryMinChars = (options: Options) => {
+  const value = Number(options.firstDeliveryMinChars ?? Flag.OPENCODE_MEMORY_FIRST_DELIVERY_MIN_CHARS)
+  return Number.isFinite(value) && value >= 0 ? Math.floor(value) : DEFAULT_MIN_OUTPUT_CHARS
 }
+
+// First-delivery allowlist (issue #23): only tools whose bulk output is cheap
+// to re-retrieve on demand. Env override is comma-separated tool names.
+const resolveFirstDeliveryTools = (options: Options): ReadonlySet<string> => {
+  const raw = options.firstDeliveryTools ?? Flag.OPENCODE_MEMORY_FIRST_DELIVERY_TOOLS
+  if (raw === undefined || raw.trim() === "") return new Set(DEFAULT_FIRST_DELIVERY_TOOLS)
+  const parsed = raw
+    .split(",")
+    .map((tool) => tool.trim())
+    .filter((tool) => tool !== "")
+  return new Set(parsed)
+}
+
+// Mid-turn compaction is a prefix edit: the first changed byte invalidates the
+// provider's cached prefix from that point on, so every boundary move re-sends
+// the still-full tail uncached. Measured on mimo-v2.6-flash (issue #20): the
+// sliding working-set boundary cost +70% real dollars despite -45% tokens,
+// because cached tokens are ~45x cheaper than uncached ones and mid-turn edits
+// convert cached tail into uncached re-sends every step. Two knobs:
+// - midTurn (default off): enable the sliding working-set window at all —
+//   off means the boundary only moves at user-turn boundaries (cache-stable
+//   prefix within a turn, one invalidation per new user message);
+// - batchSize: when mid-turn is on, move the boundary in batches so the
+//   projected prefix is byte-identical between jumps and the invalidation is
+//   paid once per batch instead of once per step (bounded lag of batch-1
+//   late messages). Monotone for append-only history: a compacted message
+//   never goes back to full text, so the marker set only grows.
+const stableBoundary = (raw: number, batch: number) => (batch <= 1 ? raw : Math.floor(raw / batch) * batch)
+
+// Batch size is overridable via OPENCODE_MEMORY_BATCH_SIZE for A/B measurement
+// of the token/cost trade-off (issue #20); 1 reproduces the sliding boundary.
+const resolveBatch = (options: Options) => {
+  const value = options.batchSize ?? Number(Flag.OPENCODE_MEMORY_BATCH_SIZE)
+  return Number.isFinite(value) && value >= 1 ? Math.floor(value) : DEFAULT_BATCH_SIZE
+}
+
+// Mid-turn compression is opt-in: on cache-priced providers it trades cheap
+// cached tokens for expensive uncached re-sends (issue #20). Enable it via
+// OPENCODE_MEMORY_MIDTURN for providers without prompt caching or when
+// shrinking the provider-visible prompt matters more than dollars.
+const resolveMidTurn = (options: Options) => options.midTurn ?? Flag.OPENCODE_MEMORY_MIDTURN

@@ -1,4 +1,4 @@
-export * as PII from "./pii.js"
+export * as PII from "./pii"
 
 export type PIICategory = "email" | "phone" | "credit_card" | "api_key"
 
