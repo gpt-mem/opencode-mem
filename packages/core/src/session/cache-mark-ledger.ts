@@ -42,7 +42,6 @@ export interface CacheMarkLedger {
 
 export class CacheMarkLedgerImpl implements CacheMarkLedger {
   getMark(providerID: ProviderID): Effect.Effect<number, Error> {
-    const self = this
     return Effect.gen(function* () {
       const db = (yield* Database.Service).db
       const [row] = yield* db
@@ -68,7 +67,6 @@ export class CacheMarkLedgerImpl implements CacheMarkLedger {
       }
     }
   ): Effect.Effect<void, Error> {
-    const self = this
     return Effect.gen(function* () {
       const db = (yield* Database.Service).db
 
@@ -119,10 +117,9 @@ export class CacheMarkLedgerImpl implements CacheMarkLedger {
   }
 
   getProjectionMark(providerID: ProviderID): Effect.Effect<number | null, Error> {
-    const self = this
     return Effect.gen(function* () {
       try {
-        const mark = yield* self.getMark(providerID)
+        const mark = yield* this.getMark(providerID)
         return mark
       } catch (error) {
         // Fail-safe: if we can't read the mark, return null
@@ -133,7 +130,6 @@ export class CacheMarkLedgerImpl implements CacheMarkLedger {
   }
 
   isMarkStale(providerID: ProviderID, maxIdleMs: number): Effect.Effect<boolean, Error> {
-    const self = this
     return Effect.gen(function* () {
       const db = (yield* Database.Service).db
       const [row] = yield* db

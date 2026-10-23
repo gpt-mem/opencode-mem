@@ -5,7 +5,6 @@ import { Evidence } from "./evidence.js"
 import { PII } from "./pii.js"
 import { MAX_BYTES } from "../tool-output.js"
 import { Global } from "@opencode/util/global"
-import { sqliteTable, text, integer } from "drizzle-orm/sqlite-core"
 import { Effect } from "effect"
 
 export type Kind = "bash" | "url" | "artifact" | "generic"
