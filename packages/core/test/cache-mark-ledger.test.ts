@@ -68,7 +68,7 @@ describe("CacheMarkLedger - Unit Ledger Basics", () => {
   }))
   
   it.effect("new provider starts with mark=0", () => Effect.gen(function* () {
-    const ledger = yield* CacheMarkLedgerService
+    const ledger = yield* CacheMarkLedger.Service
     const providerID = "test-provider-4"
     
     const mark = yield* ledger.getMark(providerID)
@@ -77,7 +77,7 @@ describe("CacheMarkLedger - Unit Ledger Basics", () => {
   }))
   
   it.effect("getProjectionMark returns mark value", () => Effect.gen(function* () {
-    const ledger = yield* CacheMarkLedgerService
+    const ledger = yield* CacheMarkLedger.Service
     const providerID = "test-provider-5"
     
     const mark = yield* ledger.getProjectionMark(providerID)
