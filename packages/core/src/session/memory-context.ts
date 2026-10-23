@@ -343,7 +343,6 @@ const applyUsageToLedger = async (usage: {
   }
 }
 
-export { getProviderMark, getMarkForProjection }
 
 export const SessionMemoryContext = {
   project,

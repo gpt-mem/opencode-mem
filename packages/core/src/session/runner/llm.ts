@@ -211,7 +211,6 @@ const layer = Layer.effect(
 
     /** Owns logical Step policy; each attempt owns its streaming, tools, and durable settlement. */
     const runStep = Effect.fn("SessionRunner.runStep")(function* (ledger: CacheMarkLedger, first: SessionContext.Loaded, step: number) {
-      const ledger = yield* CacheMarkLedgerService
       const sessionID = first.session.id
       let assistantMessageID = SessionMessage.ID.create()
       const retry = yield* SessionRunnerRetry.make(bus, sessionID)
