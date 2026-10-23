@@ -156,6 +156,7 @@ export class CacheMarkLedgerService extends Context.Service<CacheMarkLedgerServi
   static readonly layer = Layer.effect(
     CacheMarkLedgerService,
     Effect.gen(function* () {
+      yield* Database.Service
       return new CacheMarkLedgerImpl()
     })
   )
