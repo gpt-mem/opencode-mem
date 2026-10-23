@@ -18,6 +18,8 @@ export type Options = {
   readonly tools?: ReadonlySet<string>
   /** Session the history belongs to, named in the marker. */
   readonly sessionID?: string
+  /** Confirmed cache prefix length for this provider. */
+  readonly providerMark?: number
 }
 
 /** Tools whose bulk output dominates a tool-heavy session. */
@@ -283,6 +285,8 @@ export const project = (
 const getProviderMark = async (providerID: string): Promise<number> => {
   return await getMarkForProjection(providerID) ?? 0
 }
+
+// Get the database table for provider cache mark
 
 
 // Helper function to apply provider usage
