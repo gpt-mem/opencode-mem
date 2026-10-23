@@ -3,7 +3,7 @@ import { Effect } from "effect"
 import { AppNodeBuilder } from "@opencode/core/effect/app-node-builder"
 import { LayerNode } from "@opencode/util/effect/layer-node"
 import { Database } from "@opencode/core/database/database"
-import { CacheMarkLedger } from "@opencode/core/session/cache-mark-ledger"
+import { CacheMarkLedgerService } from "@opencode/core/session/cache-mark-ledger"
 import { CacheMarkLedgerEntry } from "@opencode/core/session/cache-mark-ledger-entry"
 import { Bus } from "@opencode/core/bus"
 import { testEffect } from "./lib/effect"
@@ -17,7 +17,7 @@ const it = testEffect(
 // Test the CacheMarkLedger service with proper database context
 describe("CacheMarkLedger - Unit Ledger Basics", () => {
   it.effect("getMark returns 0 for new provider", () => Effect.gen(function* () {
-    const ledger = yield* CacheMarkLedger.Service
+    const ledger = yield* CacheMarkLedgerService
     const providerID = "test-provider-1"
     
     const mark = yield* ledger.getMark(providerID)
@@ -26,7 +26,7 @@ describe("CacheMarkLedger - Unit Ledger Basics", () => {
   }))
   
   it.effect("applyUsage updates mark to cache_read value", () => Effect.gen(function* () {
-    const ledger = yield* CacheMarkLedger.Service
+    const ledger = yield* CacheMarkLedgerService
     const providerID = "test-provider-2"
     const usage = {
       cache_read: 1000,
@@ -46,7 +46,7 @@ describe("CacheMarkLedger - Unit Ledger Basics", () => {
   }))
   
   it.effect("mark only increases (forward-only)", () => Effect.gen(function* () {
-    const ledger = yield* CacheMarkLedger.Service
+    const ledger = yield* CacheMarkLedgerService
     const providerID = "test-provider-3"
     const usage1 = {
       cache_read: 500,
@@ -68,7 +68,7 @@ describe("CacheMarkLedger - Unit Ledger Basics", () => {
   }))
   
   it.effect("new provider starts with mark=0", () => Effect.gen(function* () {
-    const ledger = yield* CacheMarkLedger.Service
+    const ledger = yield* CacheMarkLedgerService
     const providerID = "test-provider-4"
     
     const mark = yield* ledger.getMark(providerID)
@@ -77,7 +77,7 @@ describe("CacheMarkLedger - Unit Ledger Basics", () => {
   }))
   
   it.effect("getProjectionMark returns mark value", () => Effect.gen(function* () {
-    const ledger = yield* CacheMarkLedger.Service
+    const ledger = yield* CacheMarkLedgerService
     const providerID = "test-provider-5"
     
     const mark = yield* ledger.getProjectionMark(providerID)
@@ -86,7 +86,7 @@ describe("CacheMarkLedger - Unit Ledger Basics", () => {
   }))
   
   it.effect("isMarkStale returns true for non-existent provider", () => Effect.gen(function* () {
-    const ledger = yield* CacheMarkLedger.Service
+    const ledger = yield* CacheMarkLedgerService
     const providerID = "test-provider-6"
     const maxIdleMs = 3600000
     
@@ -96,7 +96,7 @@ describe("CacheMarkLedger - Unit Ledger Basics", () => {
   }))
   
   it.effect("isMarkStale returns false for recently used provider", () => Effect.gen(function* () {
-    const ledger = yield* CacheMarkLedger.Service
+    const ledger = yield* CacheMarkLedgerService
     const providerID = "test-provider-7"
     const maxIdleMs = 3600000
     
