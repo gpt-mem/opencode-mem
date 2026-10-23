@@ -14,6 +14,7 @@ import { SessionInbox } from "../inbox.js"
 import { SessionHistory } from "../history.js"
 import { SessionProviderContext } from "../provider-context.js"
 import { SessionMemoryContext } from "../memory-context.js"
+import { CacheMarkLedgerService, node as CacheMarkLedgerNode } from "../cache-mark-ledger.js"
 import { SessionModelRequest } from "../model-request.js"
 import { SessionModelTransport } from "../model-transport.js"
 import { SessionMessage } from "../message.js"
@@ -52,6 +53,7 @@ const layer = Layer.effect(
     const compaction = yield* SessionCompaction.Service
     const plugins = yield* Plugin.Service
     const title = yield* SessionTitle.Service
+    const ledger = yield* CacheMarkLedgerService
     const steps = yield* SessionStep.make
     // Title generation starts once input is visible and must not delay model execution.
     const titles = yield* FiberMap.make<SessionSchema.ID, void, never>()
@@ -193,7 +195,7 @@ const layer = Layer.effect(
       while (true) {
         const next = yield* advanceToStep()
         if (next._tag !== "Ready") return next
-        continuing = yield* runStep(next.context, step)
+        continuing = yield* runStep(ledger, next.context, step)
         step++
         force = false
         entering = false
@@ -208,7 +210,7 @@ const layer = Layer.effect(
     })
 
     /** Owns logical Step policy; each attempt owns its streaming, tools, and durable settlement. */
-    const runStep = Effect.fn("SessionRunner.runStep")(function* (first: SessionContext.Loaded, step: number) {
+    const runStep = Effect.fn("SessionRunner.runStep")(function* (ledger: CacheMarkLedger, first: SessionContext.Loaded, step: number) {
       const sessionID = first.session.id
       let assistantMessageID = SessionMessage.ID.create()
       const retry = yield* SessionRunnerRetry.make(bus, sessionID)
@@ -226,6 +228,7 @@ const layer = Layer.effect(
           continue
         }
         const stepLimitReached = loaded.agent.info.steps !== undefined && step >= loaded.agent.info.steps
+        const providerMark = yield* ledger.getMark(loaded.model.ref.providerID)
         const transcript = SessionModelRequest.baseTranscript({
           agent: loaded.agent.info,
           model: loaded.model,
@@ -233,7 +236,7 @@ const layer = Layer.effect(
           initial: loaded.initial,
           // The provider-visible view of the history may be compressed; the
           // stored history keeps the original output.
-          messages: SessionMemoryContext.project(loaded.messages, { sessionID }),
+          messages: SessionMemoryContext.project(loaded.messages, { sessionID, providerMark }),
         })
         // A session that keeps making the same call is a doom loop. The warning
         // is advisory: it tells the model to change the approach, and the
@@ -340,7 +343,7 @@ const layer = Layer.effect(
         })
         if (completed !== undefined) return completed
       }
-    })
+    }))
 
     const settleStaleCompactions = Effect.fn("SessionRunner.settleStaleCompactions")(function* (
       sessionID: SessionSchema.ID,
@@ -417,5 +420,6 @@ export const node = makeLocationNode({
     Snapshot.node,
     ToolOutput.node,
     Database.node,
+    CacheMarkLedgerNode,
   ],
 })

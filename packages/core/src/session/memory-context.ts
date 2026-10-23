@@ -5,7 +5,6 @@ import { Evidence } from "./evidence.js"
 import { PII } from "./pii.js"
 import { MAX_BYTES } from "../tool-output.js"
 import { Global } from "@opencode/util/global"
-import { Effect } from "effect"
 
 export type Kind = "bash" | "url" | "artifact" | "generic"
 
@@ -95,11 +94,11 @@ const inputString = (input: Record<string, unknown>, key: string) => {
 }
 
 // getMarkForProjection is now Effect-based - requires Database.Service in runtime
-export const getMarkForProjection = async (providerID: string): Promise<number | null> => {
+const getMarkForProjection = async (providerID: string): Promise<number> => {
   // This helper should be called from an Effect context with Database.Service
   // or should use Effect.runPromise to run within the proper context
   console.warn("[mem-context] getMarkForProjection requires Effect context - not available in standalone mode")
-  return null
+  return 0
 }
 
 const detectKind = (name: string, input: Record<string, unknown>, text: string): Kind => {
@@ -284,17 +283,6 @@ const getProviderMark = async (providerID: string): Promise<number> => {
   return await getMarkForProjection(providerID)
 }
 
-// Get the database table for provider cache mark
-const getProviderCacheMarkTable = () => {
-  try {
-    const { ProviderCacheMarkTable } = require("./sql") as any
-    return ProviderCacheMarkTable
-  } catch (error) {
-    console.warn("[mem-context] Failed to get provider cache mark table:", error)
-    return null
-  }
-}
-
 // Helper function to apply provider usage
 const applyProviderUsage = async (usage: {
   providerID: string
@@ -348,4 +336,5 @@ export { getProviderMark, getMarkForProjection }
 export const SessionMemoryContext = {
   project,
   getProviderMark,
+  getMarkForProjection
 }

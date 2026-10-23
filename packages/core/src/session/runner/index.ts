@@ -17,6 +17,7 @@ export type RunError =
   | StepFailedError
   | Instructions.InitializationBlocked
   | FileSystem.DirectoryNotFoundError
+  | Error
 
 export type Continuation = { readonly step: number }
 
