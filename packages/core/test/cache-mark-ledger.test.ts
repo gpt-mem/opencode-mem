@@ -86,7 +86,7 @@ describe("CacheMarkLedger - Unit Ledger Basics", () => {
   }))
   
   it.effect("isMarkStale returns true for non-existent provider", () => Effect.gen(function* () {
-    const ledger = yield* CacheMarkLedgerService
+    const ledger = yield* CacheMarkLedger.Service
     const providerID = "test-provider-6"
     const maxIdleMs = 3600000
     
@@ -96,7 +96,7 @@ describe("CacheMarkLedger - Unit Ledger Basics", () => {
   }))
   
   it.effect("isMarkStale returns false for recently used provider", () => Effect.gen(function* () {
-    const ledger = yield* CacheMarkLedgerService
+    const ledger = yield* CacheMarkLedger.Service
     const providerID = "test-provider-7"
     const maxIdleMs = 3600000
     
