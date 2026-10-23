@@ -17,7 +17,7 @@ const it = testEffect(
 // Test the CacheMarkLedger service with proper database context
 describe("CacheMarkLedger - Unit Ledger Basics", () => {
   it.effect("getMark returns 0 for new provider", () => Effect.gen(function* () {
-    const ledger = yield* CacheMarkLedgerService
+    const ledger = yield* CacheMarkLedger.Service
     const providerID = "test-provider-1"
     
     const mark = yield* ledger.getMark(providerID)
@@ -26,7 +26,7 @@ describe("CacheMarkLedger - Unit Ledger Basics", () => {
   }))
   
   it.effect("applyUsage updates mark to cache_read value", () => Effect.gen(function* () {
-    const ledger = yield* CacheMarkLedgerService
+    const ledger = yield* CacheMarkLedger.Service
     const providerID = "test-provider-2"
     const usage = {
       cache_read: 1000,
@@ -46,7 +46,7 @@ describe("CacheMarkLedger - Unit Ledger Basics", () => {
   }))
   
   it.effect("mark only increases (forward-only)", () => Effect.gen(function* () {
-    const ledger = yield* CacheMarkLedgerService
+    const ledger = yield* CacheMarkLedger.Service
     const providerID = "test-provider-3"
     const usage1 = {
       cache_read: 500,
