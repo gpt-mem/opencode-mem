@@ -152,23 +152,22 @@ const toolMarker = (
 }
 
 const preview = (text: string): string => {
-  const lines = text.split("\n")
-  if (lines.length <= 3) return text
-  const head = lines.slice(0, PREVIEW_HEAD).join("\n")
-  const tail = lines.slice(-PREVIEW_TAIL).join("\n")
-  return `${head}\n...\n${tail}`
+  const clean = PII.redact(text).text
+  if (clean.length <= PREVIEW_HEAD + PREVIEW_TAIL + 16) return clean
+  return `${clean.slice(0, PREVIEW_HEAD)}\n...\n${clean.slice(-PREVIEW_TAIL)}`
 }
 
 const evidenceLines = (text: string, sessionID?: string, messageID?: string): string[] => {
   const evidence = Evidence.parse(Evidence.body(text))
   return evidence.map((e) => {
-    const parts: string[] = [`${e.kind}`, `text=${e.text.slice(0, 60)}`]
+    const redacted = PII.redact(e.text).text
+    const parts: string[] = [`${e.kind}`, `text=${redacted.slice(0, 60)}`]
     if (e.path) parts.push(`path=${e.path}`)
     if (e.line) parts.push(`line=${e.line}`)
     if (e.section) parts.push(`section=${e.section}`)
     if (e.code) parts.push(`code=${e.code}`)
     if (sessionID && messageID) parts.push(`session=${sessionID} message=${messageID}`)
-    return `[${parts.join(" ")}]: ${e.text}`
+    return `[${parts.join(" ")}]: ${redacted}`
   })
 }
 
