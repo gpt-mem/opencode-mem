@@ -10,7 +10,7 @@ import { InstructionState } from "../instruction-state.js"
 import { SessionCompaction } from "../compaction.js"
 import { SessionContext } from "../context.js"
 import { SessionEvent } from "../event.js"
-import { SessionInbox } from "../inbox.js"
+import { SessionInbox, type Promotable } from "../inbox.js"
 import { SessionHistory } from "../history.js"
 import { SessionProviderContext } from "../provider-context.js"
 import { SessionMemoryContext } from "../memory-context.js"
@@ -56,7 +56,14 @@ const layer = Layer.effect(
     // Title generation starts once input is visible and must not delay model execution.
     const titles = yield* FiberMap.make<SessionSchema.ID, void, never>()
 
-    const drain = Effect.fn("SessionRunner.drain")(function* (input: Parameters<Interface["drain"]>[0]) {
+    const drain = Effect.fn("SessionRunner.drain")(function* (input: {
+      readonly sessionID: SessionSchema.ID
+      readonly force: boolean
+      readonly continuation?: {
+        readonly step: number
+      } | undefined
+      readonly promotable?: Promotable
+    }): Effect.Effect<DrainResult, RunError> {
       const sessionID = input.sessionID
       let force = input.force
       let continuing = input.continuation !== undefined
