@@ -8,7 +8,7 @@ export type ProviderID = string
 
 export interface CacheMarkLedger {
   /** Get the current mark (number of tokens confirmed as cached) for a provider */
-  getMark(providerID: ProviderID): Effect.Effect<number, Error>
+  getMark(providerID: ProviderID): Effect.Effect<number, Error, Database.Database.Service>
 
   /**
    * Apply a usage event from a provider response.
@@ -25,24 +25,23 @@ export interface CacheMarkLedger {
         variant?: string
       }
     }
-  ): Effect.Effect<void, Error>
+  ): Effect.Effect<void, Error, Database.Database.Service>
 
   /**
    * Get the mark for use in memory context projection.
    * Returns null if there's no mark or if there's an error (fail-safe).
    */
-  getProjectionMark(providerID: ProviderID): Effect.Effect<number | null, Error>
+  getProjectionMark(providerID: ProviderID): Effect.Effect<number | null, Error, Database.Database.Service>
 
   /**
    * Check if a provider's mark is stale (not used for a long time)
    * Returns true if the mark is stale (should be reset to 0)
    */
-  isMarkStale(providerID: ProviderID, maxIdleMs: number): Effect.Effect<boolean, Error>
+  isMarkStale(providerID: ProviderID, maxIdleMs: number): Effect.Effect<boolean, Error, Database.Database.Service>
 }
 
 export class CacheMarkLedgerImpl implements CacheMarkLedger {
-  getMark(providerID: ProviderID): Effect.Effect<number, Error> {
-    const self = this
+  getMark(providerID: ProviderID): Effect.Effect<number, Error, Database.Database.Service> {
     return Effect.gen(function* () {
       const db = (yield* Database.Service).db
       const [row] = yield* db
@@ -67,8 +66,7 @@ export class CacheMarkLedgerImpl implements CacheMarkLedger {
         variant?: string
       }
     }
-  ): Effect.Effect<void, Error> {
-    const self = this
+  ): Effect.Effect<void, Error, Database.Database.Service> {
     return Effect.gen(function* () {
       const db = (yield* Database.Service).db
 
@@ -87,7 +85,6 @@ export class CacheMarkLedgerImpl implements CacheMarkLedger {
 
       if (newMark !== currentMark) {
         // Calculate prefix hash if we're moving forward
-        // In a real implementation, we'd hash the prefix that we've now confirmed as cached
         const prefix_hash = newMark > 0 ? `hash_at_${newMark}` : null
 
         yield* db
@@ -118,12 +115,11 @@ export class CacheMarkLedgerImpl implements CacheMarkLedger {
     })
   }
 
-  getProjectionMark(providerID: ProviderID): Effect.Effect<number | null, Error> {
+  getProjectionMark(providerID: ProviderID): Effect.Effect<number | null, Error, Database.Database.Service> {
     const self = this
     return Effect.gen(function* () {
       try {
-        const mark = yield* self.getMark(providerID)
-        return mark
+        return yield* self.getMark(providerID)
       } catch (error) {
         // Fail-safe: if we can't read the mark, return null
         // This will cause the projection to use full prefix compression
@@ -132,8 +128,7 @@ export class CacheMarkLedgerImpl implements CacheMarkLedger {
     })
   }
 
-  isMarkStale(providerID: ProviderID, maxIdleMs: number): Effect.Effect<boolean, Error> {
-    const self = this
+  isMarkStale(providerID: ProviderID, maxIdleMs: number): Effect.Effect<boolean, Error, Database.Database.Service> {
     return Effect.gen(function* () {
       const db = (yield* Database.Service).db
       const [row] = yield* db
@@ -165,5 +160,9 @@ export class CacheMarkLedgerService extends Context.Service<CacheMarkLedgerServi
   )
 }
 
-// SQL table definition (exported for migration)
-export const sqlProviderCacheMarkTable = ProviderCacheMarkTable
+// Helper to run ledger operations with database context
+export const runLedger = <T, E>(
+  effect: Effect.Effect<T, E, Database.Database.Service>
+): Effect.Effect<T, E, Database.Database.Service> => {
+  return effect
+}
