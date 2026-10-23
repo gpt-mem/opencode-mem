@@ -233,7 +233,7 @@ const layer = Layer.effect(
           continue
         }
         const stepLimitReached = loaded.agent.info.steps !== undefined && step >= loaded.agent.info.steps
-        const providerMark = yield* SessionMemoryContext.getProviderMark(loaded.model.ref.providerID)
+        const providerMark = yield* Effect.promise(() => SessionMemoryContext.getProviderMark(loaded.model.ref.providerID))
         const transcript = SessionModelRequest.baseTranscript({
           agent: loaded.agent.info,
           model: loaded.model,
