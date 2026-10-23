@@ -279,20 +279,10 @@ export const project = (
 
 
 // Helper function to get provider mark
-const getProviderMark = async (providerID: string): Promise<number> => {
+export const getProviderMark = async (providerID: string): Promise<number | null> => {
   return await getMarkForProjection(providerID)
 }
 
-// Get the database table for provider cache mark
-const getProviderCacheMarkTable = () => {
-  try {
-    const { ProviderCacheMarkTable } = require("./sql") as any
-    return ProviderCacheMarkTable
-  } catch (error) {
-    console.warn("[mem-context] Failed to get provider cache mark table:", error)
-    return null
-  }
-}
 
 // Helper function to apply provider usage
 const applyProviderUsage = async (usage: {
