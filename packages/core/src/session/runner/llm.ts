@@ -239,7 +239,7 @@ const layer = Layer.effect(
           .getProjectionMark(loaded.model.ref.providerID, loaded.messages)
           .pipe(
             Effect.provideService(Database.Service, database),
-            Effect.catch((error) => Effect.fail(new StepFailedError({ error: toSessionError(error) }))),
+            Effect.mapError((error) => new StepFailedError({ error: toSessionError(error) })),
           )
         // Project the history with the mark. Messages before mark stay verbatim;
         // suffix is compacted with markers.
