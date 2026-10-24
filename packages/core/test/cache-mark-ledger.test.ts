@@ -4,8 +4,69 @@ import { AppNodeBuilder } from "@opencode/core/effect/app-node-builder"
 import { LayerNode } from "@opencode/util/effect/layer-node"
 import { Database } from "@opencode/core/database/database"
 import { CacheMarkLedgerService, node as CacheMarkLedgerNode } from "@opencode/core/session/cache-mark-ledger"
+import { SessionMemoryContext } from "@opencode/core/session/memory-context"
+import * as CacheMark from "@opencode/core/session/cache-mark"
+import { SessionMessage } from "@opencode/core/session/message"
+import { Model } from "@opencode/core/model"
+import { Provider } from "@opencode/core/provider"
+import { Agent } from "@opencode/core/agent"
+import { DateTime } from "effect"
 import { Bus } from "@opencode/core/bus"
 import { testEffect } from "./lib/effect"
+
+// Test fixtures using proper SessionMessage types (match memory-context.test.ts)
+const created = DateTime.makeUnsafe(0)
+const messageID = (value: string) => SessionMessage.ID.make(`msg_${value}`)
+const model = Model.Ref.make({ id: Model.ID.make("model"), providerID: Provider.ID.make("provider") })
+
+const tool = (input: {
+  readonly id: string
+  readonly name?: string
+  readonly text: string
+  readonly status?: "completed" | "error"
+  readonly executed?: boolean
+  readonly toolInput?: Record<string, unknown>
+}) =>
+  SessionMessage.AssistantTool.make({
+    type: "tool",
+    id: input.id,
+    name: input.name ?? "shell",
+    ...(input.executed === undefined ? {} : { executed: input.executed }),
+    state:
+      input.status === "error"
+        ? SessionMessage.ToolStateError.make({
+            status: "error",
+            input: input.toolInput ?? {},
+            error: { type: "unknown", message: "failed" },
+          })
+        : SessionMessage.ToolStateCompleted.make({
+            status: "completed",
+            input: input.toolInput ?? {},
+            content: [{ type: "text" as const, text: input.text }],
+          }),
+    time: { created },
+  })
+
+const assistant = (value: string, content: SessionMessage.Assistant["content"]) =>
+  SessionMessage.Assistant.make({
+    id: messageID(value),
+    type: "assistant",
+    agent: Agent.defaultID,
+    model,
+    content,
+    time: { created, completed: created },
+  })
+
+const large = "x".repeat(3000)
+
+const history = () => [assistant("first", [tool({ id: "call_1", text: large, toolInput: { command: "cat call_1.txt" } })]), assistant("second", [tool({ id: "call_2", text: large, toolInput: { command: "cat call_2.txt" } })])]
+
+const markerOf = (message: SessionMessage.Info) => {
+  if (message.type !== "assistant") return undefined
+  const item = message.content[0]
+  if (item?.type !== "tool" || item.state.status !== "completed") return undefined
+  return item.state.content[0]?.type === "text" ? item.state.content[0].text : undefined
+}
 
 const it = testEffect(
   AppNodeBuilder.build(
@@ -156,5 +217,61 @@ describe("CacheMarkLedger - Service Integration", () => {
     const projMark = yield* ledger.getProjectionMark(providerID, mutated)
     // Hash mismatch → verbatim (messages.length = 2)
     expect(projMark).toBe(mutated.length)
+  }))
+
+  // Step 5 (issue #202): integration of ledger + projection. The ledger only
+  // supplies a mark; the projection must honour it byte-for-byte below the mark
+  // and compact only the suffix. mark=0 (fresh/free provider) must equal the
+  // no-ledger projection — that is the track-A case and B0 first delivery.
+  it.effect("mark=0 parity: projection with ledger mark=0 equals projection without ledger", () => Effect.gen(function* () {
+    const ledger = yield* CacheMarkLedgerService
+    const providerID = "test-provider-parity"
+    const messages = history()
+
+    // No ledger row yet → the provider has confirmed nothing → mark=0.
+    const mark = yield* ledger.getProjectionMark(providerID, messages)
+    expect(mark).toBe(0)
+
+    const withLedger = SessionMemoryContext.project(messages, { enabled: true, minOutputChars: 100, providerMark: mark })
+    const withoutLedger = SessionMemoryContext.project(messages, { enabled: true, minOutputChars: 100 })
+    // mark=0 is byte-for-byte the no-ledger projection (track A).
+    expect(withLedger).toEqual(withoutLedger)
+    // And it actually compacts (otherwise the parity would be vacuous).
+    expect(markerOf(withLedger[0])).toContain("[mem:compacted tool result]")
+  }))
+
+  it.effect("B0 via ledger: fresh provider (mark=0) compacts the whole first delivery", () => Effect.gen(function* () {
+    const ledger = yield* CacheMarkLedgerService
+    const providerID = "test-provider-b0"
+    const messages = history()
+
+    const mark = yield* ledger.getProjectionMark(providerID, messages)
+    const projected = SessionMemoryContext.project(messages, { enabled: true, minOutputChars: 100, providerMark: mark })
+
+    // First delivery: nothing was sent verbatim, so no leading run is preserved.
+    expect(CacheMark.verbatimPrefixLength(projected, messages)).toBe(0)
+    // Both bulk results became markers — no separate first-delivery flag involved.
+    expect(markerOf(projected[0])).toContain("[mem:compacted tool result]")
+    expect(markerOf(projected[1])).toContain("[mem:compacted tool result]")
+  }))
+
+  it.effect("warm ledger: prefix below mark stays verbatim, suffix compacts", () => Effect.gen(function* () {
+    const ledger = yield* CacheMarkLedgerService
+    const providerID = "test-provider-warm"
+    const messages = history()
+
+    // The provider confirmed the first message is cached verbatim.
+    yield* ledger.applyUsage(providerID, { input: 100, output: 10, cache_read: 5000, cache_write: 0, sentCount: 1 }, messages)
+    const mark = yield* ledger.getProjectionMark(providerID, messages)
+    expect(mark).toBe(1)
+
+    const projected = SessionMemoryContext.project(messages, { enabled: true, minOutputChars: 100, providerMark: mark })
+
+    // Below the mark: same object reference, byte-identical (invariant #1).
+    expect(projected[0]).toBe(messages[0])
+    // Above the mark: compacted.
+    expect(markerOf(projected[1])).toContain("[mem:compacted tool result]")
+    // The provider's cached prefix hash is unchanged, so the cache stays valid.
+    expect(CacheMark.messagePrefixHash(projected.slice(0, mark))).toBe(CacheMark.messagePrefixHash(messages.slice(0, mark)))
   }))
 })
