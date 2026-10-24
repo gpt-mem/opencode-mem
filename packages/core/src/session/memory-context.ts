@@ -117,23 +117,33 @@ const toolMarker = (
     readonly pii?: string
   },
 ): string => {
+  const bodyText = Evidence.body(input.text)
+  const redactedBody = PII.redact(bodyText).text
   const lines: (string | undefined)[] = [
     "[mem:compacted tool result]",
     `kind=${input.kind} tool=${input.name} call_id=${input.callID} status=success`,
     input.summary,
     input.pii,
-    `preview=${preview(Evidence.body(input.text))}`,
-    ...evidenceLines(input.text, input.sessionID, input.messageID),
+    `preview=${preview(redactedBody)}`,
+    ...evidenceLines(bodyText, input.sessionID, input.messageID),
     `retrieve=get_tool_call_details(call_id="${input.callID}")`,
   ]
   return lines.filter((line): line is string => line !== undefined).join("\n")
 }
 
 const preview = (text: string): string => {
+  // If small enough, return as-is
+  if (text.length <= PREVIEW_HEAD + PREVIEW_TAIL + 3) return text
+  // If multi-line, use line-based preview
   const lines = text.split("\n")
-  if (lines.length <= 3) return text
-  const head = lines.slice(0, PREVIEW_HEAD).join("\n")
-  const tail = lines.slice(-PREVIEW_TAIL).join("\n")
+  if (lines.length > 3) {
+    const head = lines.slice(0, PREVIEW_HEAD).join("\n")
+    const tail = lines.slice(-PREVIEW_TAIL).join("\n")
+    return `${head}\n...\n${tail}`
+  }
+  // Single line or few lines but very long: truncate by characters
+  const head = text.slice(0, PREVIEW_HEAD)
+  const tail = text.slice(-PREVIEW_TAIL)
   return `${head}\n...\n${tail}`
 }
 
