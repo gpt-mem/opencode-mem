@@ -83,6 +83,25 @@ describe("SessionMemoryContext", () => {
     expect(marker.length).toBeLessThan(large.length)
   })
 
+  test("compacts a multi-line result into a marker smaller than the original", () => {
+    // Real tool results are multi-line: shell keeps a bounded tail, read keeps a
+    // page. The marker must still be smaller than what it replaces, otherwise
+    // the projection grows the provider-visible prompt instead of shrinking it.
+    const text = Array.from({ length: 40 }, (_, index) => `line-${index} ${"y".repeat(60)}`).join("\n")
+    const history = [assistant("first", [tool({ id: "call_1", text, toolInput: { command: "cat app.log" } })])]
+    const projected = SessionMemoryContext.project(history, { enabled: true, minOutputChars: 100 })
+    const marker = markerOf(projected[0]) ?? ""
+    expect(marker).toContain("[mem:compacted tool result]")
+    expect(marker.length).toBeLessThan(text.length)
+  })
+
+  test("keeps a result verbatim when its marker would not be smaller", () => {
+    const text = Array.from({ length: 4 }, (_, index) => `line-${index} ${"z".repeat(20)}`).join("\n")
+    const history = [assistant("first", [tool({ id: "call_1", text, toolInput: { command: "x".repeat(400) } })])]
+    const projected = SessionMemoryContext.project(history, { enabled: true, minOutputChars: 10 })
+    expect(markerOf(projected[0])).toBe(text)
+  })
+
   test("leaves the stored history untouched", () => {
     const original = assistant("first", [tool({ id: "call_1", text: large })])
     const history = [original]

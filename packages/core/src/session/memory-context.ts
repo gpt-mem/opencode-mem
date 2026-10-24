@@ -131,20 +131,13 @@ const toolMarker = (
   return lines.filter((line): line is string => line !== undefined).join("\n")
 }
 
+// Bounded by characters, not by lines. A line-based window lets a multi-line
+// result reproduce itself inside the marker (400 head lines + 200 tail lines is
+// the whole 2 KiB shell tail twice), so the "compact" projection would grow the
+// provider-visible prompt instead of shrinking it.
 const preview = (text: string): string => {
-  // If small enough, return as-is
   if (text.length <= PREVIEW_HEAD + PREVIEW_TAIL + 3) return text
-  // If multi-line, use line-based preview
-  const lines = text.split("\n")
-  if (lines.length > 3) {
-    const head = lines.slice(0, PREVIEW_HEAD).join("\n")
-    const tail = lines.slice(-PREVIEW_TAIL).join("\n")
-    return `${head}\n...\n${tail}`
-  }
-  // Single line or few lines but very long: truncate by characters
-  const head = text.slice(0, PREVIEW_HEAD)
-  const tail = text.slice(-PREVIEW_TAIL)
-  return `${head}\n...\n${tail}`
+  return `${text.slice(0, PREVIEW_HEAD)}\n...\n${text.slice(-PREVIEW_TAIL)}`
 }
 
 const evidenceLines = (text: string, sessionID?: string, messageID?: string): string[] => {
@@ -204,27 +197,25 @@ export const project = (
       const kind = detectKind(item.name, item.state.input, text)
       const summary = kindSummary(kind, item.state.input)
       const pii = PII.tag(text)
-      changed = true
-      count++
       // Non-text parts (an image, a PDF) carry information the marker cannot
       // stand in for, so they stay in the model view next to the marker.
       const files = item.state.content.filter((part) => part.type !== "text")
-      const compacted: SessionMessage.ToolStateCompleted["content"] = [
-        {
-          type: "text",
-          text: toolMarker({
-            kind,
-            name: item.name,
-            callID: item.id,
-            messageID: message.id,
-            ...(options.sessionID === undefined ? {} : { sessionID: options.sessionID }),
-            text,
-            ...(summary === undefined ? {} : { summary }),
-            ...(pii === undefined ? {} : { pii }),
-          }),
-        },
-        ...files,
-      ]
+      const marker = toolMarker({
+        kind,
+        name: item.name,
+        callID: item.id,
+        messageID: message.id,
+        ...(options.sessionID === undefined ? {} : { sessionID: options.sessionID }),
+        text,
+        ...(summary === undefined ? {} : { summary }),
+        ...(pii === undefined ? {} : { pii }),
+      })
+      // Never grow the prompt: when the marker is not smaller than the text it
+      // replaces, the original stays in the model view.
+      if (marker.length >= text.length) return item
+      changed = true
+      count++
+      const compacted: SessionMessage.ToolStateCompleted["content"] = [{ type: "text", text: marker }, ...files]
       return {
         ...item,
         state: {
