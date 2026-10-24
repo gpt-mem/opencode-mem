@@ -26,6 +26,10 @@ target
 .scripts
 .direnv/
 
+# Generated build artifacts (Astro typegen, bun app archive cache)
+**/.astro/
+packages/cli/.cache/
+
 # Local dev files
 opencode-dev
 UPCOMING_CHANGELOG.md
