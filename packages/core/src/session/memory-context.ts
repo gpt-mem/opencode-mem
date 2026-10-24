@@ -75,33 +75,9 @@ const serializeContent = (content: SessionMessage.ToolStateCompleted["content"])
     )
     .join("\n")
 
-// Cache mark ledger service for getting provider marks
-let cacheMarkLedgerService: any = null
-
-const getCacheMarkLedgerService = () => {
-  if (cacheMarkLedgerService === null) {
-    try {
-      const { CacheMarkLedgerService } = require("./cache-mark-ledger")
-      cacheMarkLedgerService = CacheMarkLedgerService
-    } catch (error) {
-      console.warn("[mem-context] CacheMarkLedgerService not available:", error)
-      cacheMarkLedgerService = null
-    }
-  }
-  return cacheMarkLedgerService
-}
-
 const inputString = (input: Record<string, unknown>, key: string) => {
   const value = input[key]
   return typeof value === "string" ? value : undefined
-}
-
-// getMarkForProjection is now Effect-based - requires Database.Service in runtime
-export const getMarkForProjection = async (providerID: string): Promise<number | null> => {
-  // This helper should be called from an Effect context with Database.Service
-  // or should use Effect.runPromise to run within the proper context
-  console.warn("[mem-context] getMarkForProjection requires Effect context - not available in standalone mode")
-  return null
 }
 
 const detectKind = (name: string, input: Record<string, unknown>, text: string): Kind => {
@@ -141,23 +117,33 @@ const toolMarker = (
     readonly pii?: string
   },
 ): string => {
+  const bodyText = Evidence.body(input.text)
+  const redactedBody = PII.redact(bodyText).text
   const lines: (string | undefined)[] = [
     "[mem:compacted tool result]",
     `kind=${input.kind} tool=${input.name} call_id=${input.callID} status=success`,
     input.summary,
     input.pii,
-    `preview=${preview(Evidence.body(input.text))}`,
-    ...evidenceLines(input.text, input.sessionID, input.messageID),
+    `preview=${preview(redactedBody)}`,
+    ...evidenceLines(bodyText, input.sessionID, input.messageID),
     `retrieve=get_tool_call_details(call_id="${input.callID}")`,
   ]
   return lines.filter((line): line is string => line !== undefined).join("\n")
 }
 
 const preview = (text: string): string => {
+  // If small enough, return as-is
+  if (text.length <= PREVIEW_HEAD + PREVIEW_TAIL + 3) return text
+  // If multi-line, use line-based preview
   const lines = text.split("\n")
-  if (lines.length <= 3) return text
-  const head = lines.slice(0, PREVIEW_HEAD).join("\n")
-  const tail = lines.slice(-PREVIEW_TAIL).join("\n")
+  if (lines.length > 3) {
+    const head = lines.slice(0, PREVIEW_HEAD).join("\n")
+    const tail = lines.slice(-PREVIEW_TAIL).join("\n")
+    return `${head}\n...\n${tail}`
+  }
+  // Single line or few lines but very long: truncate by characters
+  const head = text.slice(0, PREVIEW_HEAD)
+  const tail = text.slice(-PREVIEW_TAIL)
   return `${head}\n...\n${tail}`
 }
 
@@ -186,25 +172,23 @@ const evidenceLines = (text: string, sessionID?: string, messageID?: string): st
 export const project = (
   messages: readonly SessionMessage.Info[],
   options: Options & { providerMark?: number } = {},
-  usageContext?: {
-    providerID: string
-    cache_read: number
-    cache_write: number
-    model: {
-      id: string
-      providerID: string
-      variant?: string
-    }
-  },
 ): readonly SessionMessage.Info[] => {
   if (!(options.enabled ?? enabled())) return messages
   const minChars = options.minOutputChars ?? minOutputChars()
   const allowed = options.tools ?? tools()
   let count = 0
-  const providerMark = options.providerMark ?? 0
-  
-  const projected = messages.map((message): SessionMessage.Info => {
+  // providerMark is a MESSAGE INDEX, not a byte count: messages[0..mark) were
+  // sent verbatim and are cached by the provider, so they stay raw; the suffix
+  // from mark onward is eligible for marker compression. This is the invariant
+  // that keeps the provider's cached prefix append-only (ARCHITECTURE §13).
+  const mark = options.providerMark ?? 0
+
+  const projected = messages.map((message, index): SessionMessage.Info => {
     if (message.type !== "assistant") return message
+    // Messages before the mark are part of the verbatim cached prefix — never
+    // compact them, or the provider's prefix mutates and the next request
+    // resends them verbatim (issue #29: cost fdmark ≈ off).
+    if (mark > 0 && index < mark) return message
     let changed = false
     const content = message.content.map((item) => {
       if (item.type !== "tool") return item
@@ -216,20 +200,7 @@ export const project = (
       if (item.id === "") return item
       const text = serializeContent(item.state.content)
       if (text.length < minChars) return item
-      
-      // Get the current mark for the provider if we have usage context
-      const currentMark = providerMark
-      
-      // If we have a mark and the text is beyond the mark, we need to compress
-      // Only content beyond the mark (currentMark * 4 chars) gets compressed
-      const bytesBeforeMark = currentMark * 4
-      const bytesInContent = text.length
-      
-      // If we're before or at the mark, don't compress
-      if (bytesBeforeMark > 0 && bytesInContent <= bytesBeforeMark) {
-        return item
-      }
-      
+
       const kind = detectKind(item.name, item.state.input, text)
       const summary = kindSummary(kind, item.state.input)
       const pii = PII.tag(text)
@@ -264,81 +235,13 @@ export const project = (
     })
     return changed ? { ...message, content } : message
   })
-  
-  // Apply usage context after projection to update the mark
-  if (usageContext) {
-    // Fire and forget - we don't block the projection on ledger updates
-    applyUsageToLedger(usageContext).catch((error) => {
-      console.warn("[mem-context] Failed to apply usage to ledger:", error)
-    })
-  }
-  
+
   debug(
-    `[mem-context] session=${options.sessionID ?? "?"} compacted=${count} min_chars=${minChars} tools=${[...allowed].join(",")}${usageContext ? ` provider=${usageContext.providerID} cache_read=${usageContext.cache_read}` : ""}`,
+    `[mem-context] session=${options.sessionID ?? "?"} compacted=${count} min_chars=${minChars} tools=${[...allowed].join(",")} mark=${mark}`,
   )
   return projected
 }
 
-
-
-// Helper function to get provider mark
-const getProviderMark = async (providerID: string): Promise<number> => {
-  return await getMarkForProjection(providerID) ?? 0
-}
-
-// Get the database table for provider cache mark
-
-
-// Helper function to apply provider usage
-const applyProviderUsage = async (usage: {
-  providerID: string
-  cache_read: number
-  cache_write: number
-  model: {
-    id: string
-    providerID: string
-    variant?: string
-  }
-}): Promise<void> => {
-  try {
-    const service = getCacheMarkLedgerService()
-    if (service && typeof service.applyUsage === "function") {
-      // In production, we'd use Effect.runPromise
-      const { Effect } = require("effect")
-      await Effect.runPromise(service.applyUsage(usage.providerID, {
-        cache_read: usage.cache_read,
-        cache_write: usage.cache_write,
-        model: usage.model
-      }))
-    }
-  } catch (error) {
-    console.warn("[mem-context] Failed to apply provider usage:", error)
-    throw error
-  }
-}
-
-// Apply usage to the ledger
-const applyUsageToLedger = async (usage: {
-  providerID: string
-  cache_read: number
-  cache_write: number
-  model: {
-    id: string
-    providerID: string
-    variant?: string
-  }
-}): Promise<void> => {
-  try {
-    // Apply the usage to update the provider's mark
-    await applyProviderUsage(usage)
-  } catch (error) {
-    // Fail-safe: if we can't apply usage, log it but continue
-    console.warn("[mem-context] Failed to apply usage to ledger, continuing:", error)
-  }
-}
-
-
 export const SessionMemoryContext = {
   project,
-  getProviderMark,
 }

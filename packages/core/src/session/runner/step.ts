@@ -12,6 +12,7 @@ import {
 import type { Agent } from "@opencode/schema/agent"
 import { Cause, Clock, Data, Effect, Exit, Fiber, Option, Stream } from "effect"
 import { SessionError } from "@opencode/schema/session-error"
+import { TokenUsage } from "@opencode/schema/token-usage"
 import { Bus } from "../../bus.js"
 import { Permission } from "../../permission.js"
 import { Snapshot } from "../../snapshot.js"
@@ -57,6 +58,8 @@ interface Input {
   readonly recoverContinuation: boolean
   /** The runner owns compaction policy; the attempt invokes it only before durable output. */
   readonly recoverOverflow: Effect.Effect<boolean>
+  /** Called with the final usage tokens when the provider response completes. */
+  readonly onUsage?: (tokens: TokenUsage.Info) => Effect.Effect<void>
 }
 
 const TOOLS_INTERRUPTED = { type: "aborted", message: "Tool execution interrupted" } as const
@@ -246,6 +249,11 @@ export const make = Effect.gen(function* () {
           const usage = record.finish
             ? { cost: SessionUsage.calculateCost(input.model.cost, record.finish.tokens), tokens: record.finish.tokens }
             : undefined
+          if (record.finish && usage && input.onUsage) {
+            // Update the cache mark ledger with confirmed usage. Fail-safe: never
+            // let ledger errors affect the step outcome.
+            yield* input.onUsage(record.finish.tokens).pipe(Effect.catch(() => Effect.void))
+          }
           if (record.failure) yield* publisher.publishStepFailure({ ...usage, snapshot, files })
           if (record.finish && usage && !record.failure) {
             yield* bus.publish(SessionEvent.Step.Ended, {
@@ -276,8 +284,14 @@ export const make = Effect.gen(function* () {
           if (input.isLocationClosed()) return Outcome.Completed({ needsContinuation: true })
           return yield* Effect.interrupt
         }
-        if (tools.interrupted && tools.failure) return yield* Effect.failCause(tools.failure)
-        if (tools.interrupted && Exit.isFailure(joined)) return yield* Effect.failCause(joined.cause)
+        if (tools.interrupted && tools.failure) {
+          if (Cause.hasInterruptsOnly(tools.failure)) return yield* Effect.interrupt
+          return yield* new StepFailedError({ error: toSessionError(tools.failure) })
+        }
+        if (tools.interrupted && Exit.isFailure(joined)) {
+          if (Cause.hasInterruptsOnly(joined.cause)) return yield* Effect.interrupt
+          return yield* new StepFailedError({ error: toSessionError(joined.cause) })
+        }
         if (record.failure) return yield* new StepFailedError({ error: record.failure })
         const needsContinuation = input.prepared.request.toolChoice?.type !== "none" && record.needsContinuation
         if (record.finish?.finish === "length") return Outcome.OutputLimit({ needsContinuation })

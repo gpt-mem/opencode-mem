@@ -15,6 +15,7 @@ import { SessionHistory } from "../history.js"
 import { SessionProviderContext } from "../provider-context.js"
 import { SessionMemoryContext } from "../memory-context.js"
 import { CacheMarkLedgerService, type CacheMarkLedger, node as CacheMarkLedgerNode } from "../cache-mark-ledger.js"
+import * as CacheMark from "../cache-mark.js"
 import { SessionModelRequest } from "../model-request.js"
 import { SessionModelTransport } from "../model-transport.js"
 import { SessionMessage } from "../message.js"
@@ -23,7 +24,7 @@ import { SessionStore } from "../store.js"
 import { SessionMessageTable } from "../sql.js"
 import { SessionTitle } from "../title.js"
 import { toSessionError } from "../to-session-error.js"
-import { DrainResult, Service, type Interface } from "./index.js"
+import { DrainResult, Service, type Interface, type RunError } from "./index.js"
 import { Snapshot } from "../../snapshot.js"
 import { makeLocationNode } from "@opencode/util/effect/app-node"
 import { llmClient } from "../../effect/app-node-platform.js"
@@ -49,7 +50,8 @@ const layer = Layer.effect(
     const store = yield* SessionStore.Service
     const context = yield* SessionContext.Service
     const modelTransport = yield* SessionModelTransport.Service
-    const db = (yield* Database.Service).db
+    const database = yield* Database.Service
+    const db = database.db
     const compaction = yield* SessionCompaction.Service
     const plugins = yield* Plugin.Service
     const title = yield* SessionTitle.Service
@@ -160,7 +162,7 @@ const layer = Layer.effect(
                       : { type: "compaction.failed", message: Cause.pretty(compacted.cause) },
                     inputID: pending.id,
                   })
-                  return yield* Effect.failCause(compacted.cause)
+                  return yield* new StepFailedError({ error: toSessionError(compacted.cause) })
                 }
                 force = false
                 continue
@@ -210,7 +212,9 @@ const layer = Layer.effect(
     })
 
     /** Owns logical Step policy; each attempt owns its streaming, tools, and durable settlement. */
-    const runStep = Effect.fn("SessionRunner.runStep")(function* (ledger: CacheMarkLedger, first: SessionContext.Loaded, step: number) {
+    const runStep = Effect.fn("SessionRunner.runStep")(
+      (ledger: CacheMarkLedger, first: SessionContext.Loaded, step: number): Effect.Effect<boolean, RunError> =>
+        Effect.gen(function* () {
       const sessionID = first.session.id
       let assistantMessageID = SessionMessage.ID.create()
       const retry = yield* SessionRunnerRetry.make(bus, sessionID)
@@ -228,15 +232,27 @@ const layer = Layer.effect(
           continue
         }
         const stepLimitReached = loaded.agent.info.steps !== undefined && step >= loaded.agent.info.steps
-        const providerMark = yield* ledger.getMark(loaded.model.ref.providerID)
+        // Get the message index floor from the ledger: messages[0..mark) were sent
+        // verbatim and are cached by the provider; suffix from mark is eligible
+        // for marker compression.
+        const providerMark = yield* ledger
+          .getProjectionMark(loaded.model.ref.providerID, loaded.messages)
+          .pipe(
+            Effect.provideService(Database.Service, database),
+            Effect.mapError((error) => new StepFailedError({ error: toSessionError(error) })),
+          )
+        // Project the history with the mark. Messages before mark stay verbatim;
+        // suffix is compacted with markers.
+        const projected = SessionMemoryContext.project(loaded.messages, { sessionID, providerMark })
+        // Compute verbatim prefix length for the ledger: how many leading messages
+        // in the projected history are byte-identical to the raw originals.
+        const sentCount = CacheMark.verbatimPrefixLength(projected, loaded.messages)
         const transcript = SessionModelRequest.baseTranscript({
           agent: loaded.agent.info,
           model: loaded.model,
           tools: loaded.tools,
           initial: loaded.initial,
-          // The provider-visible view of the history may be compressed; the
-          // stored history keeps the original output.
-          messages: SessionMemoryContext.project(loaded.messages, { sessionID, providerMark }),
+          messages: projected,
         })
         // A session that keeps making the same call is a doom loop. The warning
         // is advisory: it tells the model to change the approach, and the
@@ -285,6 +301,18 @@ const layer = Layer.effect(
                   .pipe(Effect.map((result) => result.status === "completed"))
               : Effect.succeed(false),
           ),
+          // Callback to update the ledger with confirmed usage after the response.
+          onUsage: (tokens) =>
+            ledger.applyUsage(loaded.model.ref.providerID, {
+              input: tokens.input,
+              output: tokens.output,
+              cache_read: tokens.cache.read,
+              cache_write: tokens.cache.write,
+              sentCount,
+            }, loaded.messages).pipe(
+              Effect.provideService(Database.Service, database),
+              Effect.catch(() => Effect.void),
+            ),
         })
         const completed = yield* SessionStep.Outcome.$match(outcome, {
           Completed: (outcome) => Effect.succeed(outcome.needsContinuation),
@@ -343,7 +371,7 @@ const layer = Layer.effect(
         })
         if (completed !== undefined) return completed
       }
-    })
+    }))
 
     const settleStaleCompactions = Effect.fn("SessionRunner.settleStaleCompactions")(function* (
       sessionID: SessionSchema.ID,
