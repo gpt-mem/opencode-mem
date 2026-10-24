@@ -284,8 +284,14 @@ export const make = Effect.gen(function* () {
           if (input.isLocationClosed()) return Outcome.Completed({ needsContinuation: true })
           return yield* Effect.interrupt
         }
-        if (tools.interrupted && tools.failure) return yield* Effect.failCause(tools.failure)
-        if (tools.interrupted && Exit.isFailure(joined)) return yield* Effect.failCause(joined.cause)
+        if (tools.interrupted && tools.failure) {
+          if (Cause.hasInterruptsOnly(tools.failure)) return yield* Effect.interrupt
+          return yield* new StepFailedError({ error: toSessionError(tools.failure) })
+        }
+        if (tools.interrupted && Exit.isFailure(joined)) {
+          if (Cause.hasInterruptsOnly(joined.cause)) return yield* Effect.interrupt
+          return yield* new StepFailedError({ error: toSessionError(joined.cause) })
+        }
         if (record.failure) return yield* new StepFailedError({ error: record.failure })
         const needsContinuation = input.prepared.request.toolChoice?.type !== "none" && record.needsContinuation
         if (record.finish?.finish === "length") return Outcome.OutputLimit({ needsContinuation })
