@@ -24,7 +24,7 @@ import { SessionStore } from "../store.js"
 import { SessionMessageTable } from "../sql.js"
 import { SessionTitle } from "../title.js"
 import { toSessionError } from "../to-session-error.js"
-import { DrainResult, Service, type Interface } from "./index.js"
+import { DrainResult, Service, type Interface, type RunError } from "./index.js"
 import { Snapshot } from "../../snapshot.js"
 import { makeLocationNode } from "@opencode/util/effect/app-node"
 import { llmClient } from "../../effect/app-node-platform.js"
@@ -162,7 +162,7 @@ const layer = Layer.effect(
                       : { type: "compaction.failed", message: Cause.pretty(compacted.cause) },
                     inputID: pending.id,
                   })
-                  return yield* Effect.failCause(compacted.cause)
+                  return yield* new StepFailedError({ error: toSessionError(compacted.cause) })
                 }
                 force = false
                 continue
@@ -212,7 +212,9 @@ const layer = Layer.effect(
     })
 
     /** Owns logical Step policy; each attempt owns its streaming, tools, and durable settlement. */
-    const runStep = Effect.fn("SessionRunner.runStep")(function* (ledger: CacheMarkLedger, first: SessionContext.Loaded, step: number) {
+    const runStep = Effect.fn("SessionRunner.runStep")(
+      (ledger: CacheMarkLedger, first: SessionContext.Loaded, step: number): Effect.Effect<boolean, RunError> =>
+        Effect.gen(function* () {
       const sessionID = first.session.id
       let assistantMessageID = SessionMessage.ID.create()
       const retry = yield* SessionRunnerRetry.make(bus, sessionID)
@@ -233,7 +235,12 @@ const layer = Layer.effect(
         // Get the message index floor from the ledger: messages[0..mark) were sent
         // verbatim and are cached by the provider; suffix from mark is eligible
         // for marker compression.
-        const providerMark = yield* ledger.getProjectionMark(loaded.model.ref.providerID, loaded.messages)
+        const providerMark = yield* ledger
+          .getProjectionMark(loaded.model.ref.providerID, loaded.messages)
+          .pipe(
+            Effect.provideService(Database.Service, database),
+            Effect.catch((error) => Effect.fail(new StepFailedError({ error: toSessionError(error) }))),
+          )
         // Project the history with the mark. Messages before mark stay verbatim;
         // suffix is compacted with markers.
         const projected = SessionMemoryContext.project(loaded.messages, { sessionID, providerMark })
@@ -364,7 +371,7 @@ const layer = Layer.effect(
         })
         if (completed !== undefined) return completed
       }
-    })
+    }))
 
     const settleStaleCompactions = Effect.fn("SessionRunner.settleStaleCompactions")(function* (
       sessionID: SessionSchema.ID,

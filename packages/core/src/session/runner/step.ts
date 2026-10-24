@@ -279,13 +279,13 @@ export const make = Effect.gen(function* () {
         )
           return Outcome.Continue({ error: llmError, decision: retry })
 
-        if (Exit.isFailure(stream)) return yield* Effect.failCause(stream.cause)
+        if (Exit.isFailure(stream)) return yield* new StepFailedError({ error: toSessionError(stream.cause) })
         if (tools.declines.length > 0) {
           if (input.isLocationClosed()) return Outcome.Completed({ needsContinuation: true })
           return yield* Effect.interrupt
         }
-        if (tools.interrupted && tools.failure) return yield* Effect.failCause(tools.failure)
-        if (tools.interrupted && Exit.isFailure(joined)) return yield* Effect.failCause(joined.cause)
+        if (tools.interrupted && tools.failure) return yield* new StepFailedError({ error: toSessionError(tools.failure) })
+        if (tools.interrupted && Exit.isFailure(joined)) return yield* new StepFailedError({ error: toSessionError(joined.cause) })
         if (record.failure) return yield* new StepFailedError({ error: record.failure })
         const needsContinuation = input.prepared.request.toolChoice?.type !== "none" && record.needsContinuation
         if (record.finish?.finish === "length") return Outcome.OutputLimit({ needsContinuation })
