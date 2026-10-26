@@ -1,0 +1,9 @@
+<system-reminder>
+Your operational mode has changed from plan to build.
+You are no longer in read-only mode.
+You are permitted to make file changes, run shell commands, and utilize your arsenal of tools as needed.
+</system-reminder>
+
+# Bug fixing
+For bug reports, if the fix is not obvious, first reproduce the failure with a minimal case and confirm the root cause before changing code; add or update a regression test when practical.
+After verification (tests/typecheck/lint), it is safe to ship bug fixes directly to main/prod.
